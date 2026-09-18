@@ -42,6 +42,7 @@ public struct CodexQuota: Equatable, Sendable {
     public let planType: String?
     public let primaryResetAt: Date?
     public let secondaryResetAt: Date?
+    let primaryWindowIsOverall: Bool
     private let normalizedPrimaryUsedPercent: Double
     private let normalizedSecondaryUsedPercent: Double?
 
@@ -64,10 +65,31 @@ public struct CodexQuota: Equatable, Sendable {
         primaryResetAt: Date? = nil,
         secondaryResetAt: Date? = nil
     ) {
+        self.init(
+            email: email,
+            planType: planType,
+            primaryUsedPercent: primaryUsedPercent,
+            primaryWindowIsOverall: false,
+            secondaryUsedPercent: secondaryUsedPercent,
+            primaryResetAt: primaryResetAt,
+            secondaryResetAt: secondaryResetAt
+        )
+    }
+
+    init(
+        email: String? = nil,
+        planType: String? = nil,
+        primaryUsedPercent: Double,
+        primaryWindowIsOverall: Bool,
+        secondaryUsedPercent: Double? = nil,
+        primaryResetAt: Date? = nil,
+        secondaryResetAt: Date? = nil
+    ) {
         self.email = email
         self.planType = planType
         self.primaryResetAt = primaryResetAt
         self.secondaryResetAt = secondaryResetAt
+        self.primaryWindowIsOverall = primaryWindowIsOverall
         self.normalizedPrimaryUsedPercent = AccountState.clampPercent(primaryUsedPercent)
         self.normalizedSecondaryUsedPercent = secondaryUsedPercent.map(AccountState.clampPercent)
     }
@@ -175,14 +197,19 @@ public struct CodexQuotaService: Sendable {
     public func stateSync(for config: AccountConfig) -> AccountState {
         switch fetchSync(for: config) {
         case let .success(quota):
+            let primaryIsOverall = quota.primaryWindowIsOverall
             return AccountState(
                 id: config.id,
                 email: quota.email,
                 planType: quota.planType,
-                primaryUsedPercent: quota.primaryUsedPercent,
-                secondaryUsedPercent: quota.secondaryUsedPercent,
-                primaryResetAt: quota.primaryResetAt,
-                secondaryResetAt: quota.secondaryResetAt,
+                primaryUsedPercent: primaryIsOverall ? nil : quota.primaryUsedPercent,
+                secondaryUsedPercent: primaryIsOverall
+                    ? quota.secondaryUsedPercent ?? quota.primaryUsedPercent
+                    : quota.secondaryUsedPercent,
+                primaryResetAt: primaryIsOverall ? nil : quota.primaryResetAt,
+                secondaryResetAt: primaryIsOverall
+                    ? quota.secondaryResetAt ?? quota.primaryResetAt
+                    : quota.secondaryResetAt,
                 lastUpdated: Date(),
                 status: .normal
             )
@@ -246,32 +273,80 @@ public struct CodexQuotaService: Sendable {
             throw CodexQuotaServiceError.malformedResponse("Missing rate limit result")
         }
         let limits = result["rateLimits"]?.objectValue ?? [:]
-        guard let primary = limit(
-                  key: "primary",
-                  historicalLimits: limits,
-                  limitsByID: result["rateLimitsByLimitId"]?.objectValue
-              ),
-              let usedPercent = primary["usedPercent"]?.numberValue,
-              usedPercent.isFinite else {
+        let limitsByID = result["rateLimitsByLimitId"]?.objectValue
+        let candidates = [
+            classifyLimit(
+                key: "primary",
+                values: limit(key: "primary", historicalLimits: limits, limitsByID: limitsByID)
+            ),
+            classifyLimit(
+                key: "secondary",
+                values: limit(key: "secondary", historicalLimits: limits, limitsByID: limitsByID)
+            ),
+        ].compactMap { $0 }
+        let primary = selectLimit(candidates, window: .fiveHour)
+        let secondary = selectLimit(candidates, window: .overall)
+        guard let selected = primary ?? secondary,
+              let selectedUsedPercent = finiteUsedPercent(in: selected.values) else {
             throw CodexQuotaServiceError.malformedResponse("Missing rateLimits.primary.usedPercent")
         }
 
-        let secondary = limit(
-            key: "secondary",
-            historicalLimits: limits,
-            limitsByID: result["rateLimitsByLimitId"]?.objectValue
-        )
-        let secondaryUsedPercent = secondary?["usedPercent"]?.numberValue.flatMap { $0.isFinite ? $0 : nil }
-        let primaryResetAt = primary["resetsAt"]?.numberValue.map(Date.init(timeIntervalSince1970:))
-        let secondaryResetAt = secondary?["resetsAt"]?.numberValue.map(Date.init(timeIntervalSince1970:))
         return CodexQuota(
             email: email,
             planType: planType,
-            primaryUsedPercent: usedPercent,
-            secondaryUsedPercent: secondaryUsedPercent,
-            primaryResetAt: primaryResetAt,
-            secondaryResetAt: secondaryResetAt
+            primaryUsedPercent: selectedUsedPercent,
+            primaryWindowIsOverall: primary == nil && secondary != nil,
+            secondaryUsedPercent: secondary.flatMap { finiteUsedPercent(in: $0.values) },
+            primaryResetAt: primary.flatMap { resetDate(in: $0.values) },
+            secondaryResetAt: secondary.flatMap { resetDate(in: $0.values) }
         )
+    }
+
+    private enum QuotaWindow: Equatable {
+        case fiveHour
+        case overall
+    }
+
+    private struct ClassifiedLimit {
+        let window: QuotaWindow
+        let values: [String: CodexJSONValue]
+        let usesExplicitDuration: Bool
+    }
+
+    private func classifyLimit(
+        key: String,
+        values: [String: CodexJSONValue]?
+    ) -> ClassifiedLimit? {
+        guard let values else { return nil }
+        if let duration = values["windowDurationMins"]?.numberValue {
+            guard duration.isFinite else { return nil }
+            if duration == 300 {
+                return ClassifiedLimit(window: .fiveHour, values: values, usesExplicitDuration: true)
+            }
+            if duration == 10080 {
+                return ClassifiedLimit(window: .overall, values: values, usesExplicitDuration: true)
+            }
+            return nil
+        }
+
+        let window: QuotaWindow = key == "primary" ? .fiveHour : .overall
+        return ClassifiedLimit(window: window, values: values, usesExplicitDuration: false)
+    }
+
+    private func selectLimit(
+        _ candidates: [ClassifiedLimit],
+        window: QuotaWindow
+    ) -> ClassifiedLimit? {
+        candidates.first { $0.window == window && $0.usesExplicitDuration }
+            ?? candidates.first { $0.window == window }
+    }
+
+    private func finiteUsedPercent(in values: [String: CodexJSONValue]) -> Double? {
+        values["usedPercent"]?.numberValue.flatMap { $0.isFinite ? $0 : nil }
+    }
+
+    private func resetDate(in values: [String: CodexJSONValue]) -> Date? {
+        values["resetsAt"]?.numberValue.map(Date.init(timeIntervalSince1970:))
     }
 
     /// Prefer historical fields, then the metered Codex bucket used by newer

@@ -108,7 +108,10 @@ public struct QuotaDonutPresentation: Equatable, Sendable {
     public init(account: AccountState) {
         switch account.status {
         case .normal, .timeout, .error:
-            centerPercent = account.fiveHourRemainingPercent.map(QuotaColors.clampedPercent)
+            centerPercent = Self.centerPercent(
+                fiveHour: account.fiveHourRemainingPercent,
+                overall: account.overallRemainingPercent
+            )
             ringPercent = account.overallRemainingPercent.map(QuotaColors.clampedPercent)
         case .notConfigured, .loading, .loginRequired, .codexNotFound:
             centerPercent = nil
@@ -120,6 +123,23 @@ public struct QuotaDonutPresentation: Equatable, Sendable {
         } else {
             ringColor = ringPercent.map { QuotaColors.color(for: $0) }
         }
+    }
+
+    public func trackColor(for appearance: QuotaAppearance) -> QuotaRGB {
+        ringPercent == 0
+            ? QuotaColors.white
+            : QuotaColors.trackColor(for: appearance)
+    }
+
+    private static func centerPercent(fiveHour: Double?, overall: Double?) -> Double? {
+        let normalizedOverall = overall.map(QuotaColors.clampedPercent)
+        if normalizedOverall == 0 {
+            return 0
+        }
+        if let fiveHour {
+            return QuotaColors.clampedPercent(fiveHour)
+        }
+        return normalizedOverall
     }
 }
 
@@ -286,7 +306,7 @@ public struct QuotaDonutView: View {
     private var tooltip: String {
         let state = QuotaDonutState(account: account)
         let presentation = QuotaDonutPresentation(account: account)
-        let fiveHour = presentation.centerPercent.map(Self.percentText) ?? "—"
+        let fiveHour = account.fiveHourRemainingPercent.map(Self.percentText) ?? "—"
         let overall = presentation.ringPercent.map(Self.percentText) ?? "—"
         let quotaText = "5h \(fiveHour) · Overall \(overall)"
         switch state {
@@ -344,7 +364,7 @@ struct QuotaRingGraphic: View {
         ZStack {
             Circle()
                 .stroke(
-                    QuotaColors.swiftUITrackColor(for: appearance),
+                    presentation.trackColor(for: appearance).swiftUIColor,
                     style: StrokeStyle(lineWidth: QuotaDonutMetrics.ringWidth, lineCap: .round)
                 )
 
