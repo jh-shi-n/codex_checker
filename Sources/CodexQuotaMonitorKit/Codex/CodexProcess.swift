@@ -37,6 +37,7 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
     private var inputPipe: Pipe?
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
+    private var workingDirectoryURL: URL?
     private var resourcesCleanedUp = true
     private var decoder = CodexLineDecoder()
     private let wakeSignal = DispatchSemaphore(value: 0)
@@ -56,6 +57,10 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
     public func launch(executable: URL, home: URL) throws {
         guard process == nil else { throw CodexProcessError.launchFailed("Process already launched") }
 
+        let workingDirectoryURL = try makeWorkingDirectory()
+        self.workingDirectoryURL = workingDirectoryURL
+        resourcesCleanedUp = false
+
         let process = Process()
         let inputPipe = Pipe()
         let outputPipe = Pipe()
@@ -69,7 +74,9 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
             executable: executable
         )
         environment["CODEX_HOME"] = home.standardizedFileURL.path
+        environment["PWD"] = workingDirectoryURL.path
         process.environment = environment
+        process.currentDirectoryURL = workingDirectoryURL
         process.standardInput = inputPipe
         process.standardOutput = outputPipe
         process.standardError = errorPipe
@@ -81,7 +88,6 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
         self.inputPipe = inputPipe
         self.outputPipe = outputPipe
         self.errorPipe = errorPipe
-        self.resourcesCleanedUp = false
 
         do {
             try process.run()
@@ -240,6 +246,33 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
             .joined(separator: ":")
     }
 
+    private func makeWorkingDirectory() throws -> URL {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .standardizedFileURL
+            .appendingPathComponent("codex-process-" + UUID().uuidString, isDirectory: true)
+        let attributes: [FileAttributeKey: Any] = [
+            .posixPermissions: NSNumber(value: Int16(0o700)),
+        ]
+        var created = false
+
+        do {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: false,
+                attributes: attributes
+            )
+            created = true
+            try fileManager.setAttributes(attributes, ofItemAtPath: directory.path)
+            return directory
+        } catch {
+            if created {
+                try? fileManager.removeItem(at: directory)
+            }
+            throw CodexProcessError.launchFailed("Unable to create Codex working directory: " + error.localizedDescription)
+        }
+    }
+
     private func setNonBlocking(_ handle: FileHandle) throws {
         let descriptor = handle.fileDescriptor
         let flags = fcntl(descriptor, F_GETFL)
@@ -298,5 +331,10 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
         inputPipe = nil
         outputPipe = nil
         errorPipe = nil
+
+        if let workingDirectoryURL {
+            try? FileManager.default.removeItem(at: workingDirectoryURL)
+            self.workingDirectoryURL = nil
+        }
     }
 }

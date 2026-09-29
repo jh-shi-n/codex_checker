@@ -462,6 +462,19 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(QuotaColors.trackColor(for: .light).hex, "#E5E5EA")
     }
 
+    func testExhaustedOverallQuotaUsesWhiteDonutTrack() {
+        let account = AccountState(
+            id: "C1",
+            primaryRemainingPercent: 100,
+            secondaryRemainingPercent: 0,
+            status: .normal
+        )
+        let presentation = QuotaDonutPresentation(account: account)
+
+        XCTAssertEqual(presentation.trackColor(for: .dark), QuotaColors.white)
+        XCTAssertEqual(presentation.trackColor(for: .dark).hex, "#FFFFFF")
+    }
+
     func testDonutCenterTextUsesWhiteOnDarkNotchBackground() {
         XCTAssertEqual(QuotaDonutMetrics.centerTextColor(for: .dark).hex, "#FFFFFF")
         XCTAssertEqual(QuotaDonutMetrics.centerTextColor(for: .light).hex, "#000000")

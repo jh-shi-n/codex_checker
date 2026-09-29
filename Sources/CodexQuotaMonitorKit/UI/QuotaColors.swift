@@ -49,6 +49,7 @@ public enum QuotaColors {
     public static let attention = QuotaRGB(red: 0xFF, green: 0xB8, blue: 0x00)
     public static let low = QuotaRGB(red: 0xFF, green: 0x5E, blue: 0x57)
     public static let critical = QuotaRGB(red: 0xFF, green: 0x3B, blue: 0x30)
+    public static let white = QuotaRGB(red: 0xFF, green: 0xFF, blue: 0xFF)
     public static let darkTrack = QuotaRGB(red: 0x2C, green: 0x2C, blue: 0x2E)
     public static let lightTrack = QuotaRGB(red: 0xE5, green: 0xE5, blue: 0xEA)
 
