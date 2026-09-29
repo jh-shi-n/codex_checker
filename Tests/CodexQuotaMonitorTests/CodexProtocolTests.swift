@@ -156,6 +156,68 @@ final class CodexProtocolTests: XCTestCase {
         process.terminate(until: Date().addingTimeInterval(1))
     }
 
+    func testCodexProcessUsesPrivateWorkingDirectoryAndCleansItAfterTermination() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let executable = directory.appendingPathComponent("fake-codex")
+        let script = """
+        #!/bin/sh
+        IFS= read -r request
+        printf '{"id":0,"result":{"cwd":"%s","pwd":"%s"}}\\n' "$(pwd -P)" "$PWD"
+        while IFS= read -r request; do
+          :
+        done
+        """
+        try Data(script.utf8).write(to: executable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o755))],
+            ofItemAtPath: executable.path
+        )
+
+        let process = CodexProcess()
+        try process.launch(executable: executable, home: directory)
+        try process.send(CodexProtocol.initializeRequest)
+        let responses = try process.readResponses(
+            for: [0],
+            until: Date().addingTimeInterval(2)
+        )
+
+        let result = try XCTUnwrap(responses[0]?.result?.objectValue)
+        let currentDirectory = try XCTUnwrap(result["cwd"]?.stringValue)
+        let environmentDirectory = try XCTUnwrap(result["pwd"]?.stringValue)
+        XCTAssertNotEqual(currentDirectory, directory.standardizedFileURL.path)
+        XCTAssertFalse(currentDirectory.hasPrefix(directory.standardizedFileURL.path + "/"))
+
+        let fileManager = FileManager.default
+        let currentDirectoryAttributes = try fileManager.attributesOfItem(atPath: currentDirectory)
+        let environmentDirectoryAttributes = try fileManager.attributesOfItem(atPath: environmentDirectory)
+        XCTAssertEqual(
+            currentDirectoryAttributes[.systemNumber] as? NSNumber,
+            environmentDirectoryAttributes[.systemNumber] as? NSNumber
+        )
+        XCTAssertEqual(
+            currentDirectoryAttributes[.systemFileNumber] as? NSNumber,
+            environmentDirectoryAttributes[.systemFileNumber] as? NSNumber
+        )
+        XCTAssertEqual(
+            (environmentDirectoryAttributes[.posixPermissions] as? NSNumber)?.intValue ?? 0 & 0o777,
+            0o700
+        )
+        XCTAssertTrue(
+            try fileManager.contentsOfDirectory(
+                at: URL(fileURLWithPath: currentDirectory, isDirectory: true),
+                includingPropertiesForKeys: nil,
+                options: []
+            ).isEmpty
+        )
+
+        process.terminate(until: Date().addingTimeInterval(1))
+        XCTAssertFalse(fileManager.fileExists(atPath: environmentDirectory))
+    }
+
     func testCodexProcessDoesNotReadTerminationStatusWhileProcessIsStillRunning() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -48,10 +48,12 @@ final class DualQuotaTests: XCTestCase {
                     "rateLimits": .object([
                         "primary": .object([
                             "usedPercent": .number(20),
+                            "windowDurationMins": .number(300),
                             "resetsAt": .number(primaryReset),
                         ]),
                         "secondary": .object([
                             "usedPercent": .number(60),
+                            "windowDurationMins": .number(10080),
                             "resetsAt": .number(secondaryReset),
                         ]),
                     ])
@@ -74,6 +76,56 @@ final class DualQuotaTests: XCTestCase {
         XCTAssertEqual(quota.secondaryRemainingPercent, 40)
         XCTAssertEqual(quota.primaryResetAt, Date(timeIntervalSince1970: primaryReset))
         XCTAssertEqual(quota.secondaryResetAt, Date(timeIntervalSince1970: secondaryReset))
+    }
+
+    func testSingleWeeklyPrimaryMapsToOverallWithoutFiveHourValue() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("auth.json"))
+
+        let weeklyReset = 1_700_001_000.0
+        let transport = DualQuotaRecordingTransport(responses: [
+            0: CodexMessage(id: 0, result: .object([:])),
+            1: CodexMessage(
+                id: 1,
+                result: .object([
+                    "account": .object([
+                        "planType": .string("self_serve_business_prolite"),
+                    ])
+                ])
+            ),
+            2: CodexMessage(
+                id: 2,
+                result: .object([
+                    "rateLimits": .object([
+                        "primary": .object([
+                            "usedPercent": .number(35),
+                            "windowDurationMins": .number(10080),
+                            "resetsAt": .number(weeklyReset),
+                        ]),
+                        "secondary": .null,
+                    ])
+                ])
+            ),
+        ])
+        let service = CodexQuotaService(
+            locator: DualQuotaFixedLocator(url: directory.appendingPathComponent("codex")),
+            processFactory: { transport }
+        )
+        let config = AccountConfig(id: "C1", home: directory, position: .left)
+
+        let state = service.stateSync(for: config)
+
+        XCTAssertEqual(state.status, .normal)
+        XCTAssertEqual(state.planType, "self_serve_business_prolite")
+        XCTAssertNil(state.primaryUsedPercent)
+        XCTAssertNil(state.fiveHourRemainingPercent)
+        XCTAssertEqual(state.secondaryUsedPercent, 35)
+        XCTAssertEqual(state.overallRemainingPercent, 65)
+        XCTAssertNil(state.primaryResetAt)
+        XCTAssertEqual(state.secondaryResetAt, Date(timeIntervalSince1970: weeklyReset))
+        XCTAssertEqual(QuotaDonutPresentation(account: state).centerPercent, 65)
+        XCTAssertEqual(QuotaDonutPresentation(account: state).ringPercent, 65)
     }
 
     func testMissingSecondaryKeepsFiveHourValueButLeavesOverallUnavailable() throws {
@@ -123,6 +175,21 @@ final class DualQuotaTests: XCTestCase {
         XCTAssertEqual(presentation.ringPercent, 40)
         XCTAssertEqual(presentation.ringColor, QuotaColors.color(for: 40))
         XCTAssertEqual(QuotaDonutState(account: account).percent, 40)
+    }
+
+    func testOverallZeroOverridesFiveHourCenterValue() {
+        let account = AccountState(
+            id: "C1",
+            primaryRemainingPercent: 100,
+            secondaryRemainingPercent: 0,
+            status: .normal
+        )
+
+        let presentation = QuotaDonutPresentation(account: account)
+
+        XCTAssertEqual(presentation.centerPercent, 0)
+        XCTAssertEqual(presentation.ringPercent, 0)
+        XCTAssertFalse(QuotaDonutState(account: account).showsErrorRing)
     }
 
     func testRateLimitsByIDOnlyResponseStillParsesBothCodexQuotas() throws {
