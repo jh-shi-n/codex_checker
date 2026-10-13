@@ -260,6 +260,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         return await tokenUsageCache.refresh(accountID: account.id, home: home)
     }
 
+    /// 선택 계정의 Ping 실행 후 새 한도 조회 및 Reset 변화 반환
     private func runUsageWindowProbe(
         _ account: AccountState
     ) async -> UsageWindowProbePresentationResult {
@@ -272,13 +273,11 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             )
         }
 
-        // Capture the reset before the probe and refresh only this stable slot
-        // after the process completes. The composite remains UI-safe and is
-        // intentionally ephemeral; no raw probe result is persisted.
+        // Ping 이전 조회 재사용을 막고 완료 이후 한도 조회 보장
         let resetBefore = accountStore.state(for: account.id)?.primaryResetAt
             ?? account.primaryResetAt
         let result = await usageWindowProbeService.probe(config)
-        await accountStore.refresh(accountID: account.id)
+        await accountStore.refresh(accountID: account.id, forceFresh: true)
         let resetAfter = accountStore.state(for: account.id)?.primaryResetAt
         return UsageWindowProbePresentationResult(
             result: result,
