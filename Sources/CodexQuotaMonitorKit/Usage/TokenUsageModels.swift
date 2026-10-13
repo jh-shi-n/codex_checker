@@ -92,6 +92,8 @@ public enum TokenUsageAvailability: String, Codable, Equatable, Sendable {
 public enum TokenUsageSnapshotError: String, Codable, Equatable, Sendable {
     case invalidHome
     case sessionsDirectoryUnavailable
+    case storageUnavailable
+    case superseded
 }
 
 /// Immutable, privacy-bounded usage data for one configured CODEX_HOME.

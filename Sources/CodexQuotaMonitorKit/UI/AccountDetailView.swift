@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Scrollable account dashboard presented when a quota donut is clicked.
+/// 할당량 상세와 계정별 로컬 사용량 표시
 public struct AccountDetailView: View {
     public static let minimumWidth: CGFloat = TransientPopoverSizingPolicy.contentWidth
     public static let minimumHeight: CGFloat = TransientPopoverSizingPolicy.contentHeight
@@ -17,6 +17,7 @@ public struct AccountDetailView: View {
 
     @State private var tokenUsageSnapshot: TokenUsageSnapshot?
     @State private var isTokenUsageLoading = false
+    @State private var tokenUsageRefreshFailed = false
     @State private var isTokenUsageExpanded = false
     @State private var probePresentation: UsageWindowProbePresentationResult?
     @State private var isProbeRunning = false
@@ -52,7 +53,7 @@ public struct AccountDetailView: View {
             VStack(alignment: .leading, spacing: 12) {
                 header
 
-                AccountQuotaSection(account: account)
+                AccountQuotaSection(account: displayedAccount)
 
                 TokenContributionGrid(snapshot: tokenUsageSnapshot)
 
@@ -61,10 +62,10 @@ public struct AccountDetailView: View {
                 accountActivity
 
                 UsageWindowProbeSection(
-                    account: account,
+                    account: displayedAccount,
                     probe: currentProbePresentation,
                     isRunning: isProbeRunning,
-                    isConfigured: account.status != .notConfigured,
+                    isConfigured: displayedAccount.status != .notConfigured,
                     onRun: runProbe
                 )
 
@@ -88,11 +89,21 @@ public struct AccountDetailView: View {
         .preferredColorScheme(.dark)
         .task(id: account.id) {
             await loadCachedTokenUsageSnapshot()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard !Task.isCancelled else { return }
+                await loadCachedTokenUsageSnapshot()
+            }
         }
         .onChange(of: account.status) { _, status in
-            if status == .notConfigured {
+            if status == .notConfigured || (status == .loading && !isProbeRunning) {
                 isProbeRunning = false
+                probePresentation = nil
             }
+        }
+        .onChange(of: account.id) { _, _ in
+            probePresentation = nil
+            isProbeRunning = false
         }
     }
 
@@ -107,12 +118,18 @@ public struct AccountDetailView: View {
                 HStack(spacing: 7) {
                     Text(account.id)
                         .font(.title3.weight(.semibold))
-                    Text(account.planType ?? "—")
+                    Text(AccountDashboardFormatting.subscriptionBadgeText(account.planType))
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(SubscriptionBadgeStyle.accentColor(for: account.planType))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.purple.opacity(0.16)))
+                        .background(Capsule().fill(SubscriptionBadgeStyle.backgroundColor(for: account.planType)))
+                        .overlay {
+                            Capsule().strokeBorder(
+                                SubscriptionBadgeStyle.accentColor(for: account.planType).opacity(0.45),
+                                lineWidth: 1
+                            )
+                        }
                 }
                 Text(account.email ?? "—")
                     .font(.caption)
@@ -165,6 +182,12 @@ public struct AccountDetailView: View {
                     isLoading: isTokenUsageLoading
                 )
 
+                if tokenUsageRefreshFailed {
+                    Text("토큰 사용량 업데이트 실패")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
                 Button(action: updateTokenUsage) {
                     HStack(spacing: 6) {
                         if isTokenUsageLoading {
@@ -192,7 +215,7 @@ public struct AccountDetailView: View {
     private var accountActivity: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text("Account Activity")
+                Text("CLI 실행 세부내역")
                     .font(.headline.weight(.semibold))
                 Text("(CLI 세션)")
                     .font(.caption)
@@ -249,29 +272,72 @@ public struct AccountDetailView: View {
         }
     }
 
+    /// 현재 계정에 속한 Ping 결과만 노출
     private var currentProbePresentation: UsageWindowProbePresentationResult? {
-        probePresentation
+        guard account.status != .notConfigured,
+              account.status != .loading,
+              let probePresentation,
+              probePresentation.isCurrentAccount,
+              probePresentation.result.accountID == account.id
+        else { return nil }
+        return probePresentation
     }
 
+    /// 성공한 최신 한도 스냅샷 우선 표시
+    private var displayedAccount: AccountState {
+        guard let presentation = currentProbePresentation,
+              presentation.result.isSuccess,
+              presentation.quotaRefreshSucceeded == true,
+              let refreshedAccount = presentation.refreshedAccount,
+              refreshedAccount.id == account.id
+        else { return account }
+        return refreshedAccount
+    }
+
+    /// 캐시 스냅샷을 60초 주기로 읽는 표시 갱신
     private func loadCachedTokenUsageSnapshot() async {
         guard !Task.isCancelled else { return }
         let snapshot = await loadCachedTokenUsage(account.id)
-        guard !Task.isCancelled else { return }
-        tokenUsageSnapshot = snapshot
-        isTokenUsageLoading = false
+        guard !Task.isCancelled, !isTokenUsageLoading else { return }
+        if let snapshot {
+            applyCachedTokenUsageSnapshot(snapshot)
+        } else {
+            tokenUsageSnapshot = nil
+            tokenUsageRefreshFailed = false
+        }
     }
 
+    /// 사용 가능한 캐시 결과만 마지막 정상 스냅샷에 덮어쓰기
+    private func applyCachedTokenUsageSnapshot(_ snapshot: TokenUsageSnapshot) {
+        if snapshot.availability == .available || tokenUsageSnapshot?.availability != .available {
+            tokenUsageSnapshot = snapshot
+            if snapshot.availability == .available {
+                tokenUsageRefreshFailed = false
+            }
+        }
+    }
+
+    /// 실패 응답으로 마지막 정상 스냅샷을 대체하지 않는 수동 갱신
     private func updateTokenUsage() {
         guard !isTokenUsageLoading else { return }
         isTokenUsageLoading = true
         Task { @MainActor in
             let snapshot = await refreshTokenUsage(account)
             guard !Task.isCancelled else { return }
-            tokenUsageSnapshot = snapshot
+            if snapshot.availability == .available {
+                tokenUsageSnapshot = snapshot
+                tokenUsageRefreshFailed = false
+            } else {
+                if tokenUsageSnapshot?.availability != .available {
+                    tokenUsageSnapshot = snapshot
+                }
+                tokenUsageRefreshFailed = true
+            }
             isTokenUsageLoading = false
         }
     }
 
+    /// 선택 계정 Ping 결과를 계정 ID 기준으로 반영
     private func runProbe() {
         guard AccountDashboardActionState.canRunProbe(
             account: account,
@@ -282,6 +348,10 @@ public struct AccountDetailView: View {
         Task { @MainActor in
             let presentation = await runUsageWindowProbe(account)
             guard !Task.isCancelled else { return }
+            guard presentation.result.accountID == account.id else {
+                isProbeRunning = false
+                return
+            }
             probePresentation = presentation
             isProbeRunning = false
         }

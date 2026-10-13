@@ -23,7 +23,7 @@ public struct TokenContributionGrid: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("Token Contribution")
+                Text("토큰 기여량")
                     .font(.headline.weight(.semibold))
                 Text("(최근 12주)")
                     .font(.caption)

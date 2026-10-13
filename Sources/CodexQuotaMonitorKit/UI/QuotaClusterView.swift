@@ -1,3 +1,6 @@
+// 목적: 설정 순서와 표시 계정 수에 따른 도넛 클러스터 구성
+// 이용처: 좌우 노치 패널
+// 사용방법: 표시 순서 배열 전달 및 splitVisibleAccounts로 좌우 분할
 import Foundation
 import SwiftUI
 
@@ -141,8 +144,7 @@ struct NotchClusterBackgroundShape: Shape {
     }
 }
 
-/// A compact side of the notch layout. On both sides the first item is the
-/// outer account and the second item is nearest the notch, matching C1 C2 | C3 C4.
+/// 설정 순서의 계정 도넛을 왼쪽부터 배치하는 노치 클러스터
 public struct QuotaClusterView: View {
     public let accounts: [AccountState]
     public let side: NotchSide
@@ -290,19 +292,13 @@ public struct QuotaClusterView: View {
         return min(requested, max(0, activityToastWidth))
     }
 
-    /// Returns the stable visual order while preserving the caller's account
-    /// values. Numeric suffixes make C1…C4 order correctly even if input is shuffled.
+    /// 설정에서 결정한 표시 순서 보존
     public static func orderedAccounts(_ accounts: [AccountState], for side: NotchSide) -> [AccountState] {
-        accounts.sorted { lhs, rhs in
-            let leftOrdinal = ordinal(for: lhs.id)
-            let rightOrdinal = ordinal(for: rhs.id)
-            if leftOrdinal != rightOrdinal { return leftOrdinal < rightOrdinal }
-            return lhs.id < rhs.id
-        }
+        accounts
     }
 
-    private static func ordinal(for id: String) -> Int {
-        let suffix = id.drop { $0.isLetter }
-        return Int(suffix) ?? Int.max
+    /// 표시 계정의 앞 두 항목을 왼쪽에, 나머지 항목을 오른쪽에 배치
+    public static func splitVisibleAccounts(_ accounts: [AccountState], side: NotchSide) -> [AccountState] {
+        side == .left ? Array(accounts.prefix(2)) : Array(accounts.dropFirst(2).prefix(2))
     }
 }

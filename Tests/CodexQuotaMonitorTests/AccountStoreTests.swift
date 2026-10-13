@@ -4,6 +4,26 @@ import XCTest
 
 @MainActor
 final class AccountStoreTests: XCTestCase {
+    /// 초기화 갱신의 정상 조회와 이전 값을 보존하는 실패 조회 구분 확인
+    func testRefreshReportsOnlyAppliedNormalResultAsSuccess() async {
+        let counter = CallCounter()
+        let store = AccountStore(configs: makeConfigs()) { config in
+            let call = await counter.increment(config.id)
+            return AccountState(
+                id: config.id,
+                remainingPercent: call == 1 ? 80 : nil,
+                status: call == 1 ? .normal : .timeout
+            )
+        }
+        let first = await store.refresh(accountID: "C1", forceFresh: true)
+        let second = await store.refresh(accountID: "C1", forceFresh: true)
+        let missing = await store.refresh(accountID: "unknown")
+        XCTAssertTrue(first)
+        XCTAssertFalse(second)
+        XCTAssertFalse(missing)
+        XCTAssertEqual(store.state(for: "C1")?.remainingPercent, 80)
+    }
+
     /// Ping 후 새 조회 완료 시 이전 조회의 늦은 결과 무시 확인
     func testForcedRefreshDoesNotReuseOrApplyPreProbeFetch() async {
         let gate = AccountLoaderProbe()
@@ -21,7 +41,7 @@ final class AccountStoreTests: XCTestCase {
         await store.refresh(accountID: "C1", forceFresh: true)
         XCTAssertEqual(store.state(for: "C1")?.usedPercent, 20)
         await gate.release()
-        await oldRefresh.value
+        _ = await oldRefresh.value
         XCTAssertEqual(store.state(for: "C1")?.usedPercent, 20)
         XCTAssertEqual(store.state(for: "C2")?.status, .loading)
     }
@@ -215,9 +235,9 @@ final class AccountStoreTests: XCTestCase {
         await probe.waitForGeneration(2)
 
         await probe.release(generation: 2)
-        await second.value
+        _ = await second.value
         await probe.release(generation: 1)
-        await first.value
+        _ = await first.value
 
         XCTAssertTrue(store.states.allSatisfy { $0.email == "generation-2" })
         XCTAssertTrue(store.states.allSatisfy { $0.status == .normal })
@@ -261,8 +281,8 @@ final class AccountStoreTests: XCTestCase {
         }
         for _ in 0..<10 { await Task.yield() }
         await loader.release()
-        await first.value
-        await second.value
+        _ = await first.value
+        _ = await second.value
 
         let callCount = await loader.callCount()
         XCTAssertEqual(callCount, 1)
@@ -287,7 +307,7 @@ final class AccountStoreTests: XCTestCase {
         for _ in 0..<10 { await Task.yield() }
         await probe.release()
         await all.value
-        await manual.value
+        _ = await manual.value
 
         XCTAssertTrue(["C1", "C2", "C4"].allSatisfy { id in
             store.state(for: id)?.status == .normal
@@ -315,7 +335,7 @@ final class AccountStoreTests: XCTestCase {
             "/tmp/new-C1", "/tmp/new-C2", "/tmp/new-C3", "/tmp/new-C4",
         ])
         await probe.release(generation: 1)
-        await oldRefresh.value
+        _ = await oldRefresh.value
         XCTAssertTrue(store.states.allSatisfy { $0.status == .loading })
     }
 

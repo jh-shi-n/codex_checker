@@ -1,3 +1,6 @@
+// 목적: 표시 계정 수에 맞춘 노치 패널 배치와 안정적 갱신
+// 이용처: 메뉴 막대 좌우 계정 패널
+// 사용방법: update 이후 show 호출, 화면 변경 시 relayout 호출
 import AppKit
 import Foundation
 
@@ -50,6 +53,7 @@ public final class NotchLayoutManager: NSObject {
     private var observerOwner: ScreenObserverTokenOwner?
     private var isRelayoutInProgress = false
     private var suppressPresentationRelayout = false
+    private var isShown = false
 
     public init(
         screenProvider: @escaping @MainActor () -> NSScreen? = {
@@ -95,8 +99,7 @@ public final class NotchLayoutManager: NSObject {
         }
     }
 
-    /// Updates the clusters independently, preserving one account's state if
-    /// another account has failed.
+    /// 계정 상태 반영 및 표시 수·크기 변경 시에만 패널 재배치
     public func update(
         leftAccounts: [AccountState],
         rightAccounts: [AccountState],
@@ -105,6 +108,10 @@ public final class NotchLayoutManager: NSObject {
         onRefresh: ((AccountState) -> Void)? = nil,
         onSettings: (() -> Void)? = nil
     ) {
+        let needsRelayout = currentLayout == nil
+            || leftAccounts.count != leftPanel.accounts.count
+            || rightAccounts.count != rightPanel.accounts.count
+            || menuBarHeight != nil
         if let showAccountLabels {
             self.showAccountLabels = showAccountLabels
         }
@@ -122,7 +129,7 @@ public final class NotchLayoutManager: NSObject {
             onRefresh: onRefresh,
             onSettings: onSettings
         )
-        relayout()
+        if needsRelayout { relayout() }
     }
 
     /// Updates the queue-owned current value for each independent lane. The
@@ -270,7 +277,10 @@ public final class NotchLayoutManager: NSObject {
         ) {
             leftPanel.orderOut(nil)
         } else {
-            leftPanel.setAuxiliaryFrame(leftFrame, display: true)
+            if leftPanel.frame != leftFrame {
+                leftPanel.setAuxiliaryFrame(leftFrame, display: true)
+            }
+            if isShown && !leftPanel.isVisible { leftPanel.orderFrontRegardless() }
         }
         if !NotchPanelVisibility.isDisplayable(
             accountCount: rightPanel.accounts.count,
@@ -278,14 +288,20 @@ public final class NotchLayoutManager: NSObject {
         ) {
             rightPanel.orderOut(nil)
         } else {
-            rightPanel.setAuxiliaryFrame(rightFrame, display: true)
+            if rightPanel.frame != rightFrame {
+                rightPanel.setAuxiliaryFrame(rightFrame, display: true)
+            }
+            if isShown && !rightPanel.isVisible { rightPanel.orderFrontRegardless() }
         }
         if NotchPanelVisibility.isCenterBridgeDisplayable(
             leftAccountCount: leftPanel.accounts.count,
             rightAccountCount: rightPanel.accounts.count,
             frame: centerFrame
         ) {
-            centerPanel.setAuxiliaryFrame(centerFrame, display: true)
+            if centerPanel.frame != centerFrame {
+                centerPanel.setAuxiliaryFrame(centerFrame, display: true)
+            }
+            if isShown && !centerPanel.isVisible { centerPanel.orderFrontRegardless() }
         } else {
             centerPanel.orderOut(nil)
         }
@@ -293,6 +309,7 @@ public final class NotchLayoutManager: NSObject {
     }
 
     public func show() {
+        isShown = true
         guard relayout(), currentLayout != nil else { return }
         if NotchPanelVisibility.isDisplayable(
             accountCount: leftPanel.accounts.count,
@@ -317,6 +334,7 @@ public final class NotchLayoutManager: NSObject {
     }
 
     public func hide() {
+        isShown = false
         leftPanel.orderOut(nil)
         centerPanel.orderOut(nil)
         rightPanel.orderOut(nil)

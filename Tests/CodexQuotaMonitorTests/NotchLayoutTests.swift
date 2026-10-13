@@ -221,19 +221,50 @@ final class NotchLayoutTests: XCTestCase {
         )
     }
 
-    func testClusterOrderingKeepsOuterAndNotchNearestIdsStable() {
+    /// 설정 순서가 계정 ID 정렬로 변경되지 않는 동작 확인
+    func testClusterOrderingPreservesConfiguredOrder() {
         func state(_ id: String) -> AccountState {
             AccountState(id: id, remainingPercent: 80, status: .normal)
         }
 
         XCTAssertEqual(
             QuotaClusterView.orderedAccounts([state("C2"), state("C1")], for: .left).map(\.id),
-            ["C1", "C2"]
+            ["C2", "C1"]
         )
         XCTAssertEqual(
             QuotaClusterView.orderedAccounts([state("C4"), state("C3")], for: .right).map(\.id),
-            ["C3", "C4"]
+            ["C4", "C3"]
         )
+    }
+
+    /// 표시 항목 수에 따른 왼쪽 우선 빈자리 없는 배치 확인
+    func testVisibleAccountLayoutPacksLeftBeforeRight() {
+        let states = ["C4", "C2", "C1", "C3"].map { AccountState.loading(id: $0) }
+        for count in 0...4 {
+            let visible = Array(states.prefix(count))
+            XCTAssertEqual(
+                QuotaClusterView.splitVisibleAccounts(visible, side: .left).map(\.id),
+                Array(visible.prefix(2)).map(\.id)
+            )
+            XCTAssertEqual(
+                QuotaClusterView.splitVisibleAccounts(visible, side: .right).map(\.id),
+                Array(visible.dropFirst(2)).map(\.id)
+            )
+        }
+    }
+
+    /// 한도 상태만 바뀌는 갱신에서 도넛 크기와 호스팅 뷰 유지 확인
+    func testPanelRefreshPreservesResolvedDiameterAndHostingView() {
+        let left = LeftQuotaPanel(accounts: [.loading(id: "C4")], diameterOverride: 18)
+        let right = RightQuotaPanel(accounts: [.loading(id: "C1")], diameterOverride: 19)
+        let leftHost = left.contentView
+        let rightHost = right.contentView
+        left.update(accounts: [AccountState(id: "C4", remainingPercent: 80, status: .normal)])
+        right.update(accounts: [AccountState(id: "C1", remainingPercent: 60, status: .normal)])
+        XCTAssertEqual(left.diameterOverride, 18)
+        XCTAssertEqual(right.diameterOverride, 19)
+        XCTAssertTrue(left.contentView === leftHost)
+        XCTAssertTrue(right.contentView === rightHost)
     }
 
     func testShortAuxiliaryAreasUseOneResolvedDiameterForPanelItemsAndContent() {

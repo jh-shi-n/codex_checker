@@ -1,13 +1,17 @@
 import SwiftUI
 
-/// Presentation of the explicit, read-only usage-window probe.
+/// 할당량 초기화 갱신 상태와 실행 동작 표시
 public struct UsageWindowProbeSection: View {
+    /// 섹션 제목
+    public static let sectionTitle = "할당량 초기화 갱신"
+
     public let account: AccountState
     public let probe: UsageWindowProbePresentationResult?
     public let isRunning: Bool
     public let isConfigured: Bool
     public let onRun: () -> Void
 
+    /// 계정과 최신 Reset 결과를 받는 섹션 생성
     public init(
         account: AccountState,
         probe: UsageWindowProbePresentationResult? = nil,
@@ -25,13 +29,10 @@ public struct UsageWindowProbeSection: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Image(systemName: "flask")
+                Image(systemName: "arrow.clockwise")
                     .foregroundStyle(.purple)
-                Text("Usage Window Probe")
+                Text(Self.sectionTitle)
                     .font(.headline.weight(.semibold))
-                Text("(Ping)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             HStack(alignment: .top, spacing: 12) {
@@ -39,17 +40,15 @@ public struct UsageWindowProbeSection: View {
                 Spacer(minLength: 8)
                 Button(action: onRun) {
                     Label(buttonTitle, systemImage: isRunning ? "hourglass" : "bolt.fill")
-                        .frame(minWidth: 188)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.purple)
+                .buttonStyle(QuotaResetButtonStyle())
                 .disabled(!canRun)
-                .help("실제 Codex 사용량이 발생할 수 있습니다. 읽기 전용 Ping을 실행합니다.")
+                .help("최소 Ping 요청 후 최신 할당량을 조회합니다. 실제 사용량이 발생할 수 있습니다.")
                 .accessibilityLabel(buttonTitle)
-                .accessibilityHint("실제 사용량이 발생할 수 있는 읽기 전용 확인입니다")
+                .accessibilityHint("최소 요청으로 서버 사용량이 발생할 수 있습니다")
             }
 
-            Text("최소 요청을 실행하여 사용량과 Reset 시각 변화를 관찰합니다. 실제 사용량이 발생할 수 있습니다.")
+            Text("최소 요청 후 서버에서 최신 할당량과 초기화 시각을 조회합니다. 실제 사용량이 발생할 수 있습니다.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -65,6 +64,7 @@ public struct UsageWindowProbeSection: View {
         }
     }
 
+    /// 설정 계정의 유휴 상태 실행 허용 여부
     public var canRun: Bool {
         isConfigured && AccountDashboardActionState.canRunProbe(
             account: account,
@@ -72,9 +72,10 @@ public struct UsageWindowProbeSection: View {
         )
     }
 
+    /// 실행 중 여부에 따른 버튼 표시명
     public var buttonTitle: String {
-        if isRunning { return "Ping 실행 중…" }
-        return "Luna Light로 Ping 실행"
+        if isRunning { return "갱신 중…" }
+        return "초기화 갱신"
     }
 
     @ViewBuilder
@@ -83,17 +84,19 @@ public struct UsageWindowProbeSection: View {
             detailRow(label: "마지막 실행", value: lastRunText)
             detailRow(label: "결과", value: resultText)
             detailRow(label: "사용 토큰", value: tokenText)
-            detailRow(label: "Reset", value: resetText)
+            detailRow(label: "5시간 Reset", value: primaryResetText)
+            detailRow(label: "7일 Reset", value: secondaryResetText)
         }
         .font(.caption)
     }
 
+    /// 결과 행의 레이블과 표시값 구성
     @ViewBuilder
     private func detailRow(label: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(label)
                 .foregroundStyle(.secondary)
-                .frame(width: 62, alignment: .leading)
+                .frame(width: 76, alignment: .leading)
             Text(value)
                 .fontWeight(.medium)
                 .lineLimit(2)
@@ -105,6 +108,7 @@ public struct UsageWindowProbeSection: View {
         return AccountDashboardFormatting.dateText(completedAt)
     }
 
+    /// Ping 실행과 한도 재조회 결과를 구분한 문구
     private var resultText: String {
         // While a new request is active, do not leave a previous failure or
         // success looking like the current result. The terminal categorical
@@ -112,6 +116,12 @@ public struct UsageWindowProbeSection: View {
         if isRunning { return "실행 중" }
         guard let result = probe?.result else {
             return "대기"
+        }
+        if result.isSuccess, probe?.quotaRefreshSucceeded == false {
+            return "Ping 성공 · 한도 조회 실패"
+        }
+        if result.isSuccess, probe?.quotaRefreshSucceeded == true {
+            return "갱신 성공"
         }
         return result.isSuccess ? "성공" : (result.failureCategory?.userMessage ?? "실패")
     }
@@ -128,11 +138,70 @@ public struct UsageWindowProbeSection: View {
         .joined(separator: " · ")
     }
 
-    private var resetText: String {
-        guard let probe else { return AccountDashboardFormatting.dateText(account.primaryResetAt) }
-        return AccountDashboardFormatting.resetDeltaText(
-            before: probe.primaryResetBefore,
-            after: probe.primaryResetAfter
+    private var primaryResetText: String {
+        resetText(
+            before: probe?.primaryResetBefore,
+            after: probe?.primaryResetAfter,
+            current: account.primaryResetAt
         )
+    }
+
+    private var secondaryResetText: String {
+        resetText(
+            before: probe?.secondaryResetBefore,
+            after: probe?.secondaryResetAfter,
+            current: account.secondaryResetAt
+        )
+    }
+
+    /// 조회 결과가 없는 경우 현재 서버 시각을 유지하는 표시
+    private func resetText(before: Date?, after: Date?, current: Date?) -> String {
+        guard probe != nil,
+              before != nil || after != nil || probe?.quotaRefreshSucceeded != nil
+        else {
+            return AccountDashboardFormatting.dateText(
+                current,
+                dateStyle: .medium,
+                timeStyle: .short
+            )
+        }
+        return AccountDashboardFormatting.resetObservationText(
+            before: before,
+            after: after,
+            quotaRefreshSucceeded: probe?.quotaRefreshSucceeded
+        )
+    }
+}
+
+/// 불투명 배경과 선명한 테두리의 할당량 갱신 버튼 스타일
+private struct QuotaResetButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    /// 활성 상태와 누름 상태에 따른 버튼 외형 구성
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(isEnabled ? Color.white : Color(red: 0.68, green: 0.68, blue: 0.72))
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(minWidth: 116)
+            .background {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(backgroundColor(isPressed: configuration.isPressed))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(isEnabled ? Color(red: 0.65, green: 0.43, blue: 0.85) : Color(red: 0.38, green: 0.36, blue: 0.42), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// 비활성 및 눌림 상태의 불투명 배경색 선택
+    private func backgroundColor(isPressed: Bool) -> Color {
+        guard isEnabled else { return Color(red: 0.25, green: 0.23, blue: 0.29) }
+        return isPressed
+            ? Color(red: 0.35, green: 0.18, blue: 0.50)
+            : Color(red: 0.46, green: 0.25, blue: 0.65)
     }
 }

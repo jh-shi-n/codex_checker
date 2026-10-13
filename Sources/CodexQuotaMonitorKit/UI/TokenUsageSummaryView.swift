@@ -12,7 +12,7 @@ public struct TokenUsageSummaryView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Token Usage")
+            Text("토큰 사용량")
                 .font(.headline.weight(.semibold))
 
             content

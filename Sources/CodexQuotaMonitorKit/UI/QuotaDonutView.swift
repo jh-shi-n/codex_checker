@@ -1,3 +1,6 @@
+// 목적: 한도 도넛 표시 및 조회 중 마지막 한도 유지
+// 이용처: 메뉴 막대와 계정 상세 화면
+// 사용방법: AccountState 전달, 최초 조회에만 로딩 애니메이션 표시
 import Foundation
 import SwiftUI
 
@@ -18,7 +21,13 @@ public enum QuotaDonutState: Equatable, Sendable {
         case .notConfigured:
             self = .notConfigured
         case .loading:
-            self = .loading
+            if let remaining = account.overallRemainingPercent {
+                self = .value(QuotaColors.clampedPercent(remaining))
+            } else if let remaining = account.fiveHourRemainingPercent {
+                self = .fiveHourOnly(QuotaColors.clampedPercent(remaining))
+            } else {
+                self = .loading
+            }
         case .loginRequired:
             self = .loginRequired
         case .normal:
@@ -107,13 +116,13 @@ public struct QuotaDonutPresentation: Equatable, Sendable {
 
     public init(account: AccountState) {
         switch account.status {
-        case .normal, .timeout, .error:
+        case .normal, .loading, .timeout, .error:
             centerPercent = Self.centerPercent(
                 fiveHour: account.fiveHourRemainingPercent,
                 overall: account.overallRemainingPercent
             )
             ringPercent = account.overallRemainingPercent.map(QuotaColors.clampedPercent)
-        case .notConfigured, .loading, .loginRequired, .codexNotFound:
+        case .notConfigured, .loginRequired, .codexNotFound:
             centerPercent = nil
             ringPercent = nil
         }

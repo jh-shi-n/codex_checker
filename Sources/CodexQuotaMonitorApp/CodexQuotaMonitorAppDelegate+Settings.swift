@@ -1,3 +1,4 @@
+// 목적: 설정 화면 바인딩과 앱 위임자 설정 변경 처리
 @preconcurrency import AppKit
 import SwiftUI
 
@@ -17,25 +18,24 @@ extension CodexQuotaMonitorAppDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// 한글 제목과 공통 콘텐츠 크기의 설정 창 생성
     private func createFallbackSettingsWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
+            contentRect: NSRect(origin: .zero, size: SettingsView.defaultWindowSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Codex Quota Monitor Settings"
+        window.title = "Codex Quota Monitor 설정"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 360, height: 420)
+        window.contentMinSize = SettingsView.minimumWindowSize
         window.contentViewController = NSHostingController(rootView: makeSettingsView())
         window.center()
         fallbackSettingsWindow = window
         window.makeKeyAndOrderFront(nil)
     }
 
-    /// Shared content factory used by SwiftUI's Settings scene. Keeping the
-    /// bindings here preserves the existing persistence/service callbacks
-    /// while ensuring the scene is never backed by EmptyView.
+    /// 목적: 설정 화면과 앱 위임자 저장·렌더 콜백 연결
     func makeSettingsView() -> SettingsView {
         SettingsView(
             refreshIntervalMinutes: Binding(
@@ -62,6 +62,18 @@ extension CodexQuotaMonitorAppDelegate {
                 set: { [weak self] seconds in
                     self?.applyActivityNotificationDuration(seconds)
                 }
+            ),
+            enabledAccountIDs: Binding(
+                get: { [weak self] in
+                    self?.preferences.enabledAccountIDs ?? PreferencesStore.defaultEnabledAccountIDs
+                },
+                set: { [weak self] ids in self?.applyEnabledAccountIDs(ids) }
+            ),
+            accountDisplayOrder: Binding(
+                get: { [weak self] in
+                    self?.preferences.accountDisplayOrder ?? PreferencesStore.defaultAccountDisplayOrder
+                },
+                set: { [weak self] ids in self?.applyAccountDisplayOrder(ids) }
             )
         )
     }
@@ -103,6 +115,18 @@ extension CodexQuotaMonitorAppDelegate {
         render(states: accountStore.states)
     }
 
+    /// 목적: 활성 계정 설정 저장 후 현재 상태 재렌더
+    private func applyEnabledAccountIDs(_ ids: [String]) {
+        preferences.updateEnabledAccountIDs(ids)
+        render(states: accountStore.states)
+    }
+
+    /// 목적: 계정 표시 순서 저장 후 현재 상태 재렌더
+    private func applyAccountDisplayOrder(_ ids: [String]) {
+        preferences.updateAccountDisplayOrder(ids)
+        render(states: accountStore.states)
+    }
+
     private func applyActivityNotificationDuration(_ seconds: Int) {
         preferences.updateActivityNotificationDuration(seconds: seconds)
         sessionActivityToastQueue.updateDuration(
@@ -117,24 +141,24 @@ extension CodexQuotaMonitorAppDelegate {
             presentLaunchAtLoginApproval()
             return
         case .notFound:
-            message = "The packaged app was not found by macOS ServiceManagement."
+            message = "macOS에서 설치된 앱을 찾을 수 없습니다."
         case .disabled:
             message = requestedEnabled
-                ? "Launch at login remains disabled."
-                : "Launch at login is disabled."
+                ? "로그인 시 자동 실행이 활성화되지 않았습니다."
+                : "로그인 시 자동 실행이 꺼져 있습니다."
         case .enabled:
-            message = "Launch at login is enabled."
+            message = "로그인 시 자동 실행이 켜져 있습니다."
         }
         presentLaunchAtLoginFailureMessage(message)
     }
 
     private func presentLaunchAtLoginApproval() {
         let alert = NSAlert()
-        alert.messageText = "Approve launch at login"
-        alert.informativeText = "macOS registered this app, but approval is required in System Settings > Login Items."
+        alert.messageText = "로그인 시 자동 실행 승인"
+        alert.informativeText = "앱이 등록되었습니다. 시스템 설정 > 로그인 항목에서 승인해 주세요."
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Open Login Items")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "로그인 항목 열기")
+        alert.addButton(withTitle: "취소")
 
         if let settingsWindow = settingsHostWindow {
             alert.beginSheetModal(for: settingsWindow) { [weak self] response in
@@ -152,7 +176,7 @@ extension CodexQuotaMonitorAppDelegate {
 
     private func presentLaunchAtLoginFailureMessage(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "Launch at login was not changed"
+        alert.messageText = "로그인 시 자동 실행을 변경하지 못했습니다"
         alert.informativeText = message
         alert.alertStyle = .warning
         if let settingsWindow = settingsHostWindow {
