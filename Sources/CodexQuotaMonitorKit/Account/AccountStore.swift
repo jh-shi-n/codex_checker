@@ -1,3 +1,6 @@
+// 목적: 계정별 한도 상태 및 비동기 조회 세대 관리
+// 이용처: 앱 한도 새로고침 및 초기화 시각 갱신
+// 사용방법: refreshAll 또는 refresh(accountID:forceFresh:) 호출
 import Combine
 import Foundation
 
@@ -18,6 +21,9 @@ public final class AccountStore: ObservableObject {
 
     @Published public private(set) var configs: [AccountConfig]
     @Published public private(set) var states: [AccountState]
+
+    /// 계정 설정 변경에 따른 비동기 결과 격리용 버전
+    public var configurationRevision: Int { configRevision }
 
     private let preferencesStore: PreferencesStore
     private let stateLoader: AccountStateLoader
@@ -103,9 +109,10 @@ public final class AccountStore: ObservableObject {
         }
     }
 
-    /// 단일 계정 갱신; forceFresh 지정 시 진행 중인 이전 조회 재사용 방지
-    public func refresh(accountID id: String, forceFresh: Bool = false) async {
-        guard let config = configs.first(where: { $0.id == id }) else { return }
+    /// 단일 계정 갱신 및 최신 정상 결과 반영 여부 반환; forceFresh 지정 시 이전 조회 재사용 방지
+    @discardableResult
+    public func refresh(accountID id: String, forceFresh: Bool = false) async -> Bool {
+        guard let config = configs.first(where: { $0.id == id }) else { return false }
 
         guard config.isConfigured else {
             states = states.map { state in
@@ -113,7 +120,7 @@ public final class AccountStore: ObservableObject {
                     ? Self.initialState(for: config, preferencesStore: preferencesStore)
                     : state
             }
-            return
+            return false
         }
 
         let revision = configRevision
@@ -132,8 +139,9 @@ public final class AccountStore: ObservableObject {
             revision: revision,
             forceFresh: forceFresh
         )
-        guard configRevision == revision, accountGenerations[id] == generation else { return }
+        guard configRevision == revision, accountGenerations[id] == generation else { return false }
         apply(result)
+        return result.state.status == .normal
     }
 
     /// Convenience spelling for callers holding an account configuration.
