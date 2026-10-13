@@ -209,7 +209,7 @@ public struct AccountDetailView: View {
     private var accountActivity: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text("Account Activity")
+                Text("CLI 실행 세부내역")
                     .font(.headline.weight(.semibold))
                 Text("(CLI 세션)")
                     .font(.caption)

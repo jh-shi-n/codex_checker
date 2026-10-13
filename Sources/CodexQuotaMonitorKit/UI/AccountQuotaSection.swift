@@ -10,7 +10,7 @@ public struct AccountQuotaSection: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Quota")
+            Text("현재 할당량")
                 .font(.headline.weight(.semibold))
 
             HStack(alignment: .top, spacing: 8) {
