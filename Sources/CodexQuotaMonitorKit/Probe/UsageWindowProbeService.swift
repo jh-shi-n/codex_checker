@@ -10,6 +10,7 @@ public struct UsageWindowProbeParseResult: Equatable, Sendable {
     public let sawValidObject: Bool
     public let sawMalformedLine: Bool
     public let sawCompletion: Bool
+    public let sawExpectedAssistantOutput: Bool
     public let sawError: Bool
     /// A bounded categorical diagnosis extracted only from an error event.
     /// No source text is retained or exposed.
@@ -21,6 +22,7 @@ public struct UsageWindowProbeParseResult: Equatable, Sendable {
         sawValidObject: Bool = false,
         sawMalformedLine: Bool = false,
         sawCompletion: Bool = false,
+        sawExpectedAssistantOutput: Bool = false,
         sawError: Bool = false,
         failureCategoryHint: UsageWindowProbeFailureCategory? = nil
     ) {
@@ -29,6 +31,7 @@ public struct UsageWindowProbeParseResult: Equatable, Sendable {
         self.sawValidObject = sawValidObject
         self.sawMalformedLine = sawMalformedLine
         self.sawCompletion = sawCompletion
+        self.sawExpectedAssistantOutput = sawExpectedAssistantOutput
         self.sawError = sawError
         self.failureCategoryHint = failureCategoryHint
     }
@@ -50,6 +53,7 @@ public struct UsageWindowProbeJSONLParser: Sendable {
     private var sawValidObject = false
     private var sawMalformedLine = false
     private var sawCompletion = false
+    private var sawExpectedAssistantOutput = false
     private var sawError = false
     private var failureCategoryHint: UsageWindowProbeFailureCategory?
 
@@ -89,6 +93,7 @@ public struct UsageWindowProbeJSONLParser: Sendable {
             sawValidObject: sawValidObject,
             sawMalformedLine: sawMalformedLine,
             sawCompletion: sawCompletion,
+            sawExpectedAssistantOutput: sawExpectedAssistantOutput,
             sawError: sawError,
             failureCategoryHint: failureCategoryHint
         )
@@ -135,8 +140,11 @@ public struct UsageWindowProbeJSONLParser: Sendable {
                 failureCategoryHint = preferredHint(failureCategoryHint, hint)
             }
         }
-        if containsCompletion(in: dictionary) {
+        if isTurnCompletionEvent(dictionary) {
             sawCompletion = true
+        }
+        if hasExpectedAssistantOutput(in: dictionary) {
+            sawExpectedAssistantOutput = true
         }
         collectUsage(from: dictionary)
     }
@@ -156,7 +164,9 @@ public struct UsageWindowProbeJSONLParser: Sendable {
         for (key, value) in dictionary {
             let normalizedKey = canonicalKey(key)
             if ["error", "errors", "failure", "failed"].contains(normalizedKey) {
-                return true
+                if hasMeaningfulErrorValue(value, depth: depth + 1) {
+                    return true
+                }
             }
             if ["type", "event", "method", "status", "state"].contains(normalizedKey),
                let text = value as? String,
@@ -171,18 +181,20 @@ public struct UsageWindowProbeJSONLParser: Sendable {
         return false
     }
 
-    private func containsCompletion(in dictionary: [String: Any]) -> Bool {
-        for (key, value) in dictionary {
-            let normalizedKey = canonicalKey(key)
-            if ["completed", "complete", "done", "finished", "success", "succeeded"].contains(normalizedKey),
-               isTruthyOrCompletion(value) {
-                return true
-            }
-            if ["type", "event", "method", "status", "state"].contains(normalizedKey),
-               let text = value as? String,
-               containsCompletionWord(text) {
-                return true
-            }
+    private func hasMeaningfulErrorValue(_ value: Any, depth: Int) -> Bool {
+        guard depth <= 5 else { return false }
+        if value is NSNull { return false }
+        if let text = value as? String {
+            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        if let dictionary = value as? [String: Any] {
+            return dictionary.values.contains { hasMeaningfulErrorValue($0, depth: depth + 1) }
+        }
+        if let array = value as? [Any] {
+            return array.contains { hasMeaningfulErrorValue($0, depth: depth + 1) }
         }
         return false
     }
@@ -192,11 +204,21 @@ public struct UsageWindowProbeJSONLParser: Sendable {
         return text.contains("error") || text.contains("failed") || text.contains("failure")
     }
 
-    private func containsCompletionWord(_ value: String) -> Bool {
-        let text = value.lowercased()
-        return text.contains("completed") || text.contains("complete") ||
-            text.contains("finished") || text.contains("succeeded") ||
-            text == "done" || text == "success"
+    /// 완료된 turn 이벤트만 성공 조건으로 인정하는 판별
+    private func isTurnCompletionEvent(_ dictionary: [String: Any]) -> Bool {
+        dictionary["type"] as? String == "turn.completed"
+    }
+
+    /// item 완료 이벤트의 assistant 출력이 `1`인지 boolean으로만 확인하는 판별
+    private func hasExpectedAssistantOutput(in dictionary: [String: Any]) -> Bool {
+        guard dictionary["type"] as? String == "item.completed",
+              let item = dictionary["item"] as? [String: Any],
+              item["type"] as? String == "agent_message",
+              let text = item["text"] as? String
+        else {
+            return false
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
     }
 
     private func diagnosticHint(in dictionary: [String: Any]) -> UsageWindowProbeFailureCategory? {
@@ -243,12 +265,6 @@ public struct UsageWindowProbeJSONLParser: Sendable {
             .rateLimited: 1,
         ]
         return (rank[candidate] ?? 0) > (rank[current] ?? 0) ? candidate : current
-    }
-
-    private func isTruthyOrCompletion(_ value: Any) -> Bool {
-        if let bool = value as? Bool { return bool }
-        if let text = value as? String { return containsCompletionWord(text) }
-        return false
     }
 
     private mutating func collectUsage(from root: [String: Any]) {
@@ -386,14 +402,21 @@ internal struct UsageWindowProbeExecutionIsolation: Sendable {
     internal let rootURL: URL
     internal let codexHomeURL: URL
     internal let workingDirectoryURL: URL
+    internal let modelInstructionsURL: URL
 
     internal var isolatedCodexHomeURL: URL { codexHomeURL }
     internal var isolatedWorkingDirectoryURL: URL { workingDirectoryURL }
 
-    private init(rootURL: URL, codexHomeURL: URL, workingDirectoryURL: URL) {
+    private init(
+        rootURL: URL,
+        codexHomeURL: URL,
+        workingDirectoryURL: URL,
+        modelInstructionsURL: URL
+    ) {
         self.rootURL = rootURL
         self.codexHomeURL = codexHomeURL
         self.workingDirectoryURL = workingDirectoryURL
+        self.modelInstructionsURL = modelInstructionsURL
     }
 
     internal static func create(
@@ -405,6 +428,7 @@ internal struct UsageWindowProbeExecutionIsolation: Sendable {
             .appendingPathComponent("codex-quota-probe-\(UUID().uuidString)", isDirectory: true)
         let codexHomeURL = rootURL.appendingPathComponent("codex-home", isDirectory: true)
         let workingDirectoryURL = rootURL.appendingPathComponent("working-directory", isDirectory: true)
+        let modelInstructionsURL = rootURL.appendingPathComponent("ping-instructions")
         let privateDirectoryAttributes: [FileAttributeKey: Any] = [
             .posixPermissions: NSNumber(value: Int16(0o700)),
         ]
@@ -426,6 +450,15 @@ internal struct UsageWindowProbeExecutionIsolation: Sendable {
                 attributes: privateDirectoryAttributes
             )
 
+            try Data(UsageWindowProbeCommandBuilder.minimalPrompt.utf8).write(
+                to: modelInstructionsURL,
+                options: .atomic
+            )
+            try fileManager.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o600))],
+                ofItemAtPath: modelInstructionsURL.path
+            )
+
             let sourceAuthURL = configuredAccountHome.appendingPathComponent("auth.json")
             let isolatedAuthURL = codexHomeURL.appendingPathComponent("auth.json")
             try fileManager.createSymbolicLink(
@@ -440,7 +473,8 @@ internal struct UsageWindowProbeExecutionIsolation: Sendable {
         return UsageWindowProbeExecutionIsolation(
             rootURL: rootURL,
             codexHomeURL: codexHomeURL,
-            workingDirectoryURL: workingDirectoryURL
+            workingDirectoryURL: workingDirectoryURL,
+            modelInstructionsURL: modelInstructionsURL
         )
     }
 
@@ -528,11 +562,25 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         let termination = DispatchSemaphore(value: 0)
 
         process.executableURL = command.executableURL
-        process.arguments = command.arguments
+        let modelInstructionsPath = isolation.modelInstructionsURL.path
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        var processArguments = command.arguments
+        let prompt = processArguments.removeLast()
+        processArguments.append(contentsOf: [
+            "-c",
+            "model_instructions_file=\"\(modelInstructionsPath)\"",
+        ])
+        processArguments.append(prompt)
+        process.arguments = processArguments
         var environment = inheritedEnvironment
         for (key, value) in command.environmentOverrides {
             environment[key] = value
         }
+        environment["PATH"] = CodexProcess.childPath(
+            inheritedPath: environment["PATH"],
+            executable: command.executableURL
+        )
         environment["CODEX_HOME"] = isolation.codexHomeURL.path
         environment["PWD"] = isolation.workingDirectoryURL.path
         process.environment = environment
@@ -858,6 +906,14 @@ public actor UsageWindowProbeService {
                 )
             }
             if parsed.isMalformedOnlyOutput {
+                return failure(
+                    accountID: config.id,
+                    startedAt: startedAt,
+                    category: .malformedOutput,
+                    metadata: command.metadata
+                )
+            }
+            guard parsed.sawCompletion, parsed.sawExpectedAssistantOutput else {
                 return failure(
                     accountID: config.id,
                     startedAt: startedAt,

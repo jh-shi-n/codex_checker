@@ -230,7 +230,8 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
         case endOfFile
     }
 
-    private static func childPath(inheritedPath: String?, executable: URL) -> String {
+    /// GUI 실행 환경에서도 CLI와 Node 런타임 탐색이 가능한 자식 프로세스 경로 구성
+    static func childPath(inheritedPath: String?, executable: URL) -> String {
         let preferredDirectories = [
             executable.deletingLastPathComponent().standardizedFileURL.path,
             "/opt/homebrew/bin",

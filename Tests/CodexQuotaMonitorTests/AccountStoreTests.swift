@@ -4,6 +4,28 @@ import XCTest
 
 @MainActor
 final class AccountStoreTests: XCTestCase {
+    /// Ping 후 새 조회 완료 시 이전 조회의 늦은 결과 무시 확인
+    func testForcedRefreshDoesNotReuseOrApplyPreProbeFetch() async {
+        let gate = AccountLoaderProbe()
+        let counter = CallCounter()
+        let store = AccountStore(configs: makeConfigs()) { config in
+            let call = await counter.increment(config.id)
+            if call == 1 {
+                await gate.started(config.id)
+                await gate.waitUntilReleased()
+            }
+            return AccountState(id: config.id, usedPercent: Double(call * 10), status: .normal)
+        }
+        let oldRefresh = Task { await store.refresh(accountID: "C1") }
+        await gate.waitForStartedCount(1)
+        await store.refresh(accountID: "C1", forceFresh: true)
+        XCTAssertEqual(store.state(for: "C1")?.usedPercent, 20)
+        await gate.release()
+        await oldRefresh.value
+        XCTAssertEqual(store.state(for: "C1")?.usedPercent, 20)
+        XCTAssertEqual(store.state(for: "C2")?.status, .loading)
+    }
+
     func testRefreshAllLoadsFourAccountsConcurrentlyAndPublishesEachResult() async {
         let configs = makeConfigs()
         let probe = AccountLoaderProbe()
