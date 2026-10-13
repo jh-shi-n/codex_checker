@@ -211,7 +211,32 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertFalse(invalidatedPresentation.isCurrentAccount)
     }
 
+    /// Loading 상태에서 직전 한도 값의 도넛 표시 유지
+    func testLoadingAccountRetainsKnownQuotaDonutPresentation() {
+        let account = AccountState(
+            id: "C1",
+            primaryRemainingPercent: 82,
+            secondaryRemainingPercent: 60,
+            status: .loading
+        )
+        let presentation = QuotaDonutPresentation(account: account)
 
+        XCTAssertEqual(QuotaDonutState(account: account), .value(60))
+        XCTAssertEqual(presentation.centerPercent, 82)
+        XCTAssertEqual(presentation.ringPercent, 60)
+        XCTAssertFalse(QuotaDonutState(account: account).isLoading)
+    }
+
+    /// 이전 한도 값이 없는 Loading 상태의 빈 도넛 표시
+    func testLoadingAccountWithoutKnownQuotaRemainsLoading() {
+        let account = AccountState(id: "C1", status: .loading)
+        let presentation = QuotaDonutPresentation(account: account)
+
+        XCTAssertEqual(QuotaDonutState(account: account), .loading)
+        XCTAssertNil(presentation.centerPercent)
+        XCTAssertNil(presentation.ringPercent)
+        XCTAssertTrue(QuotaDonutState(account: account).isLoading)
+    }
 
     func testDashboardProbeActionRequiresConfiguredIdleAccount() {
         XCTAssertTrue(

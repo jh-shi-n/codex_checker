@@ -108,6 +108,10 @@ public final class NotchLayoutManager: NSObject {
         onRefresh: ((AccountState) -> Void)? = nil,
         onSettings: (() -> Void)? = nil
     ) {
+        let needsRelayout = currentLayout == nil
+            || leftAccounts.count != leftPanel.accounts.count
+            || rightAccounts.count != rightPanel.accounts.count
+            || menuBarHeight != nil
         if let showAccountLabels {
             self.showAccountLabels = showAccountLabels
         }
@@ -125,7 +129,7 @@ public final class NotchLayoutManager: NSObject {
             onRefresh: onRefresh,
             onSettings: onSettings
         )
-        relayout()
+        if needsRelayout { relayout() }
     }
 
     /// Updates the queue-owned current value for each independent lane. The

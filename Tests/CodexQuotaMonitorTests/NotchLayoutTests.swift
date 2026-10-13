@@ -253,6 +253,19 @@ final class NotchLayoutTests: XCTestCase {
         }
     }
 
+    /// 한도 상태만 바뀌는 갱신에서 도넛 크기와 호스팅 뷰 유지 확인
+    func testPanelRefreshPreservesResolvedDiameterAndHostingView() {
+        let left = LeftQuotaPanel(accounts: [.loading(id: "C4")], diameterOverride: 18)
+        let right = RightQuotaPanel(accounts: [.loading(id: "C1")], diameterOverride: 19)
+        let leftHost = left.contentView
+        let rightHost = right.contentView
+        left.update(accounts: [AccountState(id: "C4", remainingPercent: 80, status: .normal)])
+        right.update(accounts: [AccountState(id: "C1", remainingPercent: 60, status: .normal)])
+        XCTAssertEqual(left.diameterOverride, 18)
+        XCTAssertEqual(right.diameterOverride, 19)
+        XCTAssertTrue(left.contentView === leftHost)
+        XCTAssertTrue(right.contentView === rightHost)
+    }
 
     func testShortAuxiliaryAreasUseOneResolvedDiameterForPanelItemsAndContent() {
         let layout = NotchGeometry.layout(
