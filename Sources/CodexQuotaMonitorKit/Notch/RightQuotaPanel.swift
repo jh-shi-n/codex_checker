@@ -1,7 +1,10 @@
+// 목적: 설정 순서의 나머지 계정 표시 및 호스팅 뷰 유지
+// 이용처: 노치 오른쪽 패널
+// 사용방법: update로 상태 변경, 명시한 경우에만 도넛 크기 변경
 import AppKit
 import SwiftUI
 
-/// Right notch cluster. Account order is C3 (notch-nearest) then C4 (outer).
+/// 설정 순서의 세 번째·네 번째 계정을 표시하는 오른쪽 노치 패널
 @MainActor
 public final class RightQuotaPanel: NotchQuotaPanel {
     public private(set) var accounts: [AccountState]
@@ -80,6 +83,7 @@ public final class RightQuotaPanel: NotchQuotaPanel {
         )
     }
 
+    /// 계정 상태 갱신 및 기존 호스팅 뷰·미지정 도넛 크기 유지
     public func update(
         accounts: [AccountState],
         menuBarHeight: CGFloat? = nil,
@@ -95,7 +99,7 @@ public final class RightQuotaPanel: NotchQuotaPanel {
     ) {
         self.accounts = accounts
         if let menuBarHeight { self.menuBarHeight = menuBarHeight }
-        self.diameterOverride = diameterOverride
+        if let diameterOverride { self.diameterOverride = diameterOverride }
         if let showAccountLabels { self.showAccountLabels = showAccountLabels }
         if let onRefresh { self.onRefresh = onRefresh }
         if let onSettings { self.onSettings = onSettings }
