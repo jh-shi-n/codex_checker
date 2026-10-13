@@ -748,9 +748,10 @@ final class QuotaPresentationTests: XCTestCase {
         }
     }
 
+    /// 설정의 한글 새로고침 및 자동 실행 표시명 검증
     func testSettingsContentContractKeepsRefreshAndLaunchControlsNamed() {
-        XCTAssertEqual(SettingsView.refreshSectionTitle, "Refresh")
-        XCTAssertEqual(SettingsView.launchAtLoginLabel, "Launch at login")
+        XCTAssertEqual(SettingsView.refreshSectionTitle, "새로고침")
+        XCTAssertEqual(SettingsView.launchAtLoginLabel, "로그인 시 자동 실행")
         XCTAssertEqual(SettingsView.refreshIntervalOptions, [1, 5, 10, 30])
     }
 

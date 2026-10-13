@@ -18,16 +18,17 @@ extension CodexQuotaMonitorAppDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// 한글 제목과 공통 콘텐츠 크기의 설정 창 생성
     private func createFallbackSettingsWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
+            contentRect: NSRect(origin: .zero, size: SettingsView.defaultWindowSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Codex Quota Monitor Settings"
+        window.title = "Codex Quota Monitor 설정"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 360, height: 420)
+        window.contentMinSize = SettingsView.minimumWindowSize
         window.contentViewController = NSHostingController(rootView: makeSettingsView())
         window.center()
         fallbackSettingsWindow = window
@@ -140,24 +141,24 @@ extension CodexQuotaMonitorAppDelegate {
             presentLaunchAtLoginApproval()
             return
         case .notFound:
-            message = "The packaged app was not found by macOS ServiceManagement."
+            message = "macOS에서 설치된 앱을 찾을 수 없습니다."
         case .disabled:
             message = requestedEnabled
-                ? "Launch at login remains disabled."
-                : "Launch at login is disabled."
+                ? "로그인 시 자동 실행이 활성화되지 않았습니다."
+                : "로그인 시 자동 실행이 꺼져 있습니다."
         case .enabled:
-            message = "Launch at login is enabled."
+            message = "로그인 시 자동 실행이 켜져 있습니다."
         }
         presentLaunchAtLoginFailureMessage(message)
     }
 
     private func presentLaunchAtLoginApproval() {
         let alert = NSAlert()
-        alert.messageText = "Approve launch at login"
-        alert.informativeText = "macOS registered this app, but approval is required in System Settings > Login Items."
+        alert.messageText = "로그인 시 자동 실행 승인"
+        alert.informativeText = "앱이 등록되었습니다. 시스템 설정 > 로그인 항목에서 승인해 주세요."
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Open Login Items")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "로그인 항목 열기")
+        alert.addButton(withTitle: "취소")
 
         if let settingsWindow = settingsHostWindow {
             alert.beginSheetModal(for: settingsWindow) { [weak self] response in
@@ -175,7 +176,7 @@ extension CodexQuotaMonitorAppDelegate {
 
     private func presentLaunchAtLoginFailureMessage(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "Launch at login was not changed"
+        alert.messageText = "로그인 시 자동 실행을 변경하지 못했습니다"
         alert.informativeText = message
         alert.alertStyle = .warning
         if let settingsWindow = settingsHostWindow {

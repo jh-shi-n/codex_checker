@@ -24,17 +24,20 @@ public enum SettingsWindowPresentationPolicy {
 
 /// 목적: 호출자 바인딩을 통해 계정 표시와 앱 설정을 편집하는 화면
 public struct SettingsView: View {
-    public static let refreshSectionTitle = "Refresh"
-    public static let activitySectionTitle = "Activity"
-    public static let accountVisibilitySectionTitle = "Displayed accounts"
-    public static let accountDisplayOrderSectionTitle = "Account order"
-    public static let activityNotificationDurationLabel = "Activity notification duration"
-    public static let launchAtLoginLabel = "Launch at login"
+    public static let refreshSectionTitle = "새로고침"
+    public static let activitySectionTitle = "활동 알림"
+    public static let accountVisibilitySectionTitle = "표시할 계정"
+    public static let accountDisplayOrderSectionTitle = "계정 표시 순서"
+    public static let activityNotificationDurationLabel = "활동 알림 표시 시간"
+    public static let launchAtLoginLabel = "로그인 시 자동 실행"
+    /// 설정 창의 기본 콘텐츠 크기와 최소 콘텐츠 크기
+    public static let defaultWindowSize = CGSize(width: 560, height: 720)
+    public static let minimumWindowSize = CGSize(width: 480, height: 520)
     public static let refreshIntervalOptions: [Int] = [1, 5, 10, 30]
     public static let minimumRefreshIntervalMinutes = RefreshService.minimumIntervalMinutes
     public static let maximumRefreshIntervalMinutes = RefreshService.maximumIntervalMinutes
     public static let accountPathCount = 4
-    public static let accountPathSectionTitle = "Account paths"
+    public static let accountPathSectionTitle = "계정 경로"
     public static let minimumActivityNotificationDurationSeconds = PreferencesStore.minimumActivityNotificationDurationSeconds
     public static let maximumActivityNotificationDurationSeconds = PreferencesStore.maximumActivityNotificationDurationSeconds
 
@@ -169,17 +172,17 @@ public struct SettingsView: View {
         ScrollView {
             Form {
                 Section(Self.refreshSectionTitle) {
-                    Picker("Quick interval", selection: refreshIntervalBinding) {
+                    Picker("새로고침 간격", selection: refreshIntervalBinding) {
                         ForEach(Self.refreshIntervalOptions, id: \.self) { minutes in
-                            Text("\(minutes) min").tag(minutes)
+                            Text("\(minutes)분").tag(minutes)
                         }
                     }
                     .pickerStyle(.menu)
 
                     HStack {
-                        Text("Custom interval")
+                        Text("직접 입력")
                         Spacer()
-                        TextField("Minutes", text: refreshIntervalDraftBinding)
+                        TextField("분", text: refreshIntervalDraftBinding)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 64)
                             .textFieldStyle(.roundedBorder)
@@ -191,7 +194,7 @@ public struct SettingsView: View {
                         )
                         .labelsHidden()
                     }
-                    Text("Applies to all four accounts. Enter 1–1,440 minutes and press Return to apply.")
+                    Text("모든 계정에 적용됩니다. 1~1,440분을 입력한 뒤 Enter를 누르면 적용됩니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -216,7 +219,7 @@ public struct SettingsView: View {
                     ForEach(PreferencesStore.stableAccountIDs, id: \.self) { accountID in
                         Toggle(accountID, isOn: enabledAccountBinding(for: accountID))
                     }
-                    Text("Enabled accounts fill the left side first (up to two), then the right. If all are hidden, open Settings from the menu bar gear.")
+                    Text("선택한 계정은 왼쪽부터 최대 두 개씩 채워집니다. 모두 숨긴 경우 메뉴 막대의 톱니바퀴에서 설정을 열 수 있습니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -234,7 +237,7 @@ public struct SettingsView: View {
                                 Image(systemName: "chevron.up")
                             }
                             .disabled(index == 0)
-                            .accessibilityLabel("Move \(accountID) up")
+                            .accessibilityLabel("\(accountID) 위로 이동")
                             .accessibilityIdentifier("account-order-up-\(accountID.lowercased())")
 
                             Button {
@@ -243,7 +246,7 @@ public struct SettingsView: View {
                                 Image(systemName: "chevron.down")
                             }
                             .disabled(index == order.count - 1)
-                            .accessibilityLabel("Move \(accountID) down")
+                            .accessibilityLabel("\(accountID) 아래로 이동")
                             .accessibilityIdentifier("account-order-down-\(accountID.lowercased())")
                         }
                     }
@@ -257,16 +260,16 @@ public struct SettingsView: View {
                         HStack {
                             Text(Self.activityNotificationDurationLabel)
                             Spacer()
-                            Text("\(activityNotificationDurationSeconds) seconds")
+                            Text("\(activityNotificationDurationSeconds)초")
                                 .foregroundStyle(.secondary)
                         }
                     }
                 }
 
-                Section("Startup") {
+                Section("앱 실행") {
                     Toggle(Self.launchAtLoginLabel, isOn: $launchAtLogin)
-                    Toggle("Show account labels (C1–C4)", isOn: $showAccountLabels)
-                    Text("When enabled, the app launches automatically when you log in. macOS may ask for approval in System Settings > Login Items.")
+                    Toggle("계정 이름 표시 (C1~C4)", isOn: $showAccountLabels)
+                    Text("로그인 시 앱을 자동으로 실행합니다. macOS 시스템 설정 > 로그인 항목에서 승인이 필요할 수 있습니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -275,7 +278,12 @@ public struct SettingsView: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding()
         }
-        .frame(minWidth: 360, minHeight: 420)
+        .frame(
+            minWidth: Self.minimumWindowSize.width,
+            idealWidth: Self.defaultWindowSize.width,
+            minHeight: Self.minimumWindowSize.height,
+            idealHeight: Self.defaultWindowSize.height
+        )
         .onAppear {
             synchronizeAccountPathDrafts()
             synchronizeAccountDisplayDrafts()
