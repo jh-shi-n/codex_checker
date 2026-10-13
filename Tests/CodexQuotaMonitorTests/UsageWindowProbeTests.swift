@@ -19,6 +19,35 @@ final class UsageWindowProbeTests: XCTestCase {
             "--skip-git-repo-check",
             "--ignore-rules",
             "--ignore-user-config",
+            "--enable", "skip_host_skill_discovery",
+            "--disable", "apps",
+            "--disable", "plugins",
+            "--disable", "multi_agent",
+            "--disable", "skill_search",
+            "--disable", "shell_tool",
+            "--disable", "unified_exec",
+            "--disable", "sleep_tool",
+            "--disable", "browser_use",
+            "--disable", "browser_use_external",
+            "--disable", "browser_use_full_cdp_access",
+            "--disable", "computer_use",
+            "--disable", "image_generation",
+            "-c",
+            "project_doc_max_bytes=0",
+            "-c",
+            "suppress_unstable_features_warning=true",
+            "-c",
+            "features.code_mode.enabled=false",
+            "-c",
+            "include_permissions_instructions=false",
+            "-c",
+            "include_apps_instructions=false",
+            "-c",
+            "include_collaboration_mode_instructions=false",
+            "-c",
+            "include_environment_context=false",
+            "-c",
+            "web_search=\"disabled\"",
             "--sandbox",
             "read-only",
             "--model",
@@ -40,7 +69,7 @@ final class UsageWindowProbeTests: XCTestCase {
         XCTAssertTrue(command.metadata.ignoresRules)
     }
 
-    func testExecutionIsolationContainsOnlyAuthLinkAndEmptyWorkingDirectory() throws {
+    func testExecutionIsolationContainsAuthLinkMinimalInstructionsAndEmptyWorkingDirectory() throws {
         let fileManager = FileManager.default
         let configuredHome = fileManager.temporaryDirectory
             .appendingPathComponent("usage-window-configured-\(UUID().uuidString)", isDirectory: true)
@@ -69,7 +98,10 @@ final class UsageWindowProbeTests: XCTestCase {
             includingPropertiesForKeys: nil,
             options: []
         )
-        XCTAssertEqual(Set(rootContents.map(\.lastPathComponent)), ["codex-home", "working-directory"])
+        XCTAssertEqual(
+            Set(rootContents.map(\.lastPathComponent)),
+            ["codex-home", "working-directory", "ping-instructions"]
+        )
 
         let codexHomeContents = try fileManager.contentsOfDirectory(
             at: isolation.codexHomeURL,
@@ -82,6 +114,13 @@ final class UsageWindowProbeTests: XCTestCase {
             try fileManager.destinationOfSymbolicLink(atPath: isolatedAuthURL.path),
             sourceAuthURL.path
         )
+        XCTAssertEqual(
+            try Data(contentsOf: isolation.modelInstructionsURL),
+            Data("print 1".utf8)
+        )
+        if let permissions = try fileManager.attributesOfItem(atPath: isolation.modelInstructionsURL.path)[.posixPermissions] as? NSNumber {
+            XCTAssertEqual(permissions.intValue & 0o777, 0o600)
+        }
 
         let workingDirectoryContents = try fileManager.contentsOfDirectory(
             at: isolation.workingDirectoryURL,
@@ -152,9 +191,10 @@ final class UsageWindowProbeTests: XCTestCase {
         XCTAssertEqual(runner.calls, 0)
     }
 
+    /// assistant 출력과 turn 완료가 모두 있을 때 usage 및 완료 시각 반환
     func testSuccessParsesCommonUsageDictionaryAndDates() async {
-        let output = Data(
-            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":7,\"total_tokens\":19}}\n".utf8
+        let output = probeOutput(
+            usage: ["input_tokens": 12, "output_tokens": 7, "total_tokens": 19]
         )
         let fileSystem = RecordingFileSystem(metadata: .init(exists: true))
         let runner = RecordingRunner(result: .init(exitStatus: 0, stdout: output))
@@ -171,9 +211,9 @@ final class UsageWindowProbeTests: XCTestCase {
         XCTAssertEqual(state.usage, result.usage)
     }
 
-    func testZeroExitWithoutUsageIsSuccessfulWithNilUsage() async {
-        let output = Data("{\"type\":\"turn.completed\"}\n".utf8)
-        let runner = RecordingRunner(result: .init(exitStatus: 0, stdout: output))
+    /// usage 정보가 없어도 유효한 probe 출력이면 성공 처리
+    func testZeroExitWithExpectedOutputWithoutUsageIsSuccessful() async {
+        let runner = RecordingRunner(result: .init(exitStatus: 0, stdout: probeOutput()))
         let service = makeService(
             fileSystem: RecordingFileSystem(metadata: .init(exists: true)),
             locator: RecordingLocator(url: executableURL),
@@ -184,6 +224,71 @@ final class UsageWindowProbeTests: XCTestCase {
 
         XCTAssertTrue(result.isSuccess)
         XCTAssertNil(result.usage)
+    }
+
+    /// turn 완료만 있고 assistant의 기대 출력이 없으면 실패 처리
+    func testMissingAssistantOutputFailsDespiteTurnCompletion() async {
+        let runner = RecordingRunner(result: .init(
+            exitStatus: 0,
+            stdout: probeOutput(assistantText: nil)
+        ))
+        let service = makeService(
+            fileSystem: RecordingFileSystem(metadata: .init(exists: true)),
+            locator: RecordingLocator(url: executableURL),
+            runner: runner
+        )
+
+        let result = await service.probe(config())
+
+        XCTAssertEqual(result.failureCategory, .malformedOutput)
+    }
+
+    /// assistant 출력이 `1`이 아니면 실패 처리
+    func testWrongAssistantOutputFailsDespiteTurnCompletion() async {
+        let runner = RecordingRunner(result: .init(
+            exitStatus: 0,
+            stdout: probeOutput(assistantText: "2")
+        ))
+        let service = makeService(
+            fileSystem: RecordingFileSystem(metadata: .init(exists: true)),
+            locator: RecordingLocator(url: executableURL),
+            runner: runner
+        )
+
+        let result = await service.probe(config())
+
+        XCTAssertEqual(result.failureCategory, .malformedOutput)
+    }
+
+    /// item 완료만 있고 turn 완료가 없으면 실패 처리
+    func testAssistantOutputWithoutTurnCompletionFails() async {
+        let runner = RecordingRunner(result: .init(
+            exitStatus: 0,
+            stdout: probeOutput(turnCompleted: false)
+        ))
+        let service = makeService(
+            fileSystem: RecordingFileSystem(metadata: .init(exists: true)),
+            locator: RecordingLocator(url: executableURL),
+            runner: runner
+        )
+
+        let result = await service.probe(config())
+
+        XCTAssertEqual(result.failureCategory, .malformedOutput)
+    }
+
+    /// 빈 JSONL stream을 정상 완료로 오인하지 않도록 검증
+    func testEmptyStreamFails() async {
+        let runner = RecordingRunner(result: .init(exitStatus: 0, stdout: Data()))
+        let service = makeService(
+            fileSystem: RecordingFileSystem(metadata: .init(exists: true)),
+            locator: RecordingLocator(url: executableURL),
+            runner: runner
+        )
+
+        let result = await service.probe(config())
+
+        XCTAssertEqual(result.failureCategory, .malformedOutput)
     }
 
     func testFailureDoesNotSurfaceRawProcessOutput() async {
@@ -227,7 +332,7 @@ final class UsageWindowProbeTests: XCTestCase {
 
     func testAuthenticationAndRateLimitJSONErrorsStayCategorical() async {
         let output = Data(
-            "{\"type\":\"error\",\"error\":{\"message\":\"authentication required\"}}\n".utf8
+            "{\"type\":\"response.completed\",\"error\":{\"message\":\"authentication required\"}}\n".utf8
         )
         let runner = RecordingRunner(result: .init(exitStatus: 1, stdout: output))
         let service = makeService(
@@ -309,8 +414,9 @@ final class UsageWindowProbeTests: XCTestCase {
         XCTAssertEqual(result.stderr.count, UsageWindowProbeProcessResult.maximumStandardErrorBytes)
     }
 
+    /// 중복 실행 차단 후 첫 실행의 완료 결과 검증
     func testSameAccountOverlapIsRejectedWhileFirstCallRuns() async {
-        let runner = BlockingRunner(result: .init(exitStatus: 0))
+        let runner = BlockingRunner(result: .init(exitStatus: 0, stdout: probeOutput()))
         let service = makeService(
             fileSystem: RecordingFileSystem(metadata: .init(exists: true)),
             locator: RecordingLocator(url: executableURL),
@@ -328,6 +434,76 @@ final class UsageWindowProbeTests: XCTestCase {
         await runner.release()
         let first = await firstTask.value
         XCTAssertTrue(first.isSuccess)
+    }
+
+    /// 제한된 상속 PATH에서도 실행 파일의 interpreter 탐색 경로 유지
+    func testLiveRunnerAddsExecutableDirectoryToRestrictedPath() async throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("usage-window-path-\(UUID().uuidString)", isDirectory: true)
+        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        let configuredHome = root.appendingPathComponent("account", isDirectory: true)
+        try fileManager.createDirectory(at: bin, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: configuredHome, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        let authURL = configuredHome.appendingPathComponent("auth.json")
+        XCTAssertTrue(fileManager.createFile(atPath: authURL.path, contents: Data("auth".utf8)))
+        let executable = bin.appendingPathComponent("codex")
+        let interpreter = bin.appendingPathComponent("probe-runtime")
+        try Data("#!/usr/bin/env probe-runtime\n".utf8).write(to: executable)
+        try Data("#!/bin/sh\nprintf '%s\\n' \"$PATH\"\nprintf '%s\\n' \"$@\"\n".utf8).write(to: interpreter)
+        try fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o755)], ofItemAtPath: executable.path)
+        try fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o755)], ofItemAtPath: interpreter.path)
+
+        let command = UsageWindowProbeCommandBuilder().build(
+            executable: executable,
+            configuredAccountHome: configuredHome
+        )
+        let runner = UsageWindowProbeLiveProcessRunner(inheritedEnvironment: ["PATH": "/usr/bin:/bin"])
+        let result = try await runner.run(command: command, timeout: 5)
+
+        XCTAssertEqual(result.exitStatus, 0)
+        let childPath = String(decoding: result.stdout, as: UTF8.self)
+        XCTAssertTrue(childPath.hasPrefix(bin.path + ":"))
+        XCTAssertTrue(childPath.contains("/usr/bin:/bin"))
+        XCTAssertTrue(childPath.contains("model_instructions_file=\""))
+        XCTAssertTrue(childPath.contains("/ping-instructions\""))
+    }
+
+    /// JSONL event 배열을 CLI stdout 형태의 byte stream으로 직렬화
+    private func probeOutput(
+        assistantText: String? = " 1 \n",
+        turnCompleted: Bool = true,
+        usage: [String: Int]? = nil
+    ) -> Data {
+        var events: [[String: Any]] = []
+        if let assistantText {
+            events.append([
+                "type": "item.completed",
+                "item": [
+                    "id": "item_0",
+                    "type": "agent_message",
+                    "text": assistantText,
+                ],
+            ])
+        }
+        if turnCompleted {
+            var event: [String: Any] = [
+                "type": "turn.completed",
+                "error": NSNull(),
+                "errors": [Any](),
+                "failure": false,
+                "failed": "",
+            ]
+            if let usage { event["usage"] = usage }
+            events.append(event)
+        }
+        let lines = events.map { event -> String in
+            let data = try! JSONSerialization.data(withJSONObject: event, options: [.sortedKeys])
+            return String(decoding: data, as: UTF8.self)
+        }
+        return Data(lines.joined(separator: "\n").utf8)
     }
 
     private func config() -> AccountConfig {

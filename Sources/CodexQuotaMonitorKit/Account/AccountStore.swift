@@ -103,8 +103,8 @@ public final class AccountStore: ObservableObject {
         }
     }
 
-    /// Refreshes one account immediately while leaving sibling snapshots intact.
-    public func refresh(accountID id: String) async {
+    /// 단일 계정 갱신; forceFresh 지정 시 진행 중인 이전 조회 재사용 방지
+    public func refresh(accountID id: String, forceFresh: Bool = false) async {
         guard let config = configs.first(where: { $0.id == id }) else { return }
 
         guard config.isConfigured else {
@@ -129,7 +129,8 @@ public final class AccountStore: ObservableObject {
             config: config,
             previous: previous,
             loader: stateLoader,
-            revision: revision
+            revision: revision,
+            forceFresh: forceFresh
         )
         guard configRevision == revision, accountGenerations[id] == generation else { return }
         apply(result)
@@ -207,15 +208,17 @@ public final class AccountStore: ObservableObject {
         }
     }
 
+    /// 계정별 조회 병합 및 필요 시 새로운 조회 생성
     private func fetchResult(
         config: AccountConfig,
         previous: AccountState?,
         loader: @escaping AccountStateLoader,
-        revision: Int
+        revision: Int,
+        forceFresh: Bool = false
     ) async -> AccountFetchResult {
         let key = FetchKey(id: config.id, homePath: config.home.path, revision: revision)
         let handle: FetchHandle
-        if let existing = inFlightFetches[key] {
+        if !forceFresh, let existing = inFlightFetches[key] {
             handle = existing
         } else {
             let task = Task.detached(priority: nil) {
