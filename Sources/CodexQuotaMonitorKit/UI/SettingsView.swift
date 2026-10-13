@@ -221,6 +221,33 @@ public struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section(Self.accountDisplayOrderSectionTitle) {
+                    ForEach(normalizedAccountDisplayOrder, id: \.self) { accountID in
+                        let order = normalizedAccountDisplayOrder
+                        let index = order.firstIndex(of: accountID) ?? 0
+                        HStack {
+                            Text(accountID)
+                            Spacer()
+                            Button {
+                                moveAccount(accountID, up: true)
+                            } label: {
+                                Image(systemName: "chevron.up")
+                            }
+                            .disabled(index == 0)
+                            .accessibilityLabel("Move \(accountID) up")
+                            .accessibilityIdentifier("account-order-up-\(accountID.lowercased())")
+
+                            Button {
+                                moveAccount(accountID, up: false)
+                            } label: {
+                                Image(systemName: "chevron.down")
+                            }
+                            .disabled(index == order.count - 1)
+                            .accessibilityLabel("Move \(accountID) down")
+                            .accessibilityIdentifier("account-order-down-\(accountID.lowercased())")
+                        }
+                    }
+                }
 
                 Section(Self.activitySectionTitle) {
                     Stepper(

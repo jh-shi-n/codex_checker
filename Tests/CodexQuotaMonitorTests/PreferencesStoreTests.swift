@@ -46,8 +46,45 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(PreferencesStore(userDefaults: defaults).enabledAccountIDs, [])
     }
 
+    /// 목적: 계정 표시 순서의 중복 제거·누락 보충·재로딩 확인
+    func testAccountDisplayOrderNormalizesToCompletePermutationAndPersists() {
+        let defaults = isolatedDefaults()
+        let store = PreferencesStore(userDefaults: defaults)
 
+        store.updateAccountDisplayOrder(["c3", "C3", "unknown", " C1 "])
 
+        let expected = ["C3", "C1", "C2", "C4"]
+        XCTAssertEqual(store.accountDisplayOrder, expected)
+        XCTAssertEqual(defaults.object(forKey: PreferencesStore.Keys.accountDisplayOrder) as? [String], expected)
+        XCTAssertEqual(PreferencesStore(userDefaults: defaults).accountDisplayOrder, expected)
+    }
+
+    /// 목적: 비정규 저장 계정 ID와 표시 순서의 초기 정리·재기록 확인
+    func testInvalidPersistedAccountSettingsAreCanonicalizedAtInitialization() {
+        let defaults = isolatedDefaults()
+        defaults.set([" c3 ", "C3", "unknown"], forKey: PreferencesStore.Keys.enabledAccountIDs)
+        defaults.set(["c2", "invalid", "C2"], forKey: PreferencesStore.Keys.accountDisplayOrder)
+
+        let store = PreferencesStore(userDefaults: defaults)
+
+        let expectedOrder = ["C2", "C1", "C3", "C4"]
+        XCTAssertEqual(store.enabledAccountIDs, ["C3"])
+        XCTAssertEqual(store.accountDisplayOrder, expectedOrder)
+        XCTAssertEqual(defaults.object(forKey: PreferencesStore.Keys.enabledAccountIDs) as? [String], ["C3"])
+        XCTAssertEqual(defaults.object(forKey: PreferencesStore.Keys.accountDisplayOrder) as? [String], expectedOrder)
+    }
+
+    /// 목적: 활성 계정 필터와 설정 순서가 visibleAccounts 결과에 반영되는지 확인
+    func testVisibleAccountsFiltersAndFollowsSelectedOrder() {
+        let store = PreferencesStore(userDefaults: isolatedDefaults())
+        store.updateEnabledAccountIDs(["C1", "C3", "C4"])
+        store.updateAccountDisplayOrder(["C4", "C1", "C3", "C2"])
+        let states = ["C1", "C2", "C3", "C4"].map { AccountState(id: $0, status: .normal) }
+
+        let visible = store.visibleAccounts(states)
+
+        XCTAssertEqual(visible.map(\.id), ["C4", "C1", "C3"])
+    }
 
     /// 목적: 활동 알림 표시 시간의 경계 정규화와 저장 확인
     func testActivityNotificationDurationNormalizesAndPersistsAcrossInstances() {
