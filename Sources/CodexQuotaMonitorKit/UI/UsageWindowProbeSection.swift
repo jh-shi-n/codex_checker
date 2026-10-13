@@ -40,10 +40,8 @@ public struct UsageWindowProbeSection: View {
                 Spacer(minLength: 8)
                 Button(action: onRun) {
                     Label(buttonTitle, systemImage: isRunning ? "hourglass" : "bolt.fill")
-                        .frame(minWidth: 188)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.purple)
+                .buttonStyle(QuotaResetButtonStyle())
                 .disabled(!canRun)
                 .help("최소 Ping 요청 후 최신 할당량을 조회합니다. 실제 사용량이 발생할 수 있습니다.")
                 .accessibilityLabel(buttonTitle)
@@ -172,5 +170,38 @@ public struct UsageWindowProbeSection: View {
             after: after,
             quotaRefreshSucceeded: probe?.quotaRefreshSucceeded
         )
+    }
+}
+
+/// 불투명 배경과 선명한 테두리의 할당량 갱신 버튼 스타일
+private struct QuotaResetButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    /// 활성 상태와 누름 상태에 따른 버튼 외형 구성
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(isEnabled ? Color.white : Color(red: 0.68, green: 0.68, blue: 0.72))
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(minWidth: 116)
+            .background {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(backgroundColor(isPressed: configuration.isPressed))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(isEnabled ? Color(red: 0.65, green: 0.43, blue: 0.85) : Color(red: 0.38, green: 0.36, blue: 0.42), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// 비활성 및 눌림 상태의 불투명 배경색 선택
+    private func backgroundColor(isPressed: Bool) -> Color {
+        guard isEnabled else { return Color(red: 0.25, green: 0.23, blue: 0.29) }
+        return isPressed
+            ? Color(red: 0.35, green: 0.18, blue: 0.50)
+            : Color(red: 0.46, green: 0.25, blue: 0.65)
     }
 }
