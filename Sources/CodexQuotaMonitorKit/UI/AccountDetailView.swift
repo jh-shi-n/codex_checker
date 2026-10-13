@@ -118,7 +118,7 @@ public struct AccountDetailView: View {
                 HStack(spacing: 7) {
                     Text(account.id)
                         .font(.title3.weight(.semibold))
-                    Text(account.planType ?? "—")
+                    Text(AccountDashboardFormatting.subscriptionBadgeText(account.planType))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.purple)
                         .padding(.horizontal, 7)

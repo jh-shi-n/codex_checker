@@ -55,6 +55,31 @@ public typealias UsageWindowProbeOutcome = UsageWindowProbePresentationResult
 /// Pure formatting and semantic helpers shared by the dashboard and focused
 /// presentation tests.  They never access account files or invoke a service.
 public enum AccountDashboardFormatting {
+    /// 서버 구독 코드의 한글 뱃지 표시명 변환 및 미확인 값 처리
+    public static func subscriptionBadgeText(_ planType: String?) -> String {
+        guard let planType else { return "—" }
+        switch planType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "": return "—"
+        case "free": return "무료"
+        case "go": return "Go"
+        case "plus": return "플러스"
+        case "pro": return "프로"
+        case "prolite": return "프로 라이트"
+        case "promax": return "프로 맥스"
+        case "team": return "팀"
+        case "business": return "비즈니스"
+        case "self_serve_business_prolite": return "비즈니스 프로 라이트"
+        case "self_serve_business_usage_based": return "비즈니스 사용량 기반"
+        case "enterprise", "ent26": return "엔터프라이즈"
+        case "enterprise_cbp_automation": return "엔터프라이즈 자동화"
+        case "enterprise_cbp_usage_based": return "엔터프라이즈 사용량 기반"
+        case "edu": return "교육"
+        case "edu_plus": return "교육 플러스"
+        case "edu_pro": return "교육 프로"
+        default: return "구독 확인 필요"
+        }
+    }
+
     public static func numberText(_ value: Int64) -> String {
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
