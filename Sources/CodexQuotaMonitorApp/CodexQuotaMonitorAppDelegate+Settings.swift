@@ -1,3 +1,4 @@
+// 목적: 설정 화면 바인딩과 앱 위임자 설정 변경 처리
 @preconcurrency import AppKit
 import SwiftUI
 
@@ -33,9 +34,7 @@ extension CodexQuotaMonitorAppDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
-    /// Shared content factory used by SwiftUI's Settings scene. Keeping the
-    /// bindings here preserves the existing persistence/service callbacks
-    /// while ensuring the scene is never backed by EmptyView.
+    /// 목적: 설정 화면과 앱 위임자 저장·렌더 콜백 연결
     func makeSettingsView() -> SettingsView {
         SettingsView(
             refreshIntervalMinutes: Binding(
@@ -62,6 +61,18 @@ extension CodexQuotaMonitorAppDelegate {
                 set: { [weak self] seconds in
                     self?.applyActivityNotificationDuration(seconds)
                 }
+            ),
+            enabledAccountIDs: Binding(
+                get: { [weak self] in
+                    self?.preferences.enabledAccountIDs ?? PreferencesStore.defaultEnabledAccountIDs
+                },
+                set: { [weak self] ids in self?.applyEnabledAccountIDs(ids) }
+            ),
+            accountDisplayOrder: Binding(
+                get: { [weak self] in
+                    self?.preferences.accountDisplayOrder ?? PreferencesStore.defaultAccountDisplayOrder
+                },
+                set: { [weak self] ids in self?.applyAccountDisplayOrder(ids) }
             )
         )
     }
@@ -100,6 +111,18 @@ extension CodexQuotaMonitorAppDelegate {
 
     private func applyShowAccountLabels(_ enabled: Bool) {
         preferences.updateShowAccountLabels(enabled)
+        render(states: accountStore.states)
+    }
+
+    /// 목적: 활성 계정 설정 저장 후 현재 상태 재렌더
+    private func applyEnabledAccountIDs(_ ids: [String]) {
+        preferences.updateEnabledAccountIDs(ids)
+        render(states: accountStore.states)
+    }
+
+    /// 목적: 계정 표시 순서 저장 후 현재 상태 재렌더
+    private func applyAccountDisplayOrder(_ ids: [String]) {
+        preferences.updateAccountDisplayOrder(ids)
         render(states: accountStore.states)
     }
 

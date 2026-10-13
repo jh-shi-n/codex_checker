@@ -1,13 +1,17 @@
+// 목적: 네 계정 모니터의 사용자 설정 로드·정규화·영속화
 import Combine
 import Foundation
 
-/// UserDefaults-backed preferences with deterministic normalization for the
-/// four-account monitor. This type never reads authentication files.
+/// 목적: 네 계정 모니터의 사용자 설정 정규화·저장·제공
+/// 제한: 인증 파일 읽기 제외
 @MainActor
 public final class PreferencesStore: ObservableObject {
+    /// 목적: UserDefaults 저장 키 정의
     public enum Keys {
         public static let refreshIntervalMinutes = "CodexQuotaMonitor.refreshIntervalMinutes"
         public static let accountPaths = "CodexQuotaMonitor.accountPaths"
+        public static let enabledAccountIDs = "CodexQuotaMonitor.enabledAccountIDs"
+        public static let accountDisplayOrder = "CodexQuotaMonitor.accountDisplayOrder"
         public static let launchAtLogin = "CodexQuotaMonitor.launchAtLogin"
         public static let showAccountLabels = "CodexQuotaMonitor.showAccountLabels"
         public static let activityNotificationDurationSeconds = "CodexQuotaMonitor.activityNotificationDurationSeconds"
@@ -50,12 +54,22 @@ public final class PreferencesStore: ObservableObject {
     }
 
     public static let accountPathCount = 4
+    /// 기본 표시 계정 ID: C1–C4
+    nonisolated public static let stableAccountIDs = ["C1", "C2", "C3", "C4"]
+    /// 초기 활성 계정 ID: 전체 계정
+    nonisolated public static let defaultEnabledAccountIDs = stableAccountIDs
+    /// 초기 계정 표시 순서: C1부터 C4까지
+    nonisolated public static let defaultAccountDisplayOrder = stableAccountIDs
     nonisolated public static let defaultActivityNotificationDurationSeconds = 3
     nonisolated public static let minimumActivityNotificationDurationSeconds = 1
     nonisolated public static let maximumActivityNotificationDurationSeconds = 10
 
     @Published public private(set) var refreshIntervalMinutes: Int
     @Published public private(set) var accountPaths: [String]
+    /// 활성 표시 계정 ID, 빈 배열 허용
+    @Published public private(set) var enabledAccountIDs: [String]
+    /// C1–C4 전체 계정의 표시 순서
+    @Published public private(set) var accountDisplayOrder: [String]
     @Published public private(set) var launchAtLogin: Bool
     @Published public private(set) var showAccountLabels: Bool
     @Published public private(set) var activityNotificationDurationSeconds: Int
@@ -66,6 +80,7 @@ public final class PreferencesStore: ObservableObject {
     private let fileSystem: AccountPathFileSystem
     private var quotaSnapshotsStorage: [String: QuotaSnapshot]
 
+    /// 목적: 설정값 로드, 기본값 병합, 비정규 저장값 정리
     public init(
         userDefaults: UserDefaults = .standard,
         defaultPaths: [String]? = nil,
@@ -100,6 +115,13 @@ public final class PreferencesStore: ObservableObject {
             self.accountPaths = normalizedPathResult.values
         }
 
+        let rawEnabledAccountIDs = userDefaults.object(forKey: Keys.enabledAccountIDs)
+        let persistedEnabledAccountIDs = rawEnabledAccountIDs as? [String]
+        self.enabledAccountIDs = Self.normalizedAccountIDs(persistedEnabledAccountIDs)
+        let rawAccountDisplayOrder = userDefaults.object(forKey: Keys.accountDisplayOrder)
+        let persistedAccountDisplayOrder = rawAccountDisplayOrder as? [String]
+        self.accountDisplayOrder = Self.normalizedAccountDisplayOrder(persistedAccountDisplayOrder)
+
         let rawLaunchAtLogin = userDefaults.object(forKey: Keys.launchAtLogin)
         self.launchAtLogin = rawLaunchAtLogin as? Bool ?? false
         let rawShowAccountLabels = userDefaults.object(forKey: Keys.showAccountLabels)
@@ -121,13 +143,18 @@ public final class PreferencesStore: ObservableObject {
         // canonical representation directly.
         let intervalNeedsPersistence = rawInterval != nil && persistedInterval != normalizedInterval
         let pathsNeedPersistence = rawPaths != nil && persistedPaths != self.accountPaths
+        let enabledAccountIDsNeedPersistence = rawEnabledAccountIDs != nil
+            && persistedEnabledAccountIDs != enabledAccountIDs
+        let accountDisplayOrderNeedsPersistence = rawAccountDisplayOrder != nil
+            && persistedAccountDisplayOrder != accountDisplayOrder
         let launchNeedsPersistence = rawLaunchAtLogin != nil && rawLaunchAtLogin as? Bool == nil
         let showLabelsNeedPersistence = rawShowAccountLabels != nil && persistedShowAccountLabels == nil
         let activityDurationNeedsPersistence = rawActivityDuration != nil
             && persistedActivityDuration != activityNotificationDurationSeconds
         let quotaSnapshotsNeedPersistence = rawQuotaSnapshots != nil
             && Self.encodedQuotaSnapshots(quotaSnapshotsStorage) != rawQuotaSnapshots
-        if intervalNeedsPersistence || pathsNeedPersistence || launchNeedsPersistence
+        if intervalNeedsPersistence || pathsNeedPersistence || enabledAccountIDsNeedPersistence
+            || accountDisplayOrderNeedsPersistence || launchNeedsPersistence
             || showLabelsNeedPersistence || activityDurationNeedsPersistence || quotaSnapshotsNeedPersistence {
             persist()
         }
@@ -260,6 +287,29 @@ public final class PreferencesStore: ObservableObject {
         persist()
     }
 
+    /// 목적: 활성 계정 ID를 정규화해 게시·저장
+    /// 조건: 빈 배열 허용, 유효한 C1–C4 ID만 유지
+    public func updateEnabledAccountIDs(_ ids: [String]) {
+        enabledAccountIDs = Self.normalizedAccountIDs(ids)
+        persist()
+    }
+
+    /// 목적: 계정 표시 순서를 전체 ID 순열로 정규화해 게시·저장
+    /// 조건: 누락 ID는 기본 순서대로 뒤에 추가
+    public func updateAccountDisplayOrder(_ ids: [String]) {
+        accountDisplayOrder = Self.normalizedAccountDisplayOrder(ids)
+        persist()
+    }
+
+    /// 목적: 활성 계정만 저장된 표시 순서로 반환
+    /// 반환: 입력 상태 중 활성화된 C1–C4 계정 상태
+    public func visibleAccounts(_ states: [AccountState]) -> [AccountState] {
+        accountDisplayOrder.compactMap { id in
+            guard enabledAccountIDs.contains(id) else { return nil }
+            return states.first { $0.id == id }
+        }
+    }
+
     public func updateLaunchAtLogin(_ enabled: Bool) {
         launchAtLogin = enabled
         persist()
@@ -304,9 +354,12 @@ public final class PreferencesStore: ObservableObject {
         updateActivityNotificationDuration(seconds: seconds)
     }
 
+    /// 목적: 현재 설정값 전체를 UserDefaults에 기록
     public func persist() {
         userDefaults.set(refreshIntervalMinutes, forKey: Keys.refreshIntervalMinutes)
         userDefaults.set(accountPaths, forKey: Keys.accountPaths)
+        userDefaults.set(enabledAccountIDs, forKey: Keys.enabledAccountIDs)
+        userDefaults.set(accountDisplayOrder, forKey: Keys.accountDisplayOrder)
         userDefaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
         userDefaults.set(showAccountLabels, forKey: Keys.showAccountLabels)
         userDefaults.set(
@@ -333,6 +386,28 @@ public final class PreferencesStore: ObservableObject {
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> [String] {
         normalizedPathResult(paths, defaults: defaults, homeDirectory: homeDirectory).values
+    }
+
+    /// 목적: 유효한 계정 ID를 대문자 표준형·중복 없는 배열로 변환
+    private static func normalizedAccountIDs(_ ids: [String]?) -> [String] {
+        guard let ids else { return defaultEnabledAccountIDs }
+        var normalized: [String] = []
+        for id in ids {
+            let canonical = id.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            guard stableAccountIDs.contains(canonical), !normalized.contains(canonical) else { continue }
+            normalized.append(canonical)
+        }
+        return normalized
+    }
+
+    /// 목적: 활성 계정 ID를 전체 계정의 완전한 표시 순서로 변환
+    /// 조건: 중복·알 수 없는 ID 제거 후 누락 ID를 기본 순서로 추가
+    private static func normalizedAccountDisplayOrder(_ ids: [String]?) -> [String] {
+        guard let ids else { return defaultAccountDisplayOrder }
+        var normalized = normalizedAccountIDs(ids)
+        let missingIDs = stableAccountIDs.filter { !normalized.contains($0) }
+        normalized.append(contentsOf: missingIDs)
+        return normalized
     }
 
     private struct PathNormalization: Sendable {

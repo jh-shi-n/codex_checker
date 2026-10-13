@@ -14,6 +14,10 @@ extension CodexQuotaMonitorAppDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         _ = notification
         sessionActivityDelivery.stop()
+        if let hiddenAccountsStatusItem {
+            NSStatusBar.system.removeStatusItem(hiddenAccountsStatusItem)
+            self.hiddenAccountsStatusItem = nil
+        }
         activityToastCancellable?.cancel()
         activityToastCancellable = nil
         Task { await sessionActivityMonitor.stop() }

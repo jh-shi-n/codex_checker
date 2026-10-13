@@ -1,3 +1,7 @@
+// 목적: 계정 표시 설정과 한도·토큰 집계·활동 서비스의 앱 통합
+// 이용처: macOS 메뉴 막대 및 노치 모니터
+// 사용방법: 앱 실행 후 설정에서 표시 계정과 순서 선택
+// 실행 예시: swift run CodexQuotaMonitor
 @preconcurrency import AppKit
 import Combine
 import SwiftUI
@@ -27,8 +31,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let sessionActivityProvider: AppServerSessionActivityProvider
     /// One local-only token reader is shared by all dashboard instances.
     let tokenUsageProvider: LocalTokenUsageProvider
-    /// In-memory snapshots keep reopening a detail popover read-only until an
-    /// explicit dashboard Update action requests a new local scan.
+    /// 명시적 업데이트 집계의 메모리·SQLite 보관 및 14일 만료 관리
     let tokenUsageCache: TokenUsageSnapshotCache
     /// The probe service owns process lifetime and the per-account running gate.
     let usageWindowProbeService: UsageWindowProbeService
@@ -43,10 +46,16 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     var statesCancellable: AnyCancellable?
     var activityToastCancellable: AnyCancellable?
     var wakeObserver: NSObjectProtocol?
+    var displayedAccountIDs: [String] = []
+    var hiddenAccountsStatusItem: NSStatusItem?
 
+    /// 설정과 계정 서비스 초기화 및 표시·갱신 콜백 연결
     override init() {
         let preferences = PreferencesStore()
-        let accountStore = AccountStore(configs: Self.configs(for: preferences.accountPaths))
+        let accountStore = AccountStore(
+            configs: Self.configs(for: preferences.accountPaths),
+            preferencesStore: preferences
+        )
         let refreshService = RefreshService(
             intervalMinutes: preferences.refreshIntervalMinutes,
             refresh: { [weak accountStore] in
@@ -71,7 +80,18 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             accounts: accountStore.configs,
             provider: sessionActivityProvider,
             onTransition: { transition in
-                sessionActivityDelivery.deliver(transition)
+                guard let index = preferences.accountDisplayOrder
+                    .filter({ preferences.enabledAccountIDs.contains($0) })
+                    .firstIndex(of: transition.accountID)
+                else { return }
+                sessionActivityDelivery.deliver(SessionActivityTransition(
+                    accountID: transition.accountID,
+                    side: index < 2 ? .left : .right,
+                    sessionID: transition.sessionID,
+                    agentLabel: transition.agentLabel,
+                    taskName: transition.taskName,
+                    status: transition.status
+                ))
             }
         )
         let notchLayoutManager = NotchLayoutManager()
@@ -96,9 +116,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                     NSApp.setActivationPolicy(.accessory)
                 },
                 renderLoading: {
+                    let visible = preferences.visibleAccounts(accountStore.states)
                     notchLayoutManager.update(
-                        leftAccounts: AccountStore.split(accountStore.states, side: .left),
-                        rightAccounts: AccountStore.split(accountStore.states, side: .right),
+                        leftAccounts: QuotaClusterView.splitVisibleAccounts(visible, side: .left),
+                        rightAccounts: QuotaClusterView.splitVisibleAccounts(visible, side: .right),
                         showAccountLabels: preferences.showAccountLabels
                     )
                 },
@@ -210,10 +231,18 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 설정 순서의 표시 계정 배치 및 전체 숨김 시 설정 진입점 유지
     func render(states: [AccountState]) {
+        let visible = preferences.visibleAccounts(states)
+        let ids = visible.map(\.id)
+        if ids != displayedAccountIDs {
+            displayedAccountIDs = ids
+            sessionActivityToastQueue.cancel()
+        }
+        updateHiddenAccountsSettingsAccess(isHidden: visible.isEmpty)
         notchLayoutManager.update(
-            leftAccounts: AccountStore.split(states, side: .left),
-            rightAccounts: AccountStore.split(states, side: .right),
+            leftAccounts: QuotaClusterView.splitVisibleAccounts(visible, side: .left),
+            rightAccounts: QuotaClusterView.splitVisibleAccounts(visible, side: .right),
             showAccountLabels: preferences.showAccountLabels,
             onRefresh: { [weak self] account in
                 self?.refreshAccount(account.id)
@@ -284,6 +313,30 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             primaryResetBefore: resetBefore,
             primaryResetAfter: resetAfter
         )
+    }
+
+
+    /// 전체 계정 숨김 상태에서만 메뉴 막대의 설정 버튼 제공
+    private func updateHiddenAccountsSettingsAccess(isHidden: Bool) {
+        guard isHidden else {
+            if let hiddenAccountsStatusItem {
+                NSStatusBar.system.removeStatusItem(hiddenAccountsStatusItem)
+                self.hiddenAccountsStatusItem = nil
+            }
+            return
+        }
+        guard hiddenAccountsStatusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "계정 표시 설정")
+        item.button?.target = self
+        item.button?.action = #selector(openHiddenAccountsSettings)
+        item.button?.toolTip = "계정 표시 설정"
+        hiddenAccountsStatusItem = item
+    }
+
+    /// 숨김 계정의 표시 복원을 위한 설정 창 열기
+    @objc private func openHiddenAccountsSettings() {
+        openSettings()
     }
 
     private static func configs(for paths: [String]) -> [AccountConfig] {
