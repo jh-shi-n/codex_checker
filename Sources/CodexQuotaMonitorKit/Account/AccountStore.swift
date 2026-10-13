@@ -19,6 +19,9 @@ public final class AccountStore: ObservableObject {
     @Published public private(set) var configs: [AccountConfig]
     @Published public private(set) var states: [AccountState]
 
+    /// 계정 설정 변경에 따른 비동기 결과 격리용 버전
+    public var configurationRevision: Int { configRevision }
+
     private let preferencesStore: PreferencesStore
     private let stateLoader: AccountStateLoader
     private var configRevision = 0

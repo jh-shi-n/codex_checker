@@ -48,6 +48,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     var wakeObserver: NSObjectProtocol?
     var displayedAccountIDs: [String] = []
     var hiddenAccountsStatusItem: NSStatusItem?
+    var tokenCleanupTask: Task<Void, Never>?
 
     /// 설정과 계정 서비스 초기화 및 표시·갱신 콜백 연결
     override init() {
@@ -68,7 +69,11 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             capability: .installedProtocol
         )
         let tokenUsageProvider = LocalTokenUsageProvider()
-        let tokenUsageCache = TokenUsageSnapshotCache(provider: tokenUsageProvider)
+        let tokenUsageCache = TokenUsageSnapshotCache(
+            provider: tokenUsageProvider,
+            databaseURL: TokenUsageSnapshotCache.defaultDatabaseURL,
+            accountHomes: Self.tokenHomes(for: accountStore.configs)
+        )
         let usageWindowProbeService = UsageWindowProbeService()
         let sessionActivityToastQueue = SessionActivityToastQueue(
             durationSeconds: preferences.activityNotificationDurationSeconds
@@ -158,6 +163,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                     tokenUsageCache.invalidateAll()
                     accountStore.reconfigure(pathStrings: paths)
                     Task { @MainActor in
+                        await tokenUsageCache.configureAccountHomes(Self.tokenHomes(for: accountStore.configs))
                         await sessionActivityMonitor.reconfigure(
                             accounts: accountStore.configs
                         )
@@ -279,6 +285,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         await tokenUsageCache.cachedSnapshot(for: accountID)
     }
 
+    /// 현재 계정의 명시적 토큰 집계 및 설정 변경 중 이전 결과 배제
     private func refreshTokenUsage(_ account: AccountState) async -> TokenUsageSnapshot {
         guard let config = accountStore.configs.first(where: { $0.id == account.id }),
               config.isConfigured,
@@ -286,7 +293,12 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         else {
             return AccountDashboardDefaults.unavailableTokenUsageSnapshot()
         }
-        return await tokenUsageCache.refresh(accountID: account.id, home: home)
+        let revision = accountStore.configurationRevision
+        let snapshot = await tokenUsageCache.refresh(accountID: account.id, home: home)
+        guard revision == accountStore.configurationRevision else {
+            return AccountDashboardDefaults.unavailableTokenUsageSnapshot()
+        }
+        return snapshot
     }
 
     /// 선택 계정의 Ping 실행 후 새 한도 조회 및 Reset 변화 반환
@@ -315,6 +327,12 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    /// 설정된 계정의 토큰 집계 복원 범위 구성
+    private static func tokenHomes(for configs: [AccountConfig]) -> [String: URL] {
+        Dictionary(uniqueKeysWithValues: configs.compactMap { config in
+            config.configuredHome.map { (config.id, $0) }
+        })
+    }
 
     /// 전체 계정 숨김 상태에서만 메뉴 막대의 설정 버튼 제공
     private func updateHiddenAccountsSettingsAccess(isHidden: Bool) {
