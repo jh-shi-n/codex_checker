@@ -19,6 +19,7 @@ struct CodexQuotaMonitorApp: App {
         Settings {
             appDelegate.makeSettingsView()
         }
+        .defaultSize(SettingsView.defaultWindowSize)
     }
 }
 

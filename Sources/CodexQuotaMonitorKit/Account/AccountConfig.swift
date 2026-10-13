@@ -33,18 +33,17 @@ public enum AccountPathValidation: Equatable, Sendable {
         self == .valid
     }
 
-    /// User-facing text for a non-acceptable value. Empty and valid values do
-    /// not need an error label.
+    /// 설정 화면의 계정 경로 검증 오류 안내 및 정상 경로의 문구 생략
     public var userMessage: String? {
         switch self {
         case .empty, .valid:
             return nil
         case .missing:
-            return "The account path does not exist."
+            return "계정 경로가 존재하지 않습니다."
         case .notDirectory:
-            return "The account path must be a directory."
+            return "계정 경로는 폴더여야 합니다."
         case .unreadable:
-            return "The account directory cannot be read."
+            return "계정 폴더를 읽을 수 없습니다."
         }
     }
 }
