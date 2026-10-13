@@ -1,3 +1,6 @@
+// 목적: 앱 시작·종료·절전 복귀 및 토큰 집계 만료 정리
+// 이용처: 앱 위임자의 macOS 수명주기 콜백
+// 사용방법: NSApplicationDelegate 이벤트를 통한 자동 호출
 @preconcurrency import AppKit
 
 extension CodexQuotaMonitorAppDelegate {
@@ -6,6 +9,13 @@ extension CodexQuotaMonitorAppDelegate {
         installWakeObserver()
         lifecycleCoordinator.launch()
         Task { await sessionActivityMonitor.start() }
+        tokenCleanupTask = Task { [tokenUsageCache] in
+            while !Task.isCancelled {
+                await tokenUsageCache.purgeExpired()
+                do { try await Task.sleep(for: .seconds(60)) }
+                catch { return }
+            }
+        }
         if let status = lifecycleCoordinator.launchAtLoginStatus {
             effectiveLaunchAtLoginStatus = status
         }
@@ -14,6 +24,8 @@ extension CodexQuotaMonitorAppDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         _ = notification
         sessionActivityDelivery.stop()
+        tokenCleanupTask?.cancel()
+        tokenCleanupTask = nil
         if let hiddenAccountsStatusItem {
             NSStatusBar.system.removeStatusItem(hiddenAccountsStatusItem)
             self.hiddenAccountsStatusItem = nil
@@ -45,6 +57,7 @@ extension CodexQuotaMonitorAppDelegate {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
+                await self?.tokenUsageCache.purgeExpired()
                 await self?.lifecycleCoordinator.wake()
             }
         }
