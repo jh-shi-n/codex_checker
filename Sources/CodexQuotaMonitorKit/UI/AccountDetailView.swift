@@ -53,7 +53,7 @@ public struct AccountDetailView: View {
             VStack(alignment: .leading, spacing: 12) {
                 header
 
-                AccountQuotaSection(account: account)
+                AccountQuotaSection(account: displayedAccount)
 
                 TokenContributionGrid(snapshot: tokenUsageSnapshot)
 
@@ -62,10 +62,10 @@ public struct AccountDetailView: View {
                 accountActivity
 
                 UsageWindowProbeSection(
-                    account: account,
+                    account: displayedAccount,
                     probe: currentProbePresentation,
                     isRunning: isProbeRunning,
-                    isConfigured: account.status != .notConfigured,
+                    isConfigured: displayedAccount.status != .notConfigured,
                     onRun: runProbe
                 )
 
@@ -266,10 +266,27 @@ public struct AccountDetailView: View {
         }
     }
 
+    /// 현재 계정에 속한 Ping 결과만 노출
     private var currentProbePresentation: UsageWindowProbePresentationResult? {
-        probePresentation
+        guard account.status != .notConfigured,
+              account.status != .loading,
+              let probePresentation,
+              probePresentation.isCurrentAccount,
+              probePresentation.result.accountID == account.id
+        else { return nil }
+        return probePresentation
     }
 
+    /// 성공한 최신 한도 스냅샷 우선 표시
+    private var displayedAccount: AccountState {
+        guard let presentation = currentProbePresentation,
+              presentation.result.isSuccess,
+              presentation.quotaRefreshSucceeded == true,
+              let refreshedAccount = presentation.refreshedAccount,
+              refreshedAccount.id == account.id
+        else { return account }
+        return refreshedAccount
+    }
 
     /// 캐시 스냅샷을 60초 주기로 읽는 표시 갱신
     private func loadCachedTokenUsageSnapshot() async {
@@ -314,6 +331,7 @@ public struct AccountDetailView: View {
         }
     }
 
+    /// 선택 계정 Ping 결과를 계정 ID 기준으로 반영
     private func runProbe() {
         guard AccountDashboardActionState.canRunProbe(
             account: account,
@@ -324,6 +342,10 @@ public struct AccountDetailView: View {
         Task { @MainActor in
             let presentation = await runUsageWindowProbe(account)
             guard !Task.isCancelled else { return }
+            guard presentation.result.accountID == account.id else {
+                isProbeRunning = false
+                return
+            }
             probePresentation = presentation
             isProbeRunning = false
         }

@@ -315,15 +315,34 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Ping 이전 조회 재사용을 막고 완료 이후 한도 조회 보장
-        let resetBefore = accountStore.state(for: account.id)?.primaryResetAt
-            ?? account.primaryResetAt
+        let revision = accountStore.configurationRevision
+        let before = accountStore.state(for: account.id) ?? account
         let result = await usageWindowProbeService.probe(config)
-        await accountStore.refresh(accountID: account.id, forceFresh: true)
-        let resetAfter = accountStore.state(for: account.id)?.primaryResetAt
+        let isCurrent = revision == accountStore.configurationRevision
+            && accountStore.configs.first(where: { $0.id == account.id }) == config
+        guard result.isSuccess,
+              isCurrent
+        else {
+            return UsageWindowProbePresentationResult(
+                result: result,
+                primaryResetBefore: before.primaryResetAt,
+                secondaryResetBefore: before.secondaryResetAt,
+                quotaRefreshSucceeded: result.isSuccess ? false : nil,
+                isCurrentAccount: isCurrent
+            )
+        }
+        let didRefresh = await accountStore.refresh(accountID: account.id, forceFresh: true)
+        let isStillCurrent = revision == accountStore.configurationRevision
+        let after = didRefresh && isStillCurrent ? accountStore.state(for: account.id) : nil
         return UsageWindowProbePresentationResult(
             result: result,
-            primaryResetBefore: resetBefore,
-            primaryResetAfter: resetAfter
+            primaryResetBefore: before.primaryResetAt,
+            primaryResetAfter: after?.primaryResetAt,
+            secondaryResetBefore: before.secondaryResetAt,
+            secondaryResetAfter: after?.secondaryResetAt,
+            quotaRefreshSucceeded: didRefresh && isStillCurrent,
+            refreshedAccount: after,
+            isCurrentAccount: isStillCurrent
         )
     }
 

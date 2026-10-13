@@ -93,6 +93,35 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertTrue(delta.contains("▼1분"))
     }
 
+    /// 실패한 한도 조회의 기존 날짜를 신규 Reset 시각처럼 표시하지 않는 동작
+    func testResetObservationKeepsFailedQuotaRefreshExplicit() {
+        let before = Date(timeIntervalSince1970: 1_700_000_000)
+        let after = before.addingTimeInterval(-60)
+        let text = AccountDashboardFormatting.resetObservationText(
+            before: before,
+            after: after,
+            quotaRefreshSucceeded: false
+        )
+
+        XCTAssertTrue(text.contains("기존"))
+        XCTAssertTrue(text.contains("한도 조회 실패"))
+        XCTAssertFalse(text.contains("→"))
+        XCTAssertFalse(text.contains(AccountDashboardFormatting.dateText(after)))
+    }
+
+    /// 초기화 갱신 섹션과 버튼의 사용자 표시명 확인
+    func testQuotaResetRefreshSectionUsesConciseKoreanCopy() {
+        let idle = UsageWindowProbeSection(account: AccountState(id: "C1", status: .normal))
+        let running = UsageWindowProbeSection(
+            account: AccountState(id: "C1", status: .normal),
+            isRunning: true
+        )
+
+        XCTAssertEqual(UsageWindowProbeSection.sectionTitle, "할당량 초기화 갱신")
+        XCTAssertEqual(idle.buttonTitle, "초기화 갱신")
+        XCTAssertEqual(running.buttonTitle, "갱신 중…")
+    }
+
     func testDashboardDefaultUsageAndProbeNeverClaimData() async {
         let account = AccountState(id: "C1", status: .notConfigured)
         let cacheMiss = await AccountDashboardDefaults.emptyTokenUsageLookup(account.id)
@@ -106,11 +135,18 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(result.failureCategory, .notConfigured)
         XCTAssertNil(result.primaryResetBefore)
         XCTAssertNil(result.primaryResetAfter)
+        XCTAssertNil(result.secondaryResetBefore)
+        XCTAssertNil(result.secondaryResetAfter)
+        XCTAssertNil(result.quotaRefreshSucceeded)
+        XCTAssertNil(result.refreshedAccount)
     }
 
+    /// 두 Reset 구간과 갱신 계정 스냅샷 전달
     func testProbeRunnerPropagatesCompositeResetObservation() async {
         let before = Date(timeIntervalSince1970: 1_700_000_000)
         let after = before.addingTimeInterval(-60)
+        let secondaryBefore = before.addingTimeInterval(7 * 86_400)
+        let secondaryAfter = secondaryBefore.addingTimeInterval(-120)
         let boundedResult = UsageWindowProbeResult(
             accountID: "C2",
             status: .success,
@@ -125,7 +161,18 @@ final class QuotaPresentationTests: XCTestCase {
         let expected = UsageWindowProbePresentationResult(
             result: boundedResult,
             primaryResetBefore: before,
-            primaryResetAfter: after
+            primaryResetAfter: after,
+            secondaryResetBefore: secondaryBefore,
+            secondaryResetAfter: secondaryAfter,
+            quotaRefreshSucceeded: true,
+            refreshedAccount: AccountState(
+                id: "C2",
+                primaryRemainingPercent: 82,
+                secondaryRemainingPercent: 60,
+                primaryResetAt: after,
+                secondaryResetAt: secondaryAfter,
+                status: .normal
+            )
         )
         let runner: UsageWindowProbeRunner = { _ in expected }
 
@@ -133,7 +180,38 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(actual.result, boundedResult)
         XCTAssertEqual(actual.primaryResetBefore, before)
         XCTAssertEqual(actual.primaryResetAfter, after)
+        XCTAssertEqual(actual.secondaryResetBefore, secondaryBefore)
+        XCTAssertEqual(actual.secondaryResetAfter, secondaryAfter)
+        XCTAssertEqual(actual.quotaRefreshSucceeded, true)
+        XCTAssertEqual(actual.refreshedAccount?.primaryRemainingPercent, 82)
+        XCTAssertEqual(actual.refreshedAccount?.secondaryRemainingPercent, 60)
     }
+
+    /// 기존 생성 호출에서 확장 필드가 비어 있는 기본값 유지
+    func testProbePresentationNewRefreshFieldsDefaultToNil() {
+        let result = UsageWindowProbeResult(
+            accountID: "C2",
+            status: .failure,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            completedAt: Date(timeIntervalSince1970: 1_700_000_001),
+            failureCategory: .timeout
+        )
+        let presentation = UsageWindowProbePresentationResult(result: result)
+
+        XCTAssertNil(presentation.secondaryResetBefore)
+        XCTAssertNil(presentation.secondaryResetAfter)
+        XCTAssertNil(presentation.quotaRefreshSucceeded)
+        XCTAssertNil(presentation.refreshedAccount)
+        XCTAssertTrue(presentation.isCurrentAccount)
+
+        let invalidatedPresentation = UsageWindowProbePresentationResult(
+            result: result,
+            isCurrentAccount: false
+        )
+        XCTAssertFalse(invalidatedPresentation.isCurrentAccount)
+    }
+
+
 
     func testDashboardProbeActionRequiresConfiguredIdleAccount() {
         XCTAssertTrue(

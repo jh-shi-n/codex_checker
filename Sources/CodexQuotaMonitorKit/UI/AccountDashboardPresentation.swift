@@ -9,22 +9,39 @@ public typealias TokenUsageSnapshotRefresh = @MainActor @Sendable (AccountState)
 public typealias TokenUsageCacheLookup = TokenUsageSnapshotLookup
 public typealias TokenUsageRefreshHandler = TokenUsageSnapshotRefresh
 
-/// A UI-safe probe record.  Only the already bounded probe result and the two
-/// observed primary reset values are retained; process output and account
-/// paths are intentionally not part of this model.
+/// - 목적: Ping 결과와 최신 한도 갱신 관찰값의 UI 전달
+/// - 보관 정보: 제한된 결과, 두 Reset 구간, 성공한 갱신 계정 스냅샷
+/// - 제외 정보: 프로세스 출력, 계정 경로
 public struct UsageWindowProbePresentationResult: Equatable, Sendable {
     public let result: UsageWindowProbeResult
     public let primaryResetBefore: Date?
     public let primaryResetAfter: Date?
+    public let secondaryResetBefore: Date?
+    public let secondaryResetAfter: Date?
+    public let quotaRefreshSucceeded: Bool?
+    public let refreshedAccount: AccountState?
+    /// 계정 경로와 세대가 현재 상세와 일치하는지 여부
+    public let isCurrentAccount: Bool
 
+    /// 하위 호환 가능한 Ping 및 한도 갱신 결과 생성
     public init(
         result: UsageWindowProbeResult,
         primaryResetBefore: Date? = nil,
-        primaryResetAfter: Date? = nil
+        primaryResetAfter: Date? = nil,
+        secondaryResetBefore: Date? = nil,
+        secondaryResetAfter: Date? = nil,
+        quotaRefreshSucceeded: Bool? = nil,
+        refreshedAccount: AccountState? = nil,
+        isCurrentAccount: Bool = true
     ) {
         self.result = result
         self.primaryResetBefore = primaryResetBefore
         self.primaryResetAfter = primaryResetAfter
+        self.secondaryResetBefore = secondaryResetBefore
+        self.secondaryResetAfter = secondaryResetAfter
+        self.quotaRefreshSucceeded = quotaRefreshSucceeded
+        self.refreshedAccount = refreshedAccount
+        self.isCurrentAccount = isCurrentAccount
     }
 
     public var isSuccess: Bool { result.isSuccess }
@@ -132,6 +149,35 @@ public enum AccountDashboardFormatting {
         let unit = "분"
         _ = calendar
         return "\(beforeText) → \(afterText) (\(arrow)\(abs(minutes))\(unit))"
+    }
+
+    /// 한도 조회 실패와 Reset 관찰값을 구분하는 날짜 표시
+    public static func resetObservationText(
+        before: Date?,
+        after: Date?,
+        quotaRefreshSucceeded: Bool?
+    ) -> String {
+        if quotaRefreshSucceeded == false {
+            guard let before else { return "한도 조회 실패" }
+            let priorDate = dateText(before, dateStyle: .medium, timeStyle: .short)
+            return "기존 \(priorDate) · 한도 조회 실패"
+        }
+
+        guard let after else {
+            guard let before else { return "—" }
+            let priorDate = dateText(before, dateStyle: .medium, timeStyle: .short)
+            return quotaRefreshSucceeded == true
+                ? "조회 후 Reset 없음 · 이전 \(priorDate)"
+                : "이전 \(priorDate)"
+        }
+
+        let afterText = dateText(after, dateStyle: .medium, timeStyle: .short)
+        guard let before else { return afterText }
+        let beforeText = dateText(before, dateStyle: .medium, timeStyle: .short)
+        let minutes = Int((after.timeIntervalSince(before) / 60).rounded())
+        guard minutes != 0 else { return "\(beforeText) → \(afterText)" }
+        let arrow = minutes < 0 ? "▼" : "▲"
+        return "\(beforeText) → \(afterText) (\(arrow)\(abs(minutes))분)"
     }
 
     public static func dateDeltaText(
