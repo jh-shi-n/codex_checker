@@ -236,6 +236,23 @@ final class NotchLayoutTests: XCTestCase {
         )
     }
 
+    /// 표시 항목 수에 따른 왼쪽 우선 빈자리 없는 배치 확인
+    func testVisibleAccountLayoutPacksLeftBeforeRight() {
+        let states = ["C4", "C2", "C1", "C3"].map { AccountState.loading(id: $0) }
+        for count in 0...4 {
+            let visible = Array(states.prefix(count))
+            XCTAssertEqual(
+                QuotaClusterView.splitVisibleAccounts(visible, side: .left).map(\.id),
+                Array(visible.prefix(2)).map(\.id)
+            )
+            XCTAssertEqual(
+                QuotaClusterView.splitVisibleAccounts(visible, side: .right).map(\.id),
+                Array(visible.dropFirst(2)).map(\.id)
+            )
+        }
+    }
+
+
     func testShortAuxiliaryAreasUseOneResolvedDiameterForPanelItemsAndContent() {
         let layout = NotchGeometry.layout(
             screenFrame: CGRect(x: 0, y: 0, width: 300, height: 900),

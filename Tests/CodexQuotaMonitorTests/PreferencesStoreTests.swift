@@ -1,9 +1,12 @@
+// 목적: PreferencesStore의 기본값·정규화·저장 동작 검증
 import Foundation
 import XCTest
 @testable import CodexQuotaMonitorKit
 
+/// 목적: 설정 저장소의 영속성과 입력 정규화 검증
 @MainActor
 final class PreferencesStoreTests: XCTestCase {
+    /// 목적: 미설정 시 갱신 간격·경로·계정 표시 기본값 확인
     func testMissingValuesUseFiveMinuteIntervalAndFourDefaultPaths() {
         let defaults = isolatedDefaults()
         let store = PreferencesStore(userDefaults: defaults)
@@ -11,11 +14,42 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(store.refreshIntervalMinutes, 5)
         XCTAssertEqual(store.accountPaths.count, 4)
         XCTAssertEqual(store.accountPaths, AccountConfig.defaultAccounts().map { $0.home.path })
+        XCTAssertEqual(store.enabledAccountIDs, PreferencesStore.defaultEnabledAccountIDs)
+        XCTAssertEqual(store.accountDisplayOrder, PreferencesStore.defaultAccountDisplayOrder)
         XCTAssertFalse(store.launchAtLogin)
         XCTAssertFalse(store.showAccountLabels)
         XCTAssertEqual(store.activityNotificationDurationSeconds, 3)
     }
 
+    /// 목적: 활성 계정 ID의 대소문자·공백·중복·미지원 값 정리 및 재로딩 확인
+    func testEnabledAccountIDsNormalizeAndPersistAcrossInstances() {
+        let defaults = isolatedDefaults()
+        let store = PreferencesStore(userDefaults: defaults)
+
+        store.updateEnabledAccountIDs([" c3 ", "C1", "c3", "unknown", "C2"])
+
+        let expected = ["C3", "C1", "C2"]
+        XCTAssertEqual(store.enabledAccountIDs, expected)
+        XCTAssertEqual(defaults.object(forKey: PreferencesStore.Keys.enabledAccountIDs) as? [String], expected)
+        XCTAssertEqual(PreferencesStore(userDefaults: defaults).enabledAccountIDs, expected)
+    }
+
+    /// 목적: 비활성 계정 전체 선택 상태의 저장 허용 확인
+    func testEnabledAccountIDsCanBeEmptyAndPersist() {
+        let defaults = isolatedDefaults()
+        let store = PreferencesStore(userDefaults: defaults)
+
+        store.updateEnabledAccountIDs([])
+
+        XCTAssertEqual(store.enabledAccountIDs, [])
+        XCTAssertEqual(defaults.object(forKey: PreferencesStore.Keys.enabledAccountIDs) as? [String], [])
+        XCTAssertEqual(PreferencesStore(userDefaults: defaults).enabledAccountIDs, [])
+    }
+
+
+
+
+    /// 목적: 활동 알림 표시 시간의 경계 정규화와 저장 확인
     func testActivityNotificationDurationNormalizesAndPersistsAcrossInstances() {
         let defaults = isolatedDefaults()
         let store = PreferencesStore(userDefaults: defaults)
