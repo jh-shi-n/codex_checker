@@ -221,18 +221,19 @@ final class NotchLayoutTests: XCTestCase {
         )
     }
 
-    func testClusterOrderingKeepsOuterAndNotchNearestIdsStable() {
+    /// 설정 순서가 계정 ID 정렬로 변경되지 않는 동작 확인
+    func testClusterOrderingPreservesConfiguredOrder() {
         func state(_ id: String) -> AccountState {
             AccountState(id: id, remainingPercent: 80, status: .normal)
         }
 
         XCTAssertEqual(
             QuotaClusterView.orderedAccounts([state("C2"), state("C1")], for: .left).map(\.id),
-            ["C1", "C2"]
+            ["C2", "C1"]
         )
         XCTAssertEqual(
             QuotaClusterView.orderedAccounts([state("C4"), state("C3")], for: .right).map(\.id),
-            ["C3", "C4"]
+            ["C4", "C3"]
         )
     }
 

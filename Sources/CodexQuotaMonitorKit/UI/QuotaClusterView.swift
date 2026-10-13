@@ -292,20 +292,9 @@ public struct QuotaClusterView: View {
         return min(requested, max(0, activityToastWidth))
     }
 
-    /// Returns the stable visual order while preserving the caller's account
-    /// values. Numeric suffixes make C1…C4 order correctly even if input is shuffled.
+    /// 설정에서 결정한 표시 순서 보존
     public static func orderedAccounts(_ accounts: [AccountState], for side: NotchSide) -> [AccountState] {
-        accounts.sorted { lhs, rhs in
-            let leftOrdinal = ordinal(for: lhs.id)
-            let rightOrdinal = ordinal(for: rhs.id)
-            if leftOrdinal != rightOrdinal { return leftOrdinal < rightOrdinal }
-            return lhs.id < rhs.id
-        }
-    }
-
-    private static func ordinal(for id: String) -> Int {
-        let suffix = id.drop { $0.isLetter }
-        return Int(suffix) ?? Int.max
+        accounts
     }
 
     /// 표시 계정의 앞 두 항목을 왼쪽에, 나머지 항목을 오른쪽에 배치
