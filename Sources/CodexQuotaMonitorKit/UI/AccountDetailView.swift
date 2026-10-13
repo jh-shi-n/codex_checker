@@ -120,10 +120,16 @@ public struct AccountDetailView: View {
                         .font(.title3.weight(.semibold))
                     Text(AccountDashboardFormatting.subscriptionBadgeText(account.planType))
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(SubscriptionBadgeStyle.accentColor(for: account.planType))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.purple.opacity(0.16)))
+                        .background(Capsule().fill(SubscriptionBadgeStyle.backgroundColor(for: account.planType)))
+                        .overlay {
+                            Capsule().strokeBorder(
+                                SubscriptionBadgeStyle.accentColor(for: account.planType).opacity(0.45),
+                                lineWidth: 1
+                            )
+                        }
                 }
                 Text(account.email ?? "—")
                     .font(.caption)
