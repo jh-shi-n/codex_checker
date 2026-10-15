@@ -47,7 +47,6 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     var statesCancellable: AnyCancellable?
     var activityToastCancellable: AnyCancellable?
     var wakeObserver: NSObjectProtocol?
-    var displayedAccountIDs: [String] = []
     var hiddenAccountsStatusItem: NSStatusItem?
     var tokenCleanupTask: Task<Void, Never>?
 
@@ -245,11 +244,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     /// 설정 순서의 표시 계정 배치 및 전체 숨김 시 설정 진입점 유지
     func render(states: [AccountState]) {
         let visible = preferences.visibleAccounts(states)
-        let ids = visible.map(\.id)
-        if ids != displayedAccountIDs {
-            displayedAccountIDs = ids
-            sessionActivityToastQueue.cancel()
-        }
+        sessionActivityToastQueue.configureDisplayedAccounts(visible.map(\.id))
         updateHiddenAccountsSettingsAccess(isHidden: visible.isEmpty)
         notchLayoutManager.update(
             leftAccounts: QuotaClusterView.splitVisibleAccounts(visible, side: .left),
