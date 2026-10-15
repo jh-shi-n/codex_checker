@@ -1,8 +1,24 @@
 import XCTest
+import SwiftUI
 @testable import CodexQuotaMonitorKit
 
 @MainActor
 final class QuotaPresentationTests: XCTestCase {
+    /// 화면에 맞춰 축소한 팝오버의 실제 내부 렌더 크기 검증
+    func testAccountDetailContentFitsSmallPopoverSize() throws {
+        let size = TransientPopoverSizingPolicy.clampedContentSize(
+            visibleFrame: CGRect(x: 0, y: 0, width: 500, height: 620)
+        )
+        let renderer = ImageRenderer(content: AccountDetailView(
+            account: AccountState(id: "C1", status: .notConfigured)
+        ))
+        renderer.proposedSize = ProposedViewSize(width: size.width, height: size.height)
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        XCTAssertEqual(image.width, Int(size.width))
+        XCTAssertEqual(image.height, Int(size.height))
+    }
+
     func testSessionIDFormattingShortensDisplayButPreservesFullCopyValue() {
         let snapshot = SessionActivitySnapshot(
             accountID: "C1",
