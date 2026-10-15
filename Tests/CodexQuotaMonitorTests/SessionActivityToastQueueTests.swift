@@ -134,6 +134,48 @@ final class SessionActivityToastQueueTests: XCTestCase {
         XCTAssertNil(queue.currentRight)
     }
 
+    /// 사용자 표시 순서에 따른 좌우 알림 배치 검증
+    func testToastLanesFollowDisplayedAccountOrder() {
+        let queue = makeQueue(sleeper: ToastSleeperGate())
+        defer { queue.cancel() }
+        queue.configureDisplayedAccounts(["C4", "C3", "C2", "C1"])
+        queue.enqueue(transition(accountID: "C4", side: .right, status: .working))
+        queue.enqueue(transition(accountID: "C1", side: .left, status: .waiting))
+
+        XCTAssertEqual(queue.currentLeft?.transition?.accountID, "C4")
+        XCTAssertEqual(queue.currentRight?.transition?.accountID, "C1")
+    }
+
+    /// 숨김 계정 제외 및 단일 표시 계정의 왼쪽 알림 배치 검증
+    func testHiddenAccountsDoNotEnqueueToasts() {
+        let queue = makeQueue(sleeper: ToastSleeperGate())
+        defer { queue.cancel() }
+        queue.configureDisplayedAccounts(["C4"])
+        queue.enqueue(transition(accountID: "C1", side: .left, status: .working))
+        XCTAssertNil(queue.currentLeft)
+        XCTAssertNil(queue.currentRight)
+
+        queue.enqueue(transition(accountID: "C4", side: .right, status: .working))
+        XCTAssertEqual(queue.currentLeft?.transition?.accountID, "C4")
+        XCTAssertNil(queue.currentRight)
+    }
+
+    /// 표시 변경 시 기존 알림 제거 및 동일 배치 재설정 시 현재 알림 유지 검증
+    func testDisplayConfigurationClearsOnlyWhenChanged() {
+        let queue = makeQueue(sleeper: ToastSleeperGate())
+        defer { queue.cancel() }
+        queue.configureDisplayedAccounts(["C1", "C2", "C3", "C4"])
+        queue.enqueue(transition(accountID: "C1", side: .left, status: .working))
+        queue.configureDisplayedAccounts(["C1", "C2", "C3", "C4"])
+        XCTAssertNotNil(queue.currentLeft)
+
+        queue.configureDisplayedAccounts([])
+        XCTAssertNil(queue.currentLeft)
+        XCTAssertNil(queue.currentRight)
+        queue.enqueue(transition(accountID: "C1", side: .left, status: .working))
+        XCTAssertNil(queue.currentLeft)
+    }
+
     private func makeQueue(sleeper: ToastSleeperGate) -> SessionActivityToastQueue {
         SessionActivityToastQueue(
             durationSeconds: 3,
