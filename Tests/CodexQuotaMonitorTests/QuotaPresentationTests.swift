@@ -581,6 +581,42 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(QuotaColors.trackColor(for: .light).hex, "#E5E5EA")
     }
 
+    /// 최초 조회·갱신 중·갱신 완료 시 노치 소진 구간의 고정 색상 검증
+    func testNotchDonutTrackKeepsDarkColorAcrossAppearanceAndRefresh() throws {
+        for status in [AccountStatus.loading, .normal] {
+            let account = AccountState(
+                id: "C1",
+                primaryRemainingPercent: 80,
+                secondaryRemainingPercent: 50,
+                status: status
+            )
+            for scheme in [ColorScheme.light, .dark] {
+                let renderer = ImageRenderer(content: QuotaRingGraphic(
+                    account: account,
+                    diameter: 80,
+                    showAccountLabel: false,
+                    fixedAppearance: .dark
+                ).environment(\.colorScheme, scheme))
+                renderer.scale = 1
+                let image = try XCTUnwrap(renderer.cgImage)
+                var pixel = [UInt8](repeating: 0, count: 4)
+                try pixel.withUnsafeMutableBytes { bytes in
+                    let context = try XCTUnwrap(CGContext(
+                        data: bytes.baseAddress,
+                        width: 1,
+                        height: 1,
+                        bitsPerComponent: 8,
+                        bytesPerRow: 4,
+                        space: CGColorSpaceCreateDeviceRGB(),
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                    ))
+                    context.draw(image, in: CGRect(x: 0, y: -40, width: 80, height: 80))
+                }
+                XCTAssertEqual(pixel, [0x2C, 0x2C, 0x2E, 0xFF], "\(status), \(scheme)")
+            }
+        }
+    }
+
     func testExhaustedOverallQuotaUsesWhiteDonutTrack() {
         let account = AccountState(
             id: "C1",
