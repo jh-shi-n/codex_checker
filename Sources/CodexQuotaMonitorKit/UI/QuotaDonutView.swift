@@ -281,7 +281,7 @@ public struct QuotaDonutView: View {
                 account: account,
                 diameter: diameterOverride ?? QuotaDonutMetrics.diameter(forMenuBarHeight: menuBarHeight),
                 showAccountLabel: showAccountLabels,
-                fixedTextAppearance: .dark
+                fixedAppearance: .dark
             )
             .contentShape(Circle())
         }
@@ -346,29 +346,31 @@ struct QuotaRingGraphic: View {
     let account: AccountState
     let diameter: CGFloat
     let showAccountLabel: Bool
-    let fixedTextAppearance: QuotaAppearance?
+    /// 고정 배경에서 글자와 소진 구간에 함께 적용하는 색상 모드
+    let fixedAppearance: QuotaAppearance?
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var loadingRotation = 0.0
     @State private var loadingAnimationState = QuotaLoadingAnimationState()
 
+    /// 고정 배경 색상 모드 또는 시스템 색상 모드를 사용하는 링 초기화
     init(
         account: AccountState,
         diameter: CGFloat,
         showAccountLabel: Bool = true,
-        fixedTextAppearance: QuotaAppearance? = nil
+        fixedAppearance: QuotaAppearance? = nil
     ) {
         self.account = account
         self.diameter = diameter
         self.showAccountLabel = showAccountLabel
-        self.fixedTextAppearance = fixedTextAppearance
+        self.fixedAppearance = fixedAppearance
     }
 
     var body: some View {
         let state = QuotaDonutState(account: account)
         let presentation = QuotaDonutPresentation(account: account)
         let progress = presentation.ringPercent.map { $0 / 100 } ?? 0
-        let appearance: QuotaAppearance = colorScheme == .dark ? .dark : .light
+        let appearance = fixedAppearance ?? (colorScheme == .dark ? .dark : .light)
 
         ZStack {
             Circle()
@@ -433,7 +435,7 @@ struct QuotaRingGraphic: View {
                         .lineLimit(1)
                 }
             }
-            .foregroundStyle(fixedTextAppearance.map {
+            .foregroundStyle(fixedAppearance.map {
                 QuotaDonutMetrics.centerTextColor(for: $0).swiftUIColor
             } ?? .primary)
             .frame(width: diameter * (showAccountLabel ? 0.88 : 0.96), height: diameter * (showAccountLabel ? 0.78 : 0.88))
