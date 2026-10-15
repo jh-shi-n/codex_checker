@@ -195,6 +195,14 @@ public actor TokenUsageSnapshotCache {
         snapshots.removeValue(forKey: accountID)
     }
 
+    /// 계정 경로 변경 전에 진행 중 조회와 해당 계정의 영속 기록 무효화
+    public nonisolated func invalidate(accountID: String) {
+        invalidationState.invalidate(accountID: accountID) {
+            persistence?.remove(accountID: accountID)
+        }
+        Task { await self.purgeExpired() }
+    }
+
     /// 모든 메모리·영속 스냅샷 제거
     public func removeAll() {
         invalidateAll()
@@ -209,18 +217,21 @@ public actor TokenUsageSnapshotCache {
         Task { await self.removeEntries(olderThan: generation) }
     }
 
-    /// 계정 홈 변경에 따른 전체 캐시 격리
+    /// 변경·제거된 계정의 캐시만 격리하고 다른 계정의 보관 기한 유지
     public func configureAccountHomes(_ homes: [String: URL]) {
         let normalized = Self.normalizedHomes(homes)
         guard Self.homeIdentities(accountHomes) != Self.homeIdentities(normalized) else {
             accountHomes = normalized
             return
         }
-        _ = invalidationState.invalidateAll {
-            persistence?.removeAll()
+        let oldIdentities = Self.homeIdentities(accountHomes)
+        let newIdentities = Self.homeIdentities(normalized)
+        for accountID in Set(oldIdentities.keys).union(newIdentities.keys) {
+            if oldIdentities[accountID] != newIdentities[accountID] {
+                remove(accountID: accountID)
+            }
         }
         accountHomes = normalized
-        snapshots.removeAll()
     }
 
     /// 만료된 메모리·SQLite 스냅샷 정리
