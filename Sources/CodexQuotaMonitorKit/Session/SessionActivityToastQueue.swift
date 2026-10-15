@@ -86,6 +86,8 @@ public final class SessionActivityToastQueue: ObservableObject {
     private var rightTask: Task<Void, Never>?
     private var leftGeneration = 0
     private var rightGeneration = 0
+    /// UI에 표시 중인 계정 순서, 미설정 시 기존 전달 위치 사용
+    private var displayedAccountIDs: [String]?
 
     public init(
         durationSeconds: Int = PreferencesStore.defaultActivityNotificationDurationSeconds,
@@ -106,17 +108,27 @@ public final class SessionActivityToastQueue: ObservableObject {
         durationSeconds = PreferencesStore.normalizedActivityNotificationDurationSeconds(seconds)
     }
 
+    /// 계정 표시 순서 변경 시 이전 알림 제거 및 새로운 배치 저장
+    public func configureDisplayedAccounts(_ accountIDs: [String]) {
+        guard displayedAccountIDs != accountIDs else { return }
+        cancel()
+        displayedAccountIDs = accountIDs
+    }
+
+    /// 현재 표시 위치로 알림 전달 및 숨김 계정 알림 제외
     public func enqueue(_ transition: SessionActivityTransition) {
+        let side: AccountPosition
+        if let displayedAccountIDs {
+            guard let index = displayedAccountIDs.firstIndex(of: transition.accountID) else { return }
+            side = index < 2 ? .left : .right
+        } else {
+            side = transition.side
+        }
         let toast = SessionActivityToast(
             content: .transition(transition),
             durationSeconds: durationSeconds
         )
-        switch transition.side {
-        case .left:
-            enqueue(toast, side: .left)
-        case .right:
-            enqueue(toast, side: .right)
-        }
+        enqueue(toast, side: side)
     }
 
     /// Cancels both lane tasks and clears all visible/pending messages. Task
