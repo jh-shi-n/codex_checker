@@ -82,8 +82,12 @@ public struct AccountDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(
-            width: Self.popoverContentSize.width,
-            height: Self.popoverContentSize.height
+            minWidth: 0,
+            idealWidth: Self.popoverContentSize.width,
+            maxWidth: .infinity,
+            minHeight: 0,
+            idealHeight: Self.popoverContentSize.height,
+            maxHeight: .infinity
         )
         .background(Color(red: 0.075, green: 0.085, blue: 0.10))
         .preferredColorScheme(.dark)
