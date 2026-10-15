@@ -158,10 +158,14 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 },
                 reconfigurePaths: { paths in
                     let generation = sessionActivityDelivery.pause()
-                    // A path edit changes the meaning of every stable slot;
-                    // synchronously mark cached usage stale before applying
-                    // the new account configurations.
-                    tokenUsageCache.invalidateAll()
+                    // 경로가 달라진 슬롯만 동기 무효화하여 다른 계정의 기록 보존
+                    let previousHomes = Self.tokenHomes(for: accountStore.configs)
+                    let nextHomes = Self.tokenHomes(for: Self.configs(for: paths))
+                    for accountID in Set(previousHomes.keys).union(nextHomes.keys) {
+                        if previousHomes[accountID] != nextHomes[accountID] {
+                            tokenUsageCache.invalidate(accountID: accountID)
+                        }
+                    }
                     accountStore.reconfigure(pathStrings: paths)
                     Task { @MainActor in
                         await tokenUsageCache.configureAccountHomes(Self.tokenHomes(for: accountStore.configs))

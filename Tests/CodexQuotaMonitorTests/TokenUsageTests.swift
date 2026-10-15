@@ -423,6 +423,40 @@ final class TokenUsageTests: XCTestCase {
         XCTAssertNil(restartedWithOldPath)
     }
 
+    /// 한 계정 경로 변경 시 다른 계정의 메모리·SQLite 기록 보존 검증
+    func testAccountHomeChangePreservesOtherAccountsAcrossRestart() async throws {
+        let directory = try makePersistenceDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("token-usage.sqlite")
+        let oldHome = directory.appendingPathComponent("old")
+        let newHome = directory.appendingPathComponent("new")
+        let otherHome = directory.appendingPathComponent("other")
+        let snapshot = usageSnapshot(inputTokens: 14, outputTokens: 6)
+        let reference = referenceDate
+        let cache = TokenUsageSnapshotCache(
+            provider: FixedTokenUsageProvider(snapshot: snapshot),
+            databaseURL: databaseURL,
+            accountHomes: ["C1": oldHome, "C2": otherHome],
+            now: { reference }
+        )
+        _ = await cache.update(accountID: "C1", home: oldHome)
+        _ = await cache.update(accountID: "C2", home: otherHome)
+
+        cache.invalidate(accountID: "C1")
+        await cache.configureAccountHomes(["C1": newHome, "C2": otherHome])
+        let changedAccount = await cache.cachedSnapshot(for: "C1")
+        let preservedAccount = await cache.cachedSnapshot(for: "C2")
+        let restoredAccount = await TokenUsageSnapshotCache(
+            databaseURL: databaseURL,
+            accountHomes: ["C1": newHome, "C2": otherHome],
+            now: { reference }
+        ).cachedSnapshot(for: "C2")
+
+        XCTAssertNil(changedAccount)
+        XCTAssertEqual(preservedAccount, snapshot)
+        XCTAssertEqual(restoredAccount, snapshot)
+    }
+
     /// 단일 토큰 요약 스냅샷 생성
     private func usageSnapshot(
         inputTokens: Int64,
