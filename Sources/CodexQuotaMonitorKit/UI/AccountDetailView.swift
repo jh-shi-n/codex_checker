@@ -135,11 +135,15 @@ public struct AccountDetailView: View {
                             )
                         }
                 }
-                Text(account.email ?? "—")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                HStack(spacing: 7) {
+                    Text(account.email ?? "—")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    ResetCreditsBadge(credits: displayedAccount.resetCredits)
+                        .fixedSize()
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
