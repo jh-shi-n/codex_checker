@@ -3,6 +3,36 @@ import XCTest
 @testable import CodexQuotaMonitorKit
 
 final class CodexQuotaServiceTests: XCTestCase {
+    /// 서버 리셋권 응답의 계정 상태 전달 및 일부 상세에서도 통합 개수 유지 확인
+    func testRateLimitResetCreditsReachAccountState() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("auth.json"))
+        let transport = RecordingTransport(responses: [
+            0: CodexMessage(id: 0, result: .object([:])),
+            1: CodexMessage(id: 1, result: .object([:])),
+            2: CodexMessage(id: 2, result: .object([
+                "rateLimits": .object(["primary": .object(["usedPercent": .number(20)])]),
+                "rateLimitResetCredits": .object([
+                    "availableCount": .number(2),
+                    "credits": .array([.object([
+                        "id": .string("credit-1"), "status": .string("available"),
+                        "expiresAt": .number(1_800_000_000),
+                    ])]),
+                ]),
+            ])),
+        ])
+        let service = CodexQuotaService(
+            locator: FixedCodexLocator(url: directory.appendingPathComponent("codex")),
+            processFactory: { transport }
+        )
+        let state = service.stateSync(for: AccountConfig(id: "C1", home: directory, position: .left))
+        XCTAssertEqual(state.status, .normal)
+        XCTAssertEqual(state.resetCredits?.availableCount, 2)
+        XCTAssertEqual(state.resetCredits?.credits?.first?.expiresAt, Date(timeIntervalSince1970: 1_800_000_000))
+        XCTAssertEqual(state.resetCredits?.hasCompleteDetails, false)
+    }
+
     func testLocatorPrefersPathBeforeFallbackLocations() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

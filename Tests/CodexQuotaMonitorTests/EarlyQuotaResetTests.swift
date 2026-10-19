@@ -80,10 +80,12 @@ final class EarlyQuotaResetTests: XCTestCase {
         let reset = Date().addingTimeInterval(3_600)
         let loader = ResetStateLoader(states: [
             AccountState(id: "C1", primaryUsedPercent: 60, secondaryUsedPercent: 70,
-                         primaryResetAt: reset, secondaryResetAt: reset, status: .normal),
+                         primaryResetAt: reset, secondaryResetAt: reset,
+                         resetCredits: RateLimitResetCredits(availableCount: 0), status: .normal),
             AccountState(id: "C1", status: .timeout),
             AccountState(id: "C1", primaryUsedPercent: 0, secondaryUsedPercent: 0,
-                         primaryResetAt: reset, secondaryResetAt: reset, status: .normal),
+                         primaryResetAt: reset, secondaryResetAt: reset,
+                         resetCredits: RateLimitResetCredits(availableCount: 0), status: .normal),
         ])
         let configs = AccountConfig.defaultAccounts()
         let store = AccountStore(configs: configs, preferencesStore: preferences) { _ in
@@ -113,13 +115,41 @@ final class EarlyQuotaResetTests: XCTestCase {
         XCTAssertEqual(events.count, 1)
     }
 
+    /// 리셋권 사용·소멸과 사용 여부 불명 상황에서 알림 제외 확인
+    func testResetCreditUsageAndAmbiguousExpirySuppressNotification() {
+        let active = RateLimitResetCredits.Credit(id: "active", expiresAt: now.addingTimeInterval(600))
+        let expired = RateLimitResetCredits.Credit(id: "expired", expiresAt: now.addingTimeInterval(-1))
+        var current = state(primary: 0)
+        current.resetCredits = RateLimitResetCredits(availableCount: 0)
+        for credits in [
+            RateLimitResetCredits(availableCount: 1, credits: [active]),
+            RateLimitResetCredits(availableCount: 1),
+        ] {
+            let before = PreferencesStore.QuotaSnapshot(
+                usedPercent: 60, resetAt: now.addingTimeInterval(3_600), resetCredits: credits
+            )
+            XCTAssertNil(EarlyQuotaReset.detect(previous: before, current: current, now: now))
+        }
+        let expiredBefore = PreferencesStore.QuotaSnapshot(
+            usedPercent: 60, resetAt: now.addingTimeInterval(3_600),
+            resetCredits: RateLimitResetCredits(availableCount: 1, credits: [expired])
+        )
+        XCTAssertNil(EarlyQuotaReset.detect(previous: expiredBefore, current: current, now: now))
+        current.resetCredits = nil
+        XCTAssertNil(EarlyQuotaReset.detect(previous: snapshot(), current: current, now: now))
+        let legacyBefore = PreferencesStore.QuotaSnapshot(usedPercent: 60, resetAt: now.addingTimeInterval(3_600))
+        current.resetCredits = RateLimitResetCredits(availableCount: 0)
+        XCTAssertNil(EarlyQuotaReset.detect(previous: legacyBefore, current: current, now: now))
+    }
+
     /// 고정 기준 시각의 이전 정상 스냅샷 구성
     private func snapshot(reset: Date? = Date(timeIntervalSince1970: 1_800_003_600)) -> PreferencesStore.QuotaSnapshot {
         PreferencesStore.QuotaSnapshot(
             usedPercent: 60,
             resetAt: reset,
             secondaryUsedPercent: 70,
-            secondaryResetAt: reset
+            secondaryResetAt: reset,
+            resetCredits: RateLimitResetCredits(availableCount: 0)
         )
     }
 
@@ -132,7 +162,8 @@ final class EarlyQuotaResetTests: XCTestCase {
     ) -> AccountState {
         AccountState(
             id: "C1", primaryUsedPercent: primary, secondaryUsedPercent: secondary,
-            primaryResetAt: reset, secondaryResetAt: reset, status: status
+            primaryResetAt: reset, secondaryResetAt: reset,
+            resetCredits: RateLimitResetCredits(availableCount: 0), status: status
         )
     }
 }

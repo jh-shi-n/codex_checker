@@ -38,6 +38,7 @@ extension CodexQuotaServiceError: LocalizedError {
 /// A quota snapshot containing the rolling five-hour primary quota and the
 /// overall secondary quota when the server supplies it.
 public struct CodexQuota: Equatable, Sendable {
+    public let resetCredits: RateLimitResetCredits?
     public let email: String?
     public let planType: String?
     public let primaryResetAt: Date?
@@ -63,7 +64,8 @@ public struct CodexQuota: Equatable, Sendable {
         primaryUsedPercent: Double,
         secondaryUsedPercent: Double? = nil,
         primaryResetAt: Date? = nil,
-        secondaryResetAt: Date? = nil
+        secondaryResetAt: Date? = nil,
+        resetCredits: RateLimitResetCredits? = nil
     ) {
         self.init(
             email: email,
@@ -72,7 +74,8 @@ public struct CodexQuota: Equatable, Sendable {
             primaryWindowIsOverall: false,
             secondaryUsedPercent: secondaryUsedPercent,
             primaryResetAt: primaryResetAt,
-            secondaryResetAt: secondaryResetAt
+            secondaryResetAt: secondaryResetAt,
+            resetCredits: resetCredits
         )
     }
 
@@ -83,8 +86,10 @@ public struct CodexQuota: Equatable, Sendable {
         primaryWindowIsOverall: Bool,
         secondaryUsedPercent: Double? = nil,
         primaryResetAt: Date? = nil,
-        secondaryResetAt: Date? = nil
+        secondaryResetAt: Date? = nil,
+        resetCredits: RateLimitResetCredits? = nil
     ) {
+        self.resetCredits = resetCredits
         self.email = email
         self.planType = planType
         self.primaryResetAt = primaryResetAt
@@ -210,6 +215,7 @@ public struct CodexQuotaService: Sendable {
                 secondaryResetAt: primaryIsOverall
                     ? quota.secondaryResetAt ?? quota.primaryResetAt
                     : quota.secondaryResetAt,
+                resetCredits: quota.resetCredits,
                 lastUpdated: Date(),
                 status: .normal
             )
@@ -298,7 +304,8 @@ public struct CodexQuotaService: Sendable {
             primaryWindowIsOverall: primary == nil && secondary != nil,
             secondaryUsedPercent: secondary.flatMap { finiteUsedPercent(in: $0.values) },
             primaryResetAt: primary.flatMap { resetDate(in: $0.values) },
-            secondaryResetAt: secondary.flatMap { resetDate(in: $0.values) }
+            secondaryResetAt: secondary.flatMap { resetDate(in: $0.values) },
+            resetCredits: RateLimitResetCredits.parse(result["rateLimitResetCredits"])
         )
     }
 

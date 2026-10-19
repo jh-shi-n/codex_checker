@@ -269,6 +269,7 @@ public final class AccountStore: ObservableObject {
                     secondaryUsedPercent: state.secondaryUsedPercent,
                     primaryResetAt: state.primaryResetAt,
                     secondaryResetAt: state.secondaryResetAt,
+                    resetCredits: state.resetCredits,
                     lastUpdated: state.lastUpdated,
                     status: state.status,
                     errorMessage: state.errorMessage
@@ -317,6 +318,7 @@ public final class AccountStore: ObservableObject {
             secondaryUsedPercent: previous.secondaryUsedPercent ?? returned.secondaryUsedPercent,
             primaryResetAt: previous.primaryResetAt ?? returned.primaryResetAt,
             secondaryResetAt: previous.secondaryResetAt ?? returned.secondaryResetAt,
+            resetCredits: previous.resetCredits ?? returned.resetCredits,
             lastUpdated: previous.lastUpdated ?? returned.lastUpdated,
             status: returned.status,
             errorMessage: returned.errorMessage
@@ -341,6 +343,7 @@ public final class AccountStore: ObservableObject {
                 secondaryUsedPercent: result.state.secondaryUsedPercent,
                 secondaryRemainingPercent: result.state.secondaryRemainingPercent,
                 secondaryResetAt: result.state.secondaryResetAt,
+                resetCredits: result.state.resetCredits,
                 lastUpdated: result.state.lastUpdated
             )
         )
@@ -367,6 +370,7 @@ public final class AccountStore: ObservableObject {
             secondaryRemainingPercent: snapshot.secondaryRemainingPercent,
             primaryResetAt: snapshot.primaryResetAt,
             secondaryResetAt: snapshot.secondaryResetAt,
+            resetCredits: snapshot.resetCredits,
             lastUpdated: snapshot.lastUpdated,
             status: .loading
         )
@@ -383,6 +387,7 @@ public final class AccountStore: ObservableObject {
             secondaryUsedPercent: previous.secondaryUsedPercent,
             primaryResetAt: previous.primaryResetAt,
             secondaryResetAt: previous.secondaryResetAt,
+            resetCredits: previous.resetCredits,
             lastUpdated: previous.lastUpdated,
             status: .loading
         )
@@ -404,6 +409,7 @@ public final class AccountStore: ObservableObject {
             secondaryUsedPercent: previous.secondaryUsedPercent,
             primaryResetAt: previous.primaryResetAt,
             secondaryResetAt: previous.secondaryResetAt,
+            resetCredits: previous.resetCredits,
             lastUpdated: previous.lastUpdated,
             status: .error,
             errorMessage: message

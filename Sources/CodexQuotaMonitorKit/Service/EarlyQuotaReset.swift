@@ -21,7 +21,7 @@ public struct EarlyQuotaReset: Equatable, Sendable {
         }
     }
 
-    /// 이전 예정 시각 전 사용량 감소와 초기화 근거가 있는 구간만 반환
+    /// 조기 초기화 중 리셋권 사용·사용 여부 불명확한 조회 제외
     public static func detect(
         previous: PreferencesStore.QuotaSnapshot?,
         current: AccountState,
@@ -47,7 +47,10 @@ public struct EarlyQuotaReset: Equatable, Sendable {
         ) {
             windows.append(.secondary)
         }
-        guard !windows.isEmpty else { return nil }
+        guard !windows.isEmpty,
+              let credits = current.resetCredits,
+              credits.usageEvidence(comparedTo: previous.resetCredits, now: now) == .notObserved
+        else { return nil }
         return EarlyQuotaReset(accountID: current.id, windows: windows)
     }
 
