@@ -28,6 +28,7 @@ public final class PreferencesStore: ObservableObject {
         public let secondaryUsedPercent: Double?
         public let secondaryRemainingPercent: Double?
         public let secondaryResetAt: Date?
+        public let resetCredits: RateLimitResetCredits?
         public let lastUpdated: Date?
 
         public var primaryUsedPercent: Double? { usedPercent }
@@ -41,6 +42,7 @@ public final class PreferencesStore: ObservableObject {
             secondaryUsedPercent: Double? = nil,
             secondaryRemainingPercent: Double? = nil,
             secondaryResetAt: Date? = nil,
+            resetCredits: RateLimitResetCredits? = nil,
             lastUpdated: Date? = nil
         ) {
             self.usedPercent = usedPercent.map(AccountState.clampPercent)
@@ -49,6 +51,7 @@ public final class PreferencesStore: ObservableObject {
             self.secondaryUsedPercent = secondaryUsedPercent.map(AccountState.clampPercent)
             self.secondaryRemainingPercent = secondaryRemainingPercent.map(AccountState.clampPercent)
             self.secondaryResetAt = secondaryResetAt
+            self.resetCredits = resetCredits
             self.lastUpdated = lastUpdated
         }
     }

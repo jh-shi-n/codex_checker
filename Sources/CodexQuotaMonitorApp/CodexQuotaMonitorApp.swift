@@ -27,6 +27,7 @@ struct CodexQuotaMonitorApp: App {
 final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let preferences: PreferencesStore
     let accountStore: AccountStore
+    let quotaResetNotifications = QuotaResetNotificationService()
     let refreshService: RefreshService
     let launchAtLoginService: LaunchAtLoginService
     let sessionActivityProvider: AppServerSessionActivityProvider
@@ -180,6 +181,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             )
         )
         super.init()
+
+        accountStore.onEarlyQuotaReset = { [weak self] reset in
+            self?.quotaResetNotifications.notify(reset)
+        }
 
         activityToastCancellable = sessionActivityToastQueue.$currentLeft
             .combineLatest(sessionActivityToastQueue.$currentRight)

@@ -22,6 +22,9 @@ public final class AccountStore: ObservableObject {
     @Published public private(set) var configs: [AccountConfig]
     @Published public private(set) var states: [AccountState]
 
+    /// 최신 정상 결과에서 감지한 조기 리셋 전달; 동일 결과 재조회 시 재통지 제외
+    public var onEarlyQuotaReset: (@MainActor (EarlyQuotaReset) -> Void)?
+
     /// 계정 설정 변경에 따른 비동기 결과 격리용 버전
     public var configurationRevision: Int { configRevision }
 
@@ -266,6 +269,7 @@ public final class AccountStore: ObservableObject {
                     secondaryUsedPercent: state.secondaryUsedPercent,
                     primaryResetAt: state.primaryResetAt,
                     secondaryResetAt: state.secondaryResetAt,
+                    resetCredits: state.resetCredits,
                     lastUpdated: state.lastUpdated,
                     status: state.status,
                     errorMessage: state.errorMessage
@@ -314,16 +318,22 @@ public final class AccountStore: ObservableObject {
             secondaryUsedPercent: previous.secondaryUsedPercent ?? returned.secondaryUsedPercent,
             primaryResetAt: previous.primaryResetAt ?? returned.primaryResetAt,
             secondaryResetAt: previous.secondaryResetAt ?? returned.secondaryResetAt,
+            resetCredits: previous.resetCredits ?? returned.resetCredits,
             lastUpdated: previous.lastUpdated ?? returned.lastUpdated,
             status: returned.status,
             errorMessage: returned.errorMessage
         )
     }
 
+    /// 최신 상태 및 정상 스냅샷 저장 후 조기 리셋 이벤트 전달
     private func apply(_ result: AccountFetchResult) {
         guard let index = states.firstIndex(where: { $0.id == result.config.id }) else { return }
         states[index] = result.state
         guard result.config.isConfigured, result.state.status == .normal else { return }
+        let earlyReset = EarlyQuotaReset.detect(
+            previous: preferencesStore.quotaSnapshot(for: result.config.home),
+            current: result.state
+        )
         preferencesStore.updateQuotaSnapshot(
             for: result.config.home,
             snapshot: PreferencesStore.QuotaSnapshot(
@@ -333,9 +343,13 @@ public final class AccountStore: ObservableObject {
                 secondaryUsedPercent: result.state.secondaryUsedPercent,
                 secondaryRemainingPercent: result.state.secondaryRemainingPercent,
                 secondaryResetAt: result.state.secondaryResetAt,
+                resetCredits: result.state.resetCredits,
                 lastUpdated: result.state.lastUpdated
             )
         )
+        if let earlyReset {
+            onEarlyQuotaReset?(earlyReset)
+        }
     }
 
     private static func initialState(
@@ -356,6 +370,7 @@ public final class AccountStore: ObservableObject {
             secondaryRemainingPercent: snapshot.secondaryRemainingPercent,
             primaryResetAt: snapshot.primaryResetAt,
             secondaryResetAt: snapshot.secondaryResetAt,
+            resetCredits: snapshot.resetCredits,
             lastUpdated: snapshot.lastUpdated,
             status: .loading
         )
@@ -372,6 +387,7 @@ public final class AccountStore: ObservableObject {
             secondaryUsedPercent: previous.secondaryUsedPercent,
             primaryResetAt: previous.primaryResetAt,
             secondaryResetAt: previous.secondaryResetAt,
+            resetCredits: previous.resetCredits,
             lastUpdated: previous.lastUpdated,
             status: .loading
         )
@@ -393,6 +409,7 @@ public final class AccountStore: ObservableObject {
             secondaryUsedPercent: previous.secondaryUsedPercent,
             primaryResetAt: previous.primaryResetAt,
             secondaryResetAt: previous.secondaryResetAt,
+            resetCredits: previous.resetCredits,
             lastUpdated: previous.lastUpdated,
             status: .error,
             errorMessage: message
