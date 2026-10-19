@@ -3,6 +3,8 @@ import Foundation
 /// Immutable snapshot consumed by the UI for one account.
 public struct AccountState: Identifiable, Codable, Equatable, Sendable {
     public let id: String
+    /// 서버의 통합 리셋권 잔여 개수와 선택적 소멸일 목록
+    public var resetCredits: RateLimitResetCredits?
     public var email: String?
     public var planType: String?
     public var primaryResetAt: Date?
@@ -74,10 +76,12 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
         usedPercent: Double? = nil,
         remainingPercent: Double? = nil,
         resetAt: Date? = nil,
+        resetCredits: RateLimitResetCredits? = nil,
         lastUpdated: Date? = nil,
         status: AccountStatus,
         errorMessage: String? = nil
     ) {
+        self.resetCredits = resetCredits
         self.id = id
         self.email = email
         self.planType = planType
@@ -125,7 +129,7 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, email, planType
+        case id, email, planType, resetCredits
         case primaryUsedPercent, secondaryUsedPercent
         case primaryRemainingPercent, secondaryRemainingPercent
         case primaryResetAt, secondaryResetAt
@@ -148,6 +152,7 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
             usedPercent: try container.decodeIfPresent(Double.self, forKey: .usedPercent),
             remainingPercent: try container.decodeIfPresent(Double.self, forKey: .remainingPercent),
             resetAt: try container.decodeIfPresent(Date.self, forKey: .resetAt),
+            resetCredits: try container.decodeIfPresent(RateLimitResetCredits.self, forKey: .resetCredits),
             lastUpdated: try container.decodeIfPresent(Date.self, forKey: .lastUpdated),
             status: try container.decode(AccountStatus.self, forKey: .status),
             errorMessage: try container.decodeIfPresent(String.self, forKey: .errorMessage)
@@ -156,6 +161,7 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(resetCredits, forKey: .resetCredits)
         try container.encode(id, forKey: .id)
         try container.encodeIfPresent(email, forKey: .email)
         try container.encodeIfPresent(planType, forKey: .planType)
