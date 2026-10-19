@@ -7,6 +7,7 @@ extension CodexQuotaMonitorAppDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = notification
         installWakeObserver()
+        quotaResetNotifications.start()
         lifecycleCoordinator.launch()
         Task { await sessionActivityMonitor.start() }
         tokenCleanupTask = Task { [tokenUsageCache] in

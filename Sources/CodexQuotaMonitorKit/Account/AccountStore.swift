@@ -22,6 +22,9 @@ public final class AccountStore: ObservableObject {
     @Published public private(set) var configs: [AccountConfig]
     @Published public private(set) var states: [AccountState]
 
+    /// 최신 정상 결과에서 감지한 조기 리셋 전달; 동일 결과 재조회 시 재통지 제외
+    public var onEarlyQuotaReset: (@MainActor (EarlyQuotaReset) -> Void)?
+
     /// 계정 설정 변경에 따른 비동기 결과 격리용 버전
     public var configurationRevision: Int { configRevision }
 
@@ -320,10 +323,15 @@ public final class AccountStore: ObservableObject {
         )
     }
 
+    /// 최신 상태 및 정상 스냅샷 저장 후 조기 리셋 이벤트 전달
     private func apply(_ result: AccountFetchResult) {
         guard let index = states.firstIndex(where: { $0.id == result.config.id }) else { return }
         states[index] = result.state
         guard result.config.isConfigured, result.state.status == .normal else { return }
+        let earlyReset = EarlyQuotaReset.detect(
+            previous: preferencesStore.quotaSnapshot(for: result.config.home),
+            current: result.state
+        )
         preferencesStore.updateQuotaSnapshot(
             for: result.config.home,
             snapshot: PreferencesStore.QuotaSnapshot(
@@ -336,6 +344,9 @@ public final class AccountStore: ObservableObject {
                 lastUpdated: result.state.lastUpdated
             )
         )
+        if let earlyReset {
+            onEarlyQuotaReset?(earlyReset)
+        }
     }
 
     private static func initialState(
