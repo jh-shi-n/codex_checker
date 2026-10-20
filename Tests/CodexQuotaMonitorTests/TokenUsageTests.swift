@@ -57,6 +57,50 @@ final class TokenUsageTests: XCTestCase {
         XCTAssertEqual(snapshot.last7Days.outputTokens, 9)
     }
 
+    /// 자정·감소·중복 이벤트의 증가분 날짜 배분 및 세션 중복 방지
+    func testProviderBucketsCumulativeDeltasAcrossMidnight() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeRollout(in: home, date: date(offset: -1), name: "midnight.jsonl", lines: [
+            #"{"timestamp":"2026-08-29T23:58:00Z","type":"session_meta"}"#,
+            #"{"timestamp":"2026-08-29T23:59:00Z","type":"token_count","usage":{"input_tokens":10,"output_tokens":4}}"#,
+            #"{"timestamp":"2026-08-30T00:01:00Z","type":"token_count","usage":{"input_tokens":25,"output_tokens":7}}"#,
+            #"{"timestamp":"2026-08-30T00:02:00Z","type":"token_count","usage":{"input_tokens":20,"output_tokens":6}}"#,
+            #"{"timestamp":"2026-08-30T00:03:00Z","type":"token_count","usage":{"input_tokens":25,"output_tokens":7}}"#,
+        ])
+        let reference = referenceDate
+        let snapshot = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+        XCTAssertEqual(snapshot.today, TokenUsageTotals(inputTokens: 15, outputTokens: 3))
+        XCTAssertEqual(snapshot.dailyPoints.dropLast().last?.totalTokens, 14)
+        XCTAssertEqual(snapshot.last7Days.totalTokens, 32)
+        XCTAssertEqual(snapshot.totalSessions, 1)
+        XCTAssertEqual(snapshot.dailyPoints.last?.sessionCount, 1)
+        XCTAssertEqual(snapshot.dailyPoints.dropLast().last?.sessionCount, 0)
+    }
+
+    /// 84일보다 오래된 디렉터리의 재개 세션에서 최근 증가분만 집계
+    func testProviderIncludesResumedOldRollout() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeRollout(in: home, date: date(offset: -100), name: "resumed.jsonl", lines: [
+            #"{"timestamp":"2026-05-22T10:00:00Z","type":"token_count","usage":{"input_tokens":100,"output_tokens":20}}"#,
+            #"{"timestamp":"2026-08-30T10:00:00Z","type":"token_count","usage":{"input_tokens":125,"output_tokens":25}}"#,
+        ])
+        let reference = referenceDate
+        let snapshot = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+        XCTAssertEqual(snapshot.today.totalTokens, 30)
+        XCTAssertEqual(snapshot.last30Days.totalTokens, 30)
+        XCTAssertEqual(snapshot.totalSessions, 1)
+    }
+
+    /// 이전 날짜 귀속 알고리즘의 payload 복원 차단
+    func testPayloadRejectsLegacyAggregationWithoutVersion() throws {
+        let payload = try TokenUsageSnapshotPayload(snapshot: usageSnapshot(inputTokens: 3, outputTokens: 1)).encode()
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        object.removeValue(forKey: "aggregationVersion")
+        XCTAssertThrowsError(try TokenUsageSnapshotPayload.decode(JSONSerialization.data(withJSONObject: object)))
+    }
+
     func testAggregatorZeroFills84DaysAndUsesInclusiveRangeBoundaries() {
         let aggregator = TokenUsageAggregator(calendar: calendar)
         let sessions = [

@@ -68,25 +68,19 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
             referenceDate: generatedAt,
             fileManager: fileManager
         )
-        var sessions: [TokenUsageSessionUsage] = []
-        sessions.reserveCapacity(candidates.count)
+        var dailyPoints: [TokenUsageDailyPoint] = []
         for candidate in candidates {
             if let parsed = parseRollout(candidate, fileManager: fileManager) {
-                sessions.append(TokenUsageSessionUsage(date: parsed.date, totals: parsed.totals))
+                dailyPoints.append(contentsOf: parsed)
             }
         }
 
-        return aggregator.aggregate(sessions: sessions, generatedAt: generatedAt)
+        return aggregator.aggregate(dailyPoints: dailyPoints, generatedAt: generatedAt)
     }
 
     private struct RolloutCandidate {
         let url: URL
         let directoryDate: Date?
-    }
-
-    private struct ParsedRollout {
-        let date: Date
-        let totals: TokenUsageTotals
     }
 
     private func rolloutCandidates(
@@ -97,7 +91,7 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         guard maxFileCount > 0,
               let enumerator = fileManager.enumerator(
                   at: sessionsURL,
-                  includingPropertiesForKeys: [.isRegularFileKey],
+                  includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
                   options: [.skipsHiddenFiles]
               ) else {
             return []
@@ -113,7 +107,7 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
 
         for case let url as URL in enumerator {
             guard url.pathExtension.lowercased() == "jsonl",
-                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
                   values.isRegularFile == true else {
                 continue
             }
@@ -124,7 +118,11 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
             )
             if let directoryDate {
                 let day = calendar.startOfDay(for: directoryDate)
-                guard day >= firstDay, day <= today else { continue }
+                guard day <= today else { continue }
+                // 과거 디렉터리에서 최근 재개된 세션의 집계 포함
+                if day < firstDay, (values.contentModificationDate ?? .distantPast) < firstDay {
+                    continue
+                }
             }
             candidates.append(RolloutCandidate(url: url, directoryDate: directoryDate))
         }
@@ -139,14 +137,16 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         return Array(candidates.prefix(maxFileCount))
     }
 
+    /// 누적 증가분의 날짜별 배분 및 마지막 사용일 기준 세션 중복 제거
     private func parseRollout(
         _ candidate: RolloutCandidate,
         fileManager: FileManager
-    ) -> ParsedRollout? {
+    ) -> [TokenUsageDailyPoint]? {
         guard fileManager.isReadableFile(atPath: candidate.url.path) else { return nil }
         var safeDate: Date?
-        var highestTotals: TokenUsageTotals?
-        var sawTokenUsage = false
+        var highestTotals = TokenUsageTotals.zero
+        var byDay: [Date: TokenUsageTotals] = [:]
+        var latestUsageDay: Date?
 
         let didRead = readJSONLines(at: candidate.url) { line in
             guard let object = try? JSONSerialization.jsonObject(
@@ -155,33 +155,34 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
             ), let root = object as? [String: Any] else {
                 return
             }
-
-            if safeDate == nil {
-                safeDate = timestamp(in: root)
-            }
+            let eventDate = timestamp(in: root)
+            if safeDate == nil { safeDate = eventDate }
             guard isTokenCountEvent(root),
-                  let totals = tokenTotals(in: root) else {
+                  let totals = tokenTotals(in: root),
+                  let date = eventDate ?? safeDate ?? candidate.directoryDate else {
                 return
             }
 
-            sawTokenUsage = true
-            // Token-count events are cumulative. Keep the highest coherent
-            // total (equal totals use the latest line) rather than summing
-            // every event in the rollout.
-            if highestTotals == nil || totals.totalTokens >= highestTotals!.totalTokens {
-                highestTotals = totals
-            }
+            let day = calendar.startOfDay(for: date)
+            let delta = TokenUsageTotals(
+                inputTokens: max(0, totals.inputTokens - highestTotals.inputTokens),
+                outputTokens: max(0, totals.outputTokens - highestTotals.outputTokens)
+            )
+            highestTotals = TokenUsageTotals(
+                inputTokens: max(highestTotals.inputTokens, totals.inputTokens),
+                outputTokens: max(highestTotals.outputTokens, totals.outputTokens)
+            )
+            byDay[day] = (byDay[day] ?? .zero).adding(delta)
+            latestUsageDay = max(latestUsageDay ?? day, day)
         }
-        guard didRead else {
-            return nil
+        guard didRead else { return nil }
+        return byDay.keys.sorted().map { day in
+            TokenUsageDailyPoint(
+                date: day,
+                totals: byDay[day] ?? .zero,
+                sessionCount: day == latestUsageDay ? 1 : 0
+            )
         }
-
-        guard sawTokenUsage,
-              let highestTotals,
-              let date = safeDate ?? candidate.directoryDate else {
-            return nil
-        }
-        return ParsedRollout(date: date, totals: highestTotals)
     }
 
     /// Streams one file and retains at most `maxLineBytes` bytes for a line.
