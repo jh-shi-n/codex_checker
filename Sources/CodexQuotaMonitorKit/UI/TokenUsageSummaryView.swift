@@ -33,7 +33,7 @@ public struct TokenUsageSummaryView: View {
         } else if let snapshot, snapshot.availability == .unavailable {
             dashboardEmptyState(
                 title: "Token usage unavailable",
-                detail: "Local rollout usage could not be read for this account."
+                detail: snapshot.error?.userMessage ?? "로컬 토큰 사용량을 읽지 못했습니다."
             )
         } else if let snapshot, hasUsage(snapshot) {
             HStack(alignment: .top, spacing: 8) {

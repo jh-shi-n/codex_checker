@@ -94,6 +94,20 @@ public enum TokenUsageSnapshotError: String, Codable, Equatable, Sendable {
     case sessionsDirectoryUnavailable
     case storageUnavailable
     case superseded
+    case fileLimitExceeded
+    case rolloutReadFailed
+
+    /// 민감한 경로를 제외한 집계 실패 원인 안내
+    public var userMessage: String {
+        switch self {
+        case .invalidHome: return "계정 경로를 확인해 주세요."
+        case .sessionsDirectoryUnavailable: return "로컬 세션 폴더를 읽을 수 없습니다."
+        case .storageUnavailable: return "토큰 집계를 DB에 저장하지 못했습니다. 저장 공간과 파일 접근 권한을 확인해 주세요."
+        case .superseded: return "계정 설정이 변경되었습니다. 다시 업데이트해 주세요."
+        case .fileLimitExceeded: return "세션 파일 수가 집계 상한을 초과했습니다. 일부 파일만 집계한 결과는 표시하지 않습니다."
+        case .rolloutReadFailed: return "일부 세션 파일을 읽지 못했습니다. 파일 접근 권한을 확인한 뒤 다시 업데이트해 주세요."
+        }
+    }
 }
 
 /// Immutable, privacy-bounded usage data for one configured CODEX_HOME.

@@ -63,16 +63,22 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
             )
         }
 
-        let candidates = rolloutCandidates(
+        let scan = rolloutCandidates(
             in: sessionsURL,
             referenceDate: generatedAt,
             fileManager: fileManager
         )
+        if let error = scan.error {
+            return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: error)
+        }
         var dailyPoints: [TokenUsageDailyPoint] = []
-        for candidate in candidates {
-            if let parsed = parseRollout(candidate, fileManager: fileManager) {
-                dailyPoints.append(contentsOf: parsed)
+        for candidate in scan.files {
+            guard let parsed = parseRollout(candidate, fileManager: fileManager) else {
+                return aggregator.emptySnapshot(
+                    generatedAt: generatedAt, availability: .unavailable, error: .rolloutReadFailed
+                )
             }
+            dailyPoints.append(contentsOf: parsed)
         }
 
         return aggregator.aggregate(dailyPoints: dailyPoints, generatedAt: generatedAt)
@@ -83,18 +89,29 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         let directoryDate: Date?
     }
 
+    /// 후보 파일과 전체 탐색의 완전성 상태
+    private struct RolloutScan {
+        let files: [RolloutCandidate]
+        let error: TokenUsageSnapshotError?
+    }
+
+    /// 상한 초과·탐색 실패를 부분 정상 통계와 구분하는 후보 수집
     private func rolloutCandidates(
         in sessionsURL: URL,
         referenceDate: Date,
         fileManager: FileManager
-    ) -> [RolloutCandidate] {
-        guard maxFileCount > 0,
-              let enumerator = fileManager.enumerator(
+    ) -> RolloutScan {
+        var scanError: TokenUsageSnapshotError?
+        guard let enumerator = fileManager.enumerator(
                   at: sessionsURL,
                   includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
-                  options: [.skipsHiddenFiles]
+                  options: [.skipsHiddenFiles],
+                  errorHandler: { _, _ in
+                      scanError = .rolloutReadFailed
+                      return false
+                  }
               ) else {
-            return []
+            return RolloutScan(files: [], error: .sessionsDirectoryUnavailable)
         }
 
         let today = calendar.startOfDay(for: referenceDate)
@@ -106,11 +123,12 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         var candidates: [RolloutCandidate] = []
 
         for case let url as URL in enumerator {
-            guard url.pathExtension.lowercased() == "jsonl",
-                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
-                  values.isRegularFile == true else {
-                continue
+            guard url.pathExtension.lowercased() == "jsonl" else { continue }
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]) else {
+                scanError = .rolloutReadFailed
+                break
             }
+            guard values.isRegularFile == true else { continue }
 
             let directoryDate = dateFromSessionsDirectory(
                 for: url,
@@ -134,7 +152,10 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
             // This ordering is internal only; no path is exposed in a model.
             return lhs.url.path < rhs.url.path
         }
-        return Array(candidates.prefix(maxFileCount))
+        if candidates.count > maxFileCount {
+            return RolloutScan(files: [], error: .fileLimitExceeded)
+        }
+        return RolloutScan(files: candidates, error: scanError)
     }
 
     /// 누적 증가분의 날짜별 배분 및 마지막 사용일 기준 세션 중복 제거

@@ -93,6 +93,42 @@ final class TokenUsageTests: XCTestCase {
         XCTAssertEqual(snapshot.totalSessions, 1)
     }
 
+    /// 상한 초과 파일의 부분 합계 거부 및 마지막 성공 캐시 보존
+    func testFileLimitFailurePreservesLastSuccessfulCache() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeRollout(in: home, date: referenceDate, name: "one.jsonl", lines: [
+            #"{"type":"token_count","usage":{"input_tokens":10,"output_tokens":2}}"#,
+        ])
+        let reference = referenceDate
+        let provider = LocalTokenUsageProvider(calendar: calendar, now: { reference }, maxFileCount: 1)
+        let cache = TokenUsageSnapshotCache(provider: provider, now: { reference }, calendar: calendar)
+        let valid = await cache.update(accountID: "C1", home: home)
+        XCTAssertEqual(valid.today.totalTokens, 12)
+        try writeRollout(in: home, date: referenceDate, name: "two.jsonl", lines: [
+            #"{"type":"token_count","usage":{"input_tokens":20,"output_tokens":3}}"#,
+        ])
+        let failed = await cache.update(accountID: "C1", home: home)
+        let preserved = await cache.cachedSnapshot(for: "C1")
+        XCTAssertEqual(failed.availability, .unavailable)
+        XCTAssertEqual(failed.error, .fileLimitExceeded)
+        XCTAssertEqual(preserved, valid)
+    }
+
+    /// 읽기 불가 파일의 정상 0 사용량 오인 방지
+    func testUnreadableRolloutReportsFailure() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let file = home.appendingPathComponent("sessions/locked.jsonl")
+        try Data(#"{"type":"token_count","usage":{"input_tokens":10}}"#.utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
+        let reference = referenceDate
+        let result = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+        XCTAssertEqual(result.availability, .unavailable)
+        XCTAssertEqual(result.error, .rolloutReadFailed)
+    }
+
     /// 이전 날짜 귀속 알고리즘의 payload 복원 차단
     func testPayloadRejectsLegacyAggregationWithoutVersion() throws {
         let payload = try TokenUsageSnapshotPayload(snapshot: usageSnapshot(inputTokens: 3, outputTokens: 1)).encode()

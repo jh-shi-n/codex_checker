@@ -18,6 +18,7 @@ public struct AccountDetailView: View {
     @State private var tokenUsageSnapshot: TokenUsageSnapshot?
     @State private var isTokenUsageLoading = false
     @State private var tokenUsageRefreshFailed = false
+    @State private var tokenUsageRefreshError: TokenUsageSnapshotError?
     @State private var isTokenUsageExpanded = false
     @State private var probePresentation: UsageWindowProbePresentationResult?
     @State private var isProbeRunning = false
@@ -191,7 +192,7 @@ public struct AccountDetailView: View {
                 )
 
                 if tokenUsageRefreshFailed {
-                    Text("토큰 사용량 업데이트 실패")
+                    Text(tokenUsageRefreshError?.userMessage ?? "토큰 사용량 업데이트 실패")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -340,6 +341,7 @@ public struct AccountDetailView: View {
                     tokenUsageSnapshot = snapshot
                 }
                 tokenUsageRefreshFailed = true
+                tokenUsageRefreshError = snapshot.error
             }
             isTokenUsageLoading = false
         }
