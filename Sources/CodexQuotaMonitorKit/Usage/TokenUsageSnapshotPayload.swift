@@ -7,6 +7,9 @@ struct TokenUsageSnapshotPayload: Codable {
     /// 일별 집계 저장 상한
     private static let maximumDailyPoints = TokenUsageSnapshot.historyDayCount
 
+    /// 날짜별 증가분 집계와 호환되는 payload 버전
+    private static let currentAggregationVersion = 2
+    private let aggregationVersion: Int
     private let generatedAt: Double
     private let dailyPoints: [DailyPoint]
     private let today: Totals
@@ -19,6 +22,7 @@ struct TokenUsageSnapshotPayload: Codable {
 
     /// 제한된 일별 집계와 요약값으로 직렬화 모델 구성
     init(snapshot: TokenUsageSnapshot) {
+        aggregationVersion = Self.currentAggregationVersion
         generatedAt = snapshot.generatedAt.timeIntervalSince1970
         dailyPoints = snapshot.dailyPoints
             .suffix(Self.maximumDailyPoints)
@@ -40,10 +44,11 @@ struct TokenUsageSnapshotPayload: Codable {
     /// 직렬화 모델에서 불변 snapshot 복원
     static func decode(_ data: Data) throws -> TokenUsageSnapshot {
         let payload = try JSONDecoder().decode(Self.self, from: data)
-        guard payload.dailyPoints.count <= maximumDailyPoints else {
+        guard payload.aggregationVersion == currentAggregationVersion,
+              payload.dailyPoints.count <= maximumDailyPoints else {
             throw DecodingError.dataCorrupted(.init(
                 codingPath: [],
-                debugDescription: "일별 집계 한도 초과"
+                debugDescription: "집계 버전 불일치 또는 일별 집계 한도 초과"
             ))
         }
         return TokenUsageSnapshot(

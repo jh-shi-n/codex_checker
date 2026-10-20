@@ -33,7 +33,7 @@ public struct TokenUsageSummaryView: View {
         } else if let snapshot, snapshot.availability == .unavailable {
             dashboardEmptyState(
                 title: "Token usage unavailable",
-                detail: "Local rollout usage could not be read for this account."
+                detail: snapshot.error?.userMessage ?? "로컬 토큰 사용량을 읽지 못했습니다."
             )
         } else if let snapshot, hasUsage(snapshot) {
             HStack(alignment: .top, spacing: 8) {
@@ -44,7 +44,8 @@ public struct TokenUsageSummaryView: View {
                     title: "총 세션",
                     subtitle: "Total sessions",
                     totals: totalTotals(snapshot),
-                    average: snapshot.averageTokensPerSession
+                    average: snapshot.averageTokensPerSession,
+                    sessionCount: snapshot.totalSessions
                 )
             }
         } else {
@@ -60,23 +61,28 @@ public struct TokenUsageSummaryView: View {
         title: String,
         subtitle: String,
         totals: TokenUsageTotals,
-        average: Double
+        average: Double,
+        sessionCount: Int64? = nil
     ) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
-            Text(AccountDashboardFormatting.abbreviatedNumber(totals.totalTokens))
+            Text(sessionCount.map(AccountDashboardFormatting.numberText)
+                 ?? AccountDashboardFormatting.abbreviatedNumber(totals.totalTokens))
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
                 .frame(maxWidth: .infinity, alignment: .center)
-            Text("tokens")
+            Text(sessionCount == nil ? "tokens" : "세션")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
 
             Divider()
                 .opacity(0.4)
+            if sessionCount != nil {
+                tokenRow(label: "전체 토큰", value: totals.totalTokens)
+            }
             tokenRow(label: "입력", value: totals.inputTokens)
             tokenRow(label: "출력", value: totals.outputTokens)
             tokenRow(label: "평균", value: Int64(max(0, average.rounded())))
@@ -93,7 +99,8 @@ public struct TokenUsageSummaryView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(subtitle), \(AccountDashboardFormatting.numberText(totals.totalTokens)) tokens, input \(AccountDashboardFormatting.numberText(totals.inputTokens)), output \(AccountDashboardFormatting.numberText(totals.outputTokens))"
+            sessionCount.map { "총 세션 \(AccountDashboardFormatting.numberText($0))개, 전체 토큰 \(AccountDashboardFormatting.numberText(totals.totalTokens))" }
+                ?? "\(subtitle), \(AccountDashboardFormatting.numberText(totals.totalTokens)) tokens, input \(AccountDashboardFormatting.numberText(totals.inputTokens)), output \(AccountDashboardFormatting.numberText(totals.outputTokens))"
         )
     }
 
