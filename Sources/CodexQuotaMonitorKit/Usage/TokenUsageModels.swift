@@ -166,6 +166,28 @@ public struct TokenUsageSnapshot: Equatable, Sendable {
             error: error
         )
     }
+    /// 원본 집계 시각을 유지한 현재 날짜 기준 기간 요약 재계산
+    public func rebased(to referenceDate: Date, calendar: Calendar = .autoupdatingCurrent) -> Self {
+        guard !calendar.isDate(generatedAt, inSameDayAs: referenceDate) else { return self }
+        let rebased = TokenUsageAggregator(calendar: calendar).aggregate(
+            dailyPoints: dailyPoints,
+            generatedAt: referenceDate,
+            availability: availability,
+            error: error
+        )
+        return Self(
+            generatedAt: generatedAt,
+            dailyPoints: rebased.dailyPoints,
+            today: rebased.today,
+            last7Days: rebased.last7Days,
+            last30Days: rebased.last30Days,
+            totalSessions: rebased.totalSessions,
+            averageTokensPerSession: rebased.averageTokensPerSession,
+            availability: availability,
+            error: error
+        )
+    }
+
 }
 
 /// A home-based provider contract keeps account credentials and account

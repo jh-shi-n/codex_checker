@@ -24,6 +24,7 @@ public actor TokenUsageSnapshotCache {
     private let invalidationState: InvalidationState
     private let persistence: SQLiteTokenUsageSnapshotStore?
     private let now: @Sendable () -> Date
+    private let calendar: Calendar
     private var accountHomes: [String: URL]
     private var snapshots: [String: Entry] = [:]
 
@@ -41,12 +42,14 @@ public actor TokenUsageSnapshotCache {
         provider: any TokenUsageProvider = LocalTokenUsageProvider(),
         databaseURL: URL? = nil,
         accountHomes: [String: URL] = [:],
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        calendar: Calendar = .autoupdatingCurrent
     ) {
         self.provider = provider
         self.invalidationState = InvalidationState()
         self.persistence = databaseURL.map { SQLiteTokenUsageSnapshotStore(databaseURL: $0) }
         self.now = now
+        self.calendar = calendar
         self.accountHomes = Self.normalizedHomes(accountHomes)
     }
 
@@ -61,7 +64,7 @@ public actor TokenUsageSnapshotCache {
            entry.token == token,
            entry.expiresAt > referenceDate,
            expectedIdentity == nil || entry.homeIdentity == expectedIdentity {
-            return entry.snapshot
+            return entry.snapshot.rebased(to: referenceDate, calendar: calendar)
         }
         snapshots.removeValue(forKey: accountID)
 
@@ -84,7 +87,7 @@ public actor TokenUsageSnapshotCache {
             expiresAt: record.expiresAt,
             homeIdentity: expectedIdentity
         )
-        return snapshot
+        return snapshot.rebased(to: referenceDate, calendar: calendar)
     }
 
     /// 호환용 스냅샷 조회 이름
