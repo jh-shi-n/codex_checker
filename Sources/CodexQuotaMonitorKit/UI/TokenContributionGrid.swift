@@ -31,7 +31,7 @@ public struct TokenContributionGrid: View {
             }
 
             if let snapshot, snapshot.availability == .unavailable {
-                emptyGridMessage("Token contribution data unavailable")
+                emptyGridMessage(snapshot.error?.userMessage ?? "토큰 기여량을 읽지 못했습니다.")
             } else if let snapshot {
                 Text("집계 기준: \(AccountDashboardFormatting.dateText(snapshot.generatedAt))")
                     .font(.caption2)
