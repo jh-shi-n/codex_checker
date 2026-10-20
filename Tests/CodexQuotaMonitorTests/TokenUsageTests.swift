@@ -57,6 +57,86 @@ final class TokenUsageTests: XCTestCase {
         XCTAssertEqual(snapshot.last7Days.outputTokens, 9)
     }
 
+    /// 자정·감소·중복 이벤트의 증가분 날짜 배분 및 세션 중복 방지
+    func testProviderBucketsCumulativeDeltasAcrossMidnight() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeRollout(in: home, date: date(offset: -1), name: "midnight.jsonl", lines: [
+            #"{"timestamp":"2026-08-29T23:58:00Z","type":"session_meta"}"#,
+            #"{"timestamp":"2026-08-29T23:59:00Z","type":"token_count","usage":{"input_tokens":10,"output_tokens":4}}"#,
+            #"{"timestamp":"2026-08-30T00:01:00Z","type":"token_count","usage":{"input_tokens":25,"output_tokens":7}}"#,
+            #"{"timestamp":"2026-08-30T00:02:00Z","type":"token_count","usage":{"input_tokens":20,"output_tokens":6}}"#,
+            #"{"timestamp":"2026-08-30T00:03:00Z","type":"token_count","usage":{"input_tokens":25,"output_tokens":7}}"#,
+        ])
+        let reference = referenceDate
+        let snapshot = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+        XCTAssertEqual(snapshot.today, TokenUsageTotals(inputTokens: 15, outputTokens: 3))
+        XCTAssertEqual(snapshot.dailyPoints.dropLast().last?.totalTokens, 14)
+        XCTAssertEqual(snapshot.last7Days.totalTokens, 32)
+        XCTAssertEqual(snapshot.totalSessions, 1)
+        XCTAssertEqual(snapshot.dailyPoints.last?.sessionCount, 1)
+        XCTAssertEqual(snapshot.dailyPoints.dropLast().last?.sessionCount, 0)
+    }
+
+    /// 84일보다 오래된 디렉터리의 재개 세션에서 최근 증가분만 집계
+    func testProviderIncludesResumedOldRollout() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeRollout(in: home, date: date(offset: -100), name: "resumed.jsonl", lines: [
+            #"{"timestamp":"2026-05-22T10:00:00Z","type":"token_count","usage":{"input_tokens":100,"output_tokens":20}}"#,
+            #"{"timestamp":"2026-08-30T10:00:00Z","type":"token_count","usage":{"input_tokens":125,"output_tokens":25}}"#,
+        ])
+        let reference = referenceDate
+        let snapshot = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+        XCTAssertEqual(snapshot.today.totalTokens, 30)
+        XCTAssertEqual(snapshot.last30Days.totalTokens, 30)
+        XCTAssertEqual(snapshot.totalSessions, 1)
+    }
+
+    /// 상한 초과 파일의 부분 합계 거부 및 마지막 성공 캐시 보존
+    func testFileLimitFailurePreservesLastSuccessfulCache() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeRollout(in: home, date: referenceDate, name: "one.jsonl", lines: [
+            #"{"type":"token_count","usage":{"input_tokens":10,"output_tokens":2}}"#,
+        ])
+        let reference = referenceDate
+        let provider = LocalTokenUsageProvider(calendar: calendar, now: { reference }, maxFileCount: 1)
+        let cache = TokenUsageSnapshotCache(provider: provider, now: { reference }, calendar: calendar)
+        let valid = await cache.update(accountID: "C1", home: home)
+        XCTAssertEqual(valid.today.totalTokens, 12)
+        try writeRollout(in: home, date: referenceDate, name: "two.jsonl", lines: [
+            #"{"type":"token_count","usage":{"input_tokens":20,"output_tokens":3}}"#,
+        ])
+        let failed = await cache.update(accountID: "C1", home: home)
+        let preserved = await cache.cachedSnapshot(for: "C1")
+        XCTAssertEqual(failed.availability, .unavailable)
+        XCTAssertEqual(failed.error, .fileLimitExceeded)
+        XCTAssertEqual(preserved, valid)
+    }
+
+    /// 읽기 불가 파일의 정상 0 사용량 오인 방지
+    func testUnreadableRolloutReportsFailure() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let file = home.appendingPathComponent("sessions/locked.jsonl")
+        try Data(#"{"type":"token_count","usage":{"input_tokens":10}}"#.utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
+        let reference = referenceDate
+        let result = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+        XCTAssertEqual(result.availability, .unavailable)
+        XCTAssertEqual(result.error, .rolloutReadFailed)
+    }
+
+    /// 이전 날짜 귀속 알고리즘의 payload 복원 차단
+    func testPayloadRejectsLegacyAggregationWithoutVersion() throws {
+        let payload = try TokenUsageSnapshotPayload(snapshot: usageSnapshot(inputTokens: 3, outputTokens: 1)).encode()
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        object.removeValue(forKey: "aggregationVersion")
+        XCTAssertThrowsError(try TokenUsageSnapshotPayload.decode(JSONSerialization.data(withJSONObject: object)))
+    }
+
     func testAggregatorZeroFills84DaysAndUsesInclusiveRangeBoundaries() {
         let aggregator = TokenUsageAggregator(calendar: calendar)
         let sessions = [
@@ -174,8 +254,11 @@ final class TokenUsageTests: XCTestCase {
             ],
             generatedAt: referenceDate
         )
+        let reference = referenceDate
         let cache = TokenUsageSnapshotCache(
-            provider: FixedTokenUsageProvider(snapshot: replacement)
+            provider: FixedTokenUsageProvider(snapshot: replacement),
+            now: { reference },
+            calendar: calendar
         )
 
         let cacheMiss = await cache.cachedSnapshot(for: "C1")
@@ -210,7 +293,8 @@ final class TokenUsageTests: XCTestCase {
             provider: FixedTokenUsageProvider(snapshot: snapshot),
             databaseURL: databaseURL,
             accountHomes: ["C1": home],
-            now: { clock.now() }
+            now: { clock.now() },
+            calendar: calendar
         )
 
         let updated = await firstCache.update(accountID: "C1", home: home)
@@ -223,13 +307,49 @@ final class TokenUsageTests: XCTestCase {
             provider: restartProvider,
             databaseURL: databaseURL,
             accountHomes: ["C1": home],
-            now: { clock.now() }
+            now: { clock.now() },
+            calendar: calendar
         )
         let restored = await restartedCache.cachedSnapshot(for: "C1")
         let providerCalls = await restartProvider.callCount()
 
         XCTAssertEqual(restored, snapshot)
         XCTAssertEqual(providerCalls, 0)
+    }
+
+    /// 자정 이후 메모리·디스크 캐시의 요약 재계산과 원래 집계 시각·TTL 보존
+    func testCachedSnapshotRebasesPeriodsAcrossDayAndRestart() async throws {
+        let directory = try makePersistenceDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let reference = referenceDate
+        let clock = MutableTokenUsageTestClock(reference)
+        let databaseURL = directory.appendingPathComponent("token-usage.sqlite")
+        let snapshot = TokenUsageAggregator(calendar: calendar).aggregate(sessions: [
+            TokenUsageSessionUsage(date: reference, inputTokens: 10, outputTokens: 2),
+            TokenUsageSessionUsage(date: date(offset: -6), inputTokens: 20, outputTokens: 3),
+            TokenUsageSessionUsage(date: date(offset: -29), inputTokens: 30, outputTokens: 4),
+        ], generatedAt: reference)
+        let cache = TokenUsageSnapshotCache(provider: FixedTokenUsageProvider(snapshot: snapshot),
+            databaseURL: databaseURL, accountHomes: ["C1": home], now: { clock.now() }, calendar: calendar)
+        _ = await cache.update(accountID: "C1", home: home)
+        clock.set(reference.addingTimeInterval(24 * 60 * 60))
+        let cached = await cache.cachedSnapshot(for: "C1")
+        let memory = try XCTUnwrap(cached)
+        let restarted = TokenUsageSnapshotCache(databaseURL: databaseURL,
+            accountHomes: ["C1": home], now: { clock.now() }, calendar: calendar)
+        let restored = await restarted.cachedSnapshot(for: "C1")
+        XCTAssertEqual(memory, restored)
+        XCTAssertEqual(memory.today, .zero)
+        XCTAssertEqual(memory.last7Days.totalTokens, 12)
+        XCTAssertEqual(memory.last30Days.totalTokens, 35)
+        XCTAssertEqual(memory.generatedAt, reference)
+        XCTAssertEqual(memory.dailyPoints.count, 84)
+        XCTAssertEqual(memory.dailyPoints.last?.date, calendar.startOfDay(for: clock.now()))
+        clock.set(reference.addingTimeInterval(TokenUsageSnapshotCache.snapshotLifetime))
+        let expired = await restarted.cachedSnapshot(for: "C1")
+        XCTAssertNil(expired)
     }
 
     /// 만료 경계에서 메모리와 SQLite 행 제거
@@ -245,7 +365,8 @@ final class TokenUsageTests: XCTestCase {
             provider: FixedTokenUsageProvider(snapshot: snapshot),
             databaseURL: databaseURL,
             accountHomes: ["C1": home],
-            now: { clock.now() }
+            now: { clock.now() },
+            calendar: calendar
         )
         _ = await cache.update(accountID: "C1", home: home)
 
@@ -255,7 +376,8 @@ final class TokenUsageTests: XCTestCase {
         let restoredAfterExpiry = await TokenUsageSnapshotCache(
             databaseURL: databaseURL,
             accountHomes: ["C1": home],
-            now: { clock.now() }
+            now: { clock.now() },
+            calendar: calendar
         ).cachedSnapshot(for: "C1")
 
         XCTAssertNil(expired)
@@ -276,7 +398,8 @@ final class TokenUsageTests: XCTestCase {
             provider: provider,
             databaseURL: databaseDirectory.appendingPathComponent("token-usage.sqlite"),
             accountHomes: ["C1": home],
-            now: { clock.now() }
+            now: { clock.now() },
+            calendar: calendar
         )
         _ = await cache.update(accountID: "C1", home: home)
 
@@ -286,7 +409,7 @@ final class TokenUsageTests: XCTestCase {
         clock.set(referenceDate.addingTimeInterval(14 * 24 * 60 * 60 + 1))
         let stillValid = await cache.cachedSnapshot(for: "C1")
 
-        XCTAssertEqual(stillValid, renewed)
+        XCTAssertEqual(stillValid, renewed.rebased(to: clock.now(), calendar: calendar))
     }
 
     /// unavailable 갱신의 기존 데이터 보존과 TTL 불연장
@@ -303,7 +426,8 @@ final class TokenUsageTests: XCTestCase {
             provider: provider,
             databaseURL: databaseDirectory.appendingPathComponent("token-usage.sqlite"),
             accountHomes: ["C1": home],
-            now: { clock.now() }
+            now: { clock.now() },
+            calendar: calendar
         )
         _ = await cache.update(accountID: "C1", home: home)
 
@@ -315,7 +439,7 @@ final class TokenUsageTests: XCTestCase {
         let atOriginalExpiry = await cache.cachedSnapshot(for: "C1")
 
         XCTAssertEqual(failedRefresh, unavailable)
-        XCTAssertEqual(preserved, valid)
+        XCTAssertEqual(preserved, valid.rebased(to: referenceDate.addingTimeInterval(12 * 24 * 60 * 60), calendar: calendar))
         XCTAssertNil(atOriginalExpiry)
     }
 
@@ -373,7 +497,8 @@ final class TokenUsageTests: XCTestCase {
             provider: provider,
             databaseURL: databaseURL,
             accountHomes: ["C1": home],
-            now: { clock.now() }
+            now: { clock.now() },
+            calendar: calendar
         )
         _ = await cache.update(accountID: "C1", home: home)
         try FileManager.default.removeItem(at: databaseURL)
@@ -388,7 +513,7 @@ final class TokenUsageTests: XCTestCase {
 
         XCTAssertEqual(failedUpdate.availability, .unavailable)
         XCTAssertEqual(failedUpdate.error, .storageUnavailable)
-        XCTAssertEqual(preserved, valid)
+        XCTAssertEqual(preserved, valid.rebased(to: referenceDate.addingTimeInterval(5 * 24 * 60 * 60), calendar: calendar))
         XCTAssertNil(atOriginalExpiry)
     }
 

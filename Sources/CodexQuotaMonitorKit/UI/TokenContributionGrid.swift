@@ -31,8 +31,16 @@ public struct TokenContributionGrid: View {
             }
 
             if let snapshot, snapshot.availability == .unavailable {
-                emptyGridMessage("Token contribution data unavailable")
+                emptyGridMessage(snapshot.error?.userMessage ?? "토큰 기여량을 읽지 못했습니다.")
             } else if let snapshot {
+                Text("집계 기준: \(AccountDashboardFormatting.dateText(snapshot.generatedAt))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if !calendar.isDateInToday(snapshot.generatedAt) {
+                    Text("저장된 과거 집계입니다. 업데이트를 눌러 최신 사용량을 확인하세요.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 grid(snapshot: snapshot)
             } else {
                 emptyGridMessage(Self.notLoadedMessage)
@@ -90,7 +98,7 @@ public struct TokenContributionGrid: View {
                     Text("")
                         .font(.caption2)
                         .frame(height: 13)
-                    ForEach(Self.weekdayLabels, id: \.self) { label in
+                    ForEach(Self.weekdayLabels(startingAt: points[0].date, calendar: calendar), id: \.self) { label in
                         Text(label)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -284,7 +292,12 @@ public struct TokenContributionGrid: View {
         return "\(date) · input \(AccountDashboardFormatting.numberText(point.inputTokens)), output \(AccountDashboardFormatting.numberText(point.outputTokens)), cache —, total \(AccountDashboardFormatting.numberText(point.totalTokens)), sessions \(AccountDashboardFormatting.numberText(point.sessionCount))"
     }
 
-    private static let weekdayLabels = ["월", "화", "수", "목", "금", "토", "일"]
+    /// 84일의 첫 날짜와 같은 순서로 배치한 요일 라벨
+    public static func weekdayLabels(startingAt date: Date, calendar: Calendar = .autoupdatingCurrent) -> [String] {
+        let labels = ["일", "월", "화", "수", "목", "금", "토"]
+        let firstWeekday = calendar.component(.weekday, from: date) - 1
+        return (0..<rowCount).map { labels[(firstWeekday + $0) % rowCount] }
+    }
 
     private struct ContributionCell: Identifiable, Equatable {
         let point: TokenUsageDailyPoint
