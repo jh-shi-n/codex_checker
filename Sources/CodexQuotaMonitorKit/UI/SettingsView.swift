@@ -64,6 +64,38 @@ public struct SettingsView: View {
         }
     }
 
+    /// 적용 전까지 계정 설정과 캐시를 변경하지 않는 경로 초안
+    public struct AccountPathsDraft {
+        public private(set) var paths: [String]
+        public private(set) var validationErrors: [Int: AccountPathValidation] = [:]
+
+        /// 현재 설정의 네 계정 경로 복사
+        public init(paths: [String]) {
+            let prefix = Array(paths.prefix(SettingsView.accountPathCount))
+            self.paths = prefix + Array(repeating: "", count: max(0, SettingsView.accountPathCount - prefix.count))
+        }
+
+        /// 저장된 설정에 영향을 주지 않는 입력 교체
+        public mutating func replace(at index: Int, text: String) {
+            guard paths.indices.contains(index) else { return }
+            paths[index] = text
+            validationErrors[index] = nil
+        }
+
+        /// 모든 경로의 검증 성공 시에만 정규화한 일괄 적용값 반환
+        public mutating func commit(validator: AccountPathValidator) -> [String]? {
+            validationErrors = [:]
+            let normalized = paths.map(validator.normalizedPath)
+            for (index, path) in normalized.enumerated() {
+                let validation = validator.validate(path)
+                if !validation.isAcceptable { validationErrors[index] = validation }
+            }
+            guard validationErrors.isEmpty else { return nil }
+            paths = normalized
+            return normalized
+        }
+    }
+
     @Binding public var refreshIntervalMinutes: Int
     @Binding public var accountPaths: [String]
     @Binding public var launchAtLogin: Bool
@@ -74,8 +106,7 @@ public struct SettingsView: View {
     /// 모든 계정의 표시 순서 목록
     @Binding public var accountDisplayOrder: [String]
     @State private var refreshIntervalDraft: RefreshIntervalDraft
-    @State private var accountPathDrafts: [String]
-    @State private var accountPathValidationErrors: [Int: AccountPathValidation]
+    @State private var accountPathsDraft: AccountPathsDraft
     /// 활성 계정 바인딩의 반응형 화면 초안
     @State private var enabledAccountDraft: [String]
     /// 표시 순서 바인딩의 반응형 화면 초안
@@ -104,8 +135,7 @@ public struct SettingsView: View {
         self._enabledAccountIDs = enabledAccountIDs
         self._accountDisplayOrder = accountDisplayOrder
         self._refreshIntervalDraft = State(initialValue: RefreshIntervalDraft(value: refreshIntervalMinutes.wrappedValue))
-        self._accountPathDrafts = State(initialValue: Self.paddedAccountPaths(accountPaths.wrappedValue))
-        self._accountPathValidationErrors = State(initialValue: [:])
+        self._accountPathsDraft = State(initialValue: AccountPathsDraft(paths: accountPaths.wrappedValue))
         self._enabledAccountDraft = State(
             initialValue: Self.normalizedEnabledAccountIDs(enabledAccountIDs.wrappedValue)
         )
@@ -151,13 +181,12 @@ public struct SettingsView: View {
         self._enabledAccountIDs = enabledAccountIDs
         self._accountDisplayOrder = accountDisplayOrder
         self._refreshIntervalDraft = State(initialValue: RefreshIntervalDraft(value: refreshIntervalMinutes.wrappedValue))
-        self._accountPathDrafts = State(initialValue: Self.paddedAccountPaths([
+        self._accountPathsDraft = State(initialValue: AccountPathsDraft(paths: [
             account1Path.wrappedValue,
             account2Path.wrappedValue,
             account3Path.wrappedValue,
             account4Path.wrappedValue,
         ]))
-        self._accountPathValidationErrors = State(initialValue: [:])
         self._enabledAccountDraft = State(
             initialValue: Self.normalizedEnabledAccountIDs(enabledAccountIDs.wrappedValue)
         )
@@ -204,7 +233,8 @@ public struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             TextField("C\(index + 1)", text: pathBinding(at: index))
                                 .textFieldStyle(.roundedBorder)
-                            if let validation = accountPathValidationErrors[index],
+                                .onSubmit(commitAccountPathsDraft)
+                            if let validation = accountPathsDraft.validationErrors[index],
                                let message = validation.userMessage {
                                 Text(message)
                                     .font(.caption)
@@ -213,6 +243,15 @@ public struct SettingsView: View {
                             }
                         }
                     }
+                    HStack {
+                        Button("경로 적용", action: commitAccountPathsDraft)
+                            .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
+                        Button("편집 취소", action: synchronizeAccountPathDrafts)
+                            .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
+                    }
+                    Text("경로 적용 또는 Enter를 누를 때 저장됩니다. 편집 취소 시 기존 경로를 유지합니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section(Self.accountVisibilitySectionTitle) {
@@ -410,45 +449,24 @@ public struct SettingsView: View {
         refreshIntervalMinutes = value
     }
 
-    /// 목적: 경로 입력을 검증하고 호출자 바인딩에 유효한 값만 전달
+    /// 적용 전까지 초안만 갱신하는 계정 경로 바인딩
     private func pathBinding(at index: Int) -> Binding<String> {
         Binding(
-            get: {
-                guard accountPathDrafts.indices.contains(index) else {
-                    return accountPaths.indices.contains(index) ? accountPaths[index] : ""
-                }
-                return accountPathDrafts[index]
-            },
-            set: { value in
-                var drafts = Self.paddedAccountPaths(accountPathDrafts)
-                drafts[index] = value
-                accountPathDrafts = drafts
-
-                let validation = accountPathValidator.validate(value)
-                switch validation {
-                case .empty, .valid:
-                    accountPathValidationErrors[index] = nil
-                    drafts[index] = accountPathValidator.normalizedPath(value)
-                    accountPathDrafts = drafts
-
-                    var paths = Self.paddedAccountPaths(accountPaths)
-                    paths[index] = drafts[index]
-                    accountPaths = paths
-                case .missing, .notDirectory, .unreadable:
-                    // Keep invalid text in the draft so the user can correct
-                    // it, but do not pass it through the caller-owned binding.
-                    accountPathValidationErrors[index] = validation
-                }
-            }
+            get: { accountPathsDraft.paths[index] },
+            set: { accountPathsDraft.replace(at: index, text: $0) }
         )
     }
 
-    /// 목적: 외부 경로 변경에 맞춰 편집 초안과 오류 초기화
+    /// 전체 검증 성공 시에만 실제 계정 경로 일괄 저장
+    private func commitAccountPathsDraft() {
+        guard let paths = accountPathsDraft.commit(validator: accountPathValidator),
+              paths != Self.paddedAccountPaths(accountPaths) else { return }
+        accountPaths = paths
+    }
+
+    /// 외부 경로 변경 또는 편집 취소 시 저장된 경로로 초안 복원
     private func synchronizeAccountPathDrafts() {
-        let paths = Self.paddedAccountPaths(accountPaths)
-        guard paths != accountPathDrafts else { return }
-        accountPathDrafts = paths
-        accountPathValidationErrors = [:]
+        accountPathsDraft = AccountPathsDraft(paths: accountPaths)
     }
 
     /// 목적: 네 경로 편집을 위한 입력 배열 길이 보정
