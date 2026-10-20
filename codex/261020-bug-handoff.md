@@ -43,4 +43,26 @@
 
 ## 검증 결과
 
-- 미실행
+- 전체 회귀 테스트: `swift test` 303개 통과, 실패 0개
+- release 앱: `scripts/package_app.sh --output codex/261020-validation/CodexQuotaMonitor.app --configuration release` 성공
+- 빌드 경고·오류: 최종 전체 테스트·release 패키징 로그에서 미발생
+- 앱 번들: Info.plist·임시 서명·서명 식별자 검증 통과
+- 실행: 임시 홈·빈 계정의 release 실행 파일 5초 유지 및 자식 계정 프로세스 부재 확인, 검증 프로세스 종료
+- 화면: 예시 데이터의 총 세션 2개·토큰 185개 분리 표시, 수~화 요일과 실제 날짜 일치, 경로 적용·취소 UI 확인
+- 변경 범위: 실제 계정 Ping·원본 Codex DB 변경·설치 앱 교체 미실행
+- Git 공백 검사: `git diff --check` 통과
+
+## 검증 산출물
+
+- 전체 테스트: `codex/261020-full-tests.log`
+- 패키징: `codex/261020-package.log`
+- 격리 실행: `codex/261020-smoke-preflight.log`, `codex/261020-smoke-execution.log`
+- UI 이미지: `codex/261020-token-ui.png`, `codex/261020-settings-ui.png`
+- PR 포함: 본 핸드오프만 추적, 테스트 로그·앱·예시 이미지의 로컬 보관
+
+## 동작상 제한
+
+- 기존 버전의 토큰 캐시: 업데이트 버튼으로 재집계 필요
+- 기본 512개 초과 후보 파일: 부분 합계 대신 명시적 실패 반환, 전체 파일 증분 집계의 후속 구현 필요
+- 원본 세션 기록의 타임스탬프 누락: 최초 유효 시각 또는 디렉터리 날짜 대체
+- 실제 계정의 서버 조회·로그인·Ping·시스템 알림 배너: 외부 연동 종단 검증 미실행
