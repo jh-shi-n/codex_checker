@@ -115,6 +115,22 @@ final class QuotaPresentationTests: XCTestCase {
         }
     }
 
+    /// 세션 수와 토큰 수가 다른 요약 카드의 실제 렌더링 검증
+    func testTokenSummaryRendersDistinctSessionAndTokenCounts() throws {
+        let now = Date()
+        let snapshot = TokenUsageAggregator().aggregate(sessions: [
+            TokenUsageSessionUsage(date: now, inputTokens: 100, outputTokens: 25),
+            TokenUsageSessionUsage(date: now, inputTokens: 50, outputTokens: 10),
+        ], generatedAt: now)
+        XCTAssertEqual(snapshot.totalSessions, 2)
+        XCTAssertEqual(snapshot.today.totalTokens, 185)
+        let renderer = ImageRenderer(content: TokenUsageSummaryView(snapshot: snapshot).frame(width: 608))
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        XCTAssertEqual(image.width, 608)
+        XCTAssertGreaterThan(image.height, 100)
+    }
+
     func testDashboardNumberAndResetDeltaFormattingStayBounded() {
         XCTAssertEqual(AccountDashboardFormatting.numberText(128_020), "128,020")
         XCTAssertEqual(AccountDashboardFormatting.abbreviatedNumber(1_200), "1.2K")
