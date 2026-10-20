@@ -338,6 +338,28 @@ final class PreferencesStoreTests: XCTestCase {
         )
     }
 
+    /// 편집 중 빈 경로·부모 경로의 설정 반영 방지와 취소·일괄 검증
+    func testAccountPathDraftOnlyCommitsExplicitValidatedChanges() throws {
+        let root = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = makeDirectory(at: root.appendingPathComponent("account")).path
+        let validator = AccountPathValidator()
+        let configured = [original, "", "", ""]
+        var draft = SettingsView.AccountPathsDraft(paths: configured)
+        draft.replace(at: 0, text: "")
+        XCTAssertEqual(configured[0], original)
+        draft = SettingsView.AccountPathsDraft(paths: configured)
+        XCTAssertEqual(draft.paths, configured)
+        draft.replace(at: 0, text: root.path)
+        draft.replace(at: 1, text: root.appendingPathComponent("missing").path)
+        XCTAssertNil(draft.commit(validator: validator))
+        XCTAssertEqual(draft.validationErrors[1], .missing)
+        draft.replace(at: 1, text: "")
+        XCTAssertEqual(draft.commit(validator: validator), [root.path, "", "", ""])
+        draft.replace(at: 0, text: "")
+        XCTAssertEqual(draft.commit(validator: validator), ["", "", "", ""])
+    }
+
     func testInvalidAccountPathsAreNotPersistedWhileEmptyAndValidPathsAreAccepted() {
         let fixtureRoot = makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: fixtureRoot) }
