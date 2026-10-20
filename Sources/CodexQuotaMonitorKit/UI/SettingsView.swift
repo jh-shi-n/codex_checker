@@ -36,7 +36,7 @@ public struct SettingsView: View {
     public static let refreshIntervalOptions: [Int] = [1, 5, 10, 30]
     public static let minimumRefreshIntervalMinutes = RefreshService.minimumIntervalMinutes
     public static let maximumRefreshIntervalMinutes = RefreshService.maximumIntervalMinutes
-    public static let accountPathCount = 4
+    nonisolated public static let accountPathCount = 4
     public static let accountPathSectionTitle = "계정 경로"
     public static let minimumActivityNotificationDurationSeconds = PreferencesStore.minimumActivityNotificationDurationSeconds
     public static let maximumActivityNotificationDurationSeconds = PreferencesStore.maximumActivityNotificationDurationSeconds
