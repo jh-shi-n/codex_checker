@@ -15,6 +15,17 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(section.resultText, "취소됨")
     }
 
+    /// 일괄 강도표의 중복 값·0·음수 처리와 기존 셀별 정책 일치 검증
+    func testBatchContributionIntensitiesPreserveExistingRanking() {
+        let distributions: [[Int64]] = [[], [0, -1], [1], [1, 1, 1, 1], [0, 1, 1, 2, 3, 10, 10, Int64.max]]
+        for distribution in distributions {
+            let levels = TokenContributionIntensity.levels(for: distribution)
+            for value in distribution {
+                XCTAssertEqual(levels[value] ?? .none, TokenContributionIntensity.level(for: value, distribution: distribution))
+            }
+        }
+    }
+
     /// 화면에 맞춰 축소한 팝오버의 실제 내부 렌더 크기 검증
     func testAccountDetailContentFitsSmallPopoverSize() throws {
         let size = TransientPopoverSizingPolicy.clampedContentSize(
