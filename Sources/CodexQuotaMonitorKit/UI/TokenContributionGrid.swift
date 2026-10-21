@@ -36,11 +36,6 @@ public struct TokenContributionGrid: View {
                 Text("집계 기준: \(AccountDashboardFormatting.dateText(snapshot.generatedAt))")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                if !calendar.isDateInToday(snapshot.generatedAt) {
-                    Text("저장된 과거 집계입니다. 업데이트를 눌러 최신 사용량을 확인하세요.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
                 grid(snapshot: snapshot)
             } else {
                 emptyGridMessage(Self.notLoadedMessage)

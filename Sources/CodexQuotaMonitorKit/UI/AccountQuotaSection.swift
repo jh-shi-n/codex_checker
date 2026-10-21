@@ -43,7 +43,7 @@ public struct AccountQuotaSection: View {
         }
     }
 
-    /// 한도 잔여량과 현재 실행에서 누적한 초기화 시각 관측 표시
+    /// 한도 잔여량과 초기화 시각 표시; 조회 상태는 헤더에서 통합 제공
     @ViewBuilder
     private func quotaCard(
         title: String,
@@ -61,39 +61,32 @@ public struct AccountQuotaSection: View {
                 DashboardQuotaRing(remainingPercent: remaining)
                     .frame(width: 72, height: 72)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("남은 시간")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text(observation == .movingObserved ? "초기화 시각 변동 중" :
-                            AccountDashboardFormatting.remainingTimeText(until: resetAt))
-                        .font(.caption.weight(.medium))
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("남은 시간")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(observation == .movingObserved ? "초기화 시각 변동 중" :
+                                AccountDashboardFormatting.remainingTimeText(until: resetAt))
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                    }
 
-                    Text("초기화")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text(observation == .movingObserved ? "시각 이동 관측" :
-                            AccountDashboardFormatting.dateText(resetAt))
-                        .font(.caption.weight(.medium))
-                        .lineLimit(1)
-
-                    Text(AccountDashboardFormatting.resetObservationStatusText(
-                        observation, resetAt: resetAt, status: account.status
-                    ))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-
-                    Text(AccountDetailView.statusText(for: account.status))
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(statusColor(remaining: remaining))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("초기화")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(observation == .movingObserved ? "미확정" :
+                                AccountDashboardFormatting.dateText(resetAt))
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(10)
-        .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Color.white.opacity(0.07))
@@ -104,19 +97,6 @@ public struct AccountQuotaSection: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(subtitle), \(remaining.map { QuotaDonutView.percentText($0) } ?? "—")")
-    }
-
-    private func statusColor(remaining: Double?) -> Color {
-        switch account.status {
-        case .normal:
-            return QuotaColors.swiftUIColor(for: remaining ?? 0)
-        case .loading:
-            return .accentColor
-        case .notConfigured:
-            return .secondary
-        case .loginRequired, .codexNotFound, .timeout, .error:
-            return QuotaColors.critical.swiftUIColor
-        }
     }
 }
 
