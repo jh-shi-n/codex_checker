@@ -306,6 +306,7 @@ public struct QuotaDonutView: View {
                         onClose()
                     }
                 )
+                .id(account.configurationGeneration)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .allowsHitTesting(false)

@@ -3,6 +3,8 @@ import Foundation
 /// Immutable snapshot consumed by the UI for one account.
 public struct AccountState: Identifiable, Codable, Equatable, Sendable {
     public let id: String
+    /// 경로 변경 시 상세 화면 상태를 분리하는 비영속 슬롯 세대
+    public var configurationGeneration = 0
     /// 서버의 통합 리셋권 잔여 개수와 선택적 소멸일 목록
     public var resetCredits: RateLimitResetCredits?
     public var email: String?

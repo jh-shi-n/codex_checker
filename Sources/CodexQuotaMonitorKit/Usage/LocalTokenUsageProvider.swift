@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// Reads only token counters from rollout JSONL files below one configured
 /// CODEX_HOME. Authentication, configuration, databases, prompts, messages,
@@ -331,11 +332,10 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         return nil
     }
 
+    /// JSON Boolean 제외 및 음수·실수·상한 안전 변환
     private func nonNegativeInt64(_ value: Any) -> Int64? {
-        if value is Bool { return nil }
-        guard let number = value as? NSNumber else { return nil }
-        let type = String(cString: number.objCType)
-        if type == "c" || type == "B" { return nil }
+        guard let number = value as? NSNumber,
+              !isJSONBoolean(number) else { return nil }
 
         let doubleValue = number.doubleValue
         guard doubleValue.isFinite else { return nil }
@@ -357,8 +357,9 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         return nil
     }
 
+    /// JSON Boolean을 제외한 숫자 시각 변환
     private func parseDate(_ value: Any?) -> Date? {
-        if let number = value as? NSNumber, !(value is Bool) {
+        if let number = value as? NSNumber, !isJSONBoolean(number) {
             let raw = number.doubleValue
             guard raw.isFinite else { return nil }
             let seconds = abs(raw) > 100_000_000_000 ? raw / 1_000 : raw
@@ -370,6 +371,11 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         if let date = formatter.date(from: string) { return date }
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: string)
+    }
+
+    /// Core Foundation 식별자를 이용한 JSON Boolean 판별
+    private func isJSONBoolean(_ number: NSNumber) -> Bool {
+        CFGetTypeID(number) == CFBooleanGetTypeID()
     }
 
     private func dateFromSessionsDirectory(for url: URL, sessionsURL: URL) -> Date? {

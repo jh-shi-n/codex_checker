@@ -52,6 +52,31 @@ public struct UsageWindowProbePresentationResult: Equatable, Sendable {
 public typealias UsageWindowProbeCompositeResult = UsageWindowProbePresentationResult
 public typealias UsageWindowProbeOutcome = UsageWindowProbePresentationResult
 
+/// 계정 대시보드의 스냅샷 선택 정책
+enum AccountDashboardPresentation {
+    /// - 목적: 계정 상세에 표시할 최신 한도 스냅샷 선택
+    /// - 우선순위: 동일 계정의 성공한 Ping 갱신 결과 중 더 최신 `lastUpdated`
+    /// - 동률·시각 누락: 현재 전달된 계정 스냅샷 유지
+    static func accountForDisplay(
+        current: AccountState,
+        probe: UsageWindowProbePresentationResult?
+    ) -> AccountState {
+        guard let probe,
+              probe.isCurrentAccount,
+              probe.result.accountID == current.id,
+              probe.result.isSuccess,
+              probe.quotaRefreshSucceeded == true,
+              let refreshedAccount = probe.refreshedAccount,
+              refreshedAccount.id == current.id,
+              let currentUpdatedAt = current.lastUpdated,
+              let refreshedUpdatedAt = refreshedAccount.lastUpdated,
+              refreshedUpdatedAt > currentUpdatedAt
+        else { return current }
+
+        return refreshedAccount
+    }
+}
+
 /// Pure formatting and semantic helpers shared by the dashboard and focused
 /// presentation tests.  They never access account files or invoke a service.
 public enum AccountDashboardFormatting {
@@ -268,6 +293,22 @@ public enum TokenContributionIntensity: Int, CaseIterable, Equatable, Sendable {
     public static var normal: Self { .medium }
     public static var veryLow: Self { .low }
 
+    /// 분포 정렬 한 번으로 중복 값의 마지막 순위를 유지한 강도표 구성
+    public static func levels(for distribution: [Int64]) -> [Int64: Self] {
+        let positive = distribution.filter { $0 > 0 }.sorted()
+        var levels: [Int64: Self] = [:]
+        for (rank, value) in positive.enumerated() {
+            levels[value] = intensity(rank: rank, count: positive.count)
+        }
+        return levels
+    }
+
+    /// 양수 분포 순위의 사분위 강도 변환
+    private static func intensity(rank: Int, count: Int) -> Self {
+        let bucket = min(3, (rank * 4) / max(1, count))
+        return [.low, .medium, .high, .veryHigh][bucket]
+    }
+
     public static func level(
         for value: Int64,
         distribution: [Int64]
@@ -284,8 +325,7 @@ public enum TokenContributionIntensity: Int, CaseIterable, Equatable, Sendable {
             }
             return insertion
         }()
-        let bucket = min(3, (rank * 4) / max(1, positive.count))
-        return [.low, .medium, .high, .veryHigh][bucket]
+        return intensity(rank: rank, count: positive.count)
     }
 
     public static func level(for value: Int64, in distribution: [Int64]) -> Self {

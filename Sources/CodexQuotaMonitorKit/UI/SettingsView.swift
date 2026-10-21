@@ -26,6 +26,7 @@ public enum SettingsWindowPresentationPolicy {
 public struct SettingsView: View {
     public static let refreshSectionTitle = "새로고침"
     public static let activitySectionTitle = "활동 알림"
+    public static let quotaResetNotificationSectionTitle = "할당량 초기화 알림"
     public static let accountVisibilitySectionTitle = "표시할 계정"
     public static let accountDisplayOrderSectionTitle = "계정 표시 순서"
     public static let activityNotificationDurationLabel = "활동 알림 표시 시간"
@@ -105,6 +106,7 @@ public struct SettingsView: View {
     @Binding public var enabledAccountIDs: [String]
     /// 모든 계정의 표시 순서 목록
     @Binding public var accountDisplayOrder: [String]
+    @ObservedObject public var notificationDelivery: QuotaResetNotificationDelivery
     @State private var refreshIntervalDraft: RefreshIntervalDraft
     @State private var accountPathsDraft: AccountPathsDraft
     /// 활성 계정 바인딩의 반응형 화면 초안
@@ -112,9 +114,13 @@ public struct SettingsView: View {
     /// 표시 순서 바인딩의 반응형 화면 초안
     @State private var accountDisplayOrderDraft: [String]
     private let accountPathValidator: AccountPathValidator
+    private let onRetryNotificationAuthorization: () -> Void
+    private let onSendNotificationTest: () -> Void
+    private let onOpenNotificationSettings: () -> Void
 
     /// 목적: 배열형 경로와 설정 바인딩을 사용하는 화면 초기화
     /// 호환성: 새 계정 표시 바인딩은 기본값 제공
+    @MainActor
     public init(
         refreshIntervalMinutes: Binding<Int>,
         accountPaths: Binding<[String]>,
@@ -125,7 +131,11 @@ public struct SettingsView: View {
         ),
         accountPathValidator: AccountPathValidator = .live,
         enabledAccountIDs: Binding<[String]> = .constant(PreferencesStore.defaultEnabledAccountIDs),
-        accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder)
+        accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
+        notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
+        onRetryNotificationAuthorization: @escaping () -> Void = {},
+        onSendNotificationTest: @escaping () -> Void = {},
+        onOpenNotificationSettings: @escaping () -> Void = {}
     ) {
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._accountPaths = accountPaths
@@ -134,6 +144,10 @@ public struct SettingsView: View {
         self._activityNotificationDurationSeconds = activityNotificationDurationSeconds
         self._enabledAccountIDs = enabledAccountIDs
         self._accountDisplayOrder = accountDisplayOrder
+        self._notificationDelivery = ObservedObject(wrappedValue: notificationDelivery)
+        self.onRetryNotificationAuthorization = onRetryNotificationAuthorization
+        self.onSendNotificationTest = onSendNotificationTest
+        self.onOpenNotificationSettings = onOpenNotificationSettings
         self._refreshIntervalDraft = State(initialValue: RefreshIntervalDraft(value: refreshIntervalMinutes.wrappedValue))
         self._accountPathsDraft = State(initialValue: AccountPathsDraft(paths: accountPaths.wrappedValue))
         self._enabledAccountDraft = State(
@@ -147,6 +161,7 @@ public struct SettingsView: View {
 
     /// 목적: 개별 경로 바인딩을 유지하는 호스트용 화면 초기화
     /// 호환성: 새 계정 표시 바인딩은 기본값 제공
+    @MainActor
     public init(
         refreshIntervalMinutes: Binding<Int>,
         account1Path: Binding<String>,
@@ -160,7 +175,11 @@ public struct SettingsView: View {
         ),
         accountPathValidator: AccountPathValidator = .live,
         enabledAccountIDs: Binding<[String]> = .constant(PreferencesStore.defaultEnabledAccountIDs),
-        accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder)
+        accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
+        notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
+        onRetryNotificationAuthorization: @escaping () -> Void = {},
+        onSendNotificationTest: @escaping () -> Void = {},
+        onOpenNotificationSettings: @escaping () -> Void = {}
     ) {
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._accountPaths = Binding(
@@ -180,6 +199,10 @@ public struct SettingsView: View {
         self._activityNotificationDurationSeconds = activityNotificationDurationSeconds
         self._enabledAccountIDs = enabledAccountIDs
         self._accountDisplayOrder = accountDisplayOrder
+        self._notificationDelivery = ObservedObject(wrappedValue: notificationDelivery)
+        self.onRetryNotificationAuthorization = onRetryNotificationAuthorization
+        self.onSendNotificationTest = onSendNotificationTest
+        self.onOpenNotificationSettings = onOpenNotificationSettings
         self._refreshIntervalDraft = State(initialValue: RefreshIntervalDraft(value: refreshIntervalMinutes.wrappedValue))
         self._accountPathsDraft = State(initialValue: AccountPathsDraft(paths: [
             account1Path.wrappedValue,
@@ -305,6 +328,38 @@ public struct SettingsView: View {
                     }
                 }
 
+                Section(Self.quotaResetNotificationSectionTitle) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("권한: \(notificationAuthorizationText)")
+                        Text("전달: \(notificationOutcomeText)")
+                            .foregroundStyle(.secondary)
+                        if let error = notificationDelivery.status.authorizationError {
+                            Text("권한 오류: \(error)")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .textSelection(.enabled)
+                        }
+                        if let error = notificationDelivery.status.deliveryError {
+                            Text("전달 오류: \(error)")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .textSelection(.enabled)
+                        }
+                    }
+
+                    HStack {
+                        Button("권한 요청 / 다시 확인", action: onRetryNotificationAuthorization)
+                            .disabled(notificationControlsUnavailable)
+                        Button("테스트 알림", action: onSendNotificationTest)
+                            .disabled(notificationControlsUnavailable)
+                        Button("알림 설정 열기", action: onOpenNotificationSettings)
+                            .disabled(notificationControlsUnavailable)
+                    }
+                    Text("권한 요청은 버튼을 눌렀을 때만 진행됩니다. 권한을 거부한 경우 시스템 설정에서 변경할 수 있습니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("앱 실행") {
                     Toggle(Self.launchAtLoginLabel, isOn: $launchAtLogin)
                     Toggle("계정 이름 표시 (C1~C4)", isOn: $showAccountLabels)
@@ -358,6 +413,42 @@ public struct SettingsView: View {
                     .normalizedActivityNotificationDurationSeconds($0)
             }
         )
+    }
+
+    /// 목적: 권한 상태의 사용자 표시 문구 제공
+    private var notificationAuthorizationText: String {
+        switch notificationDelivery.status.authorization {
+        case .checking: "상태 확인 중"
+        case .notRequested: "아직 권한을 요청하지 않음"
+        case .denied: "꺼짐 · 시스템 설정에서 허용 필요"
+        case .authorized: "허용됨"
+        case .provisional: "임시 허용"
+        case .ephemeral: "임시 허용"
+        case .unavailable: "앱 번들에서 실행되지 않아 사용할 수 없음"
+        case .unknown: "알 수 없는 상태"
+        case .error: "상태 확인 실패"
+        }
+    }
+
+    /// 목적: 마지막 시스템 알림 전달 결과의 사용자 표시 문구 제공
+    private var notificationOutcomeText: String {
+        switch notificationDelivery.status.outcome {
+        case .idle: "전달 기록 없음"
+        case .delivered: "시스템 알림 전달 완료"
+        case .fallback: "노치 활동 토스트에 대체 표시"
+        case .testDelivered: "테스트 알림 전달 완료"
+        case .testFailed: "테스트 알림 전달 실패"
+        }
+    }
+
+    /// 목적: 앱 번들과 권한 상태에 따른 알림 동작 버튼 활성 여부
+    private var notificationControlsUnavailable: Bool {
+        switch notificationDelivery.status.authorization {
+        case .checking, .unavailable:
+            true
+        case .notRequested, .denied, .authorized, .provisional, .ephemeral, .unknown, .error:
+            false
+        }
     }
 
     /// 목적: 표시 계정 ID별 활성 상태 바인딩 제공

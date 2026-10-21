@@ -390,6 +390,25 @@ final class UsageWindowProbeTests: XCTestCase {
         XCTAssertEqual(result.userMessage, UsageWindowProbeFailureCategory.timeout.userMessage)
     }
 
+    func testCancellationStaysDistinctInProbeResultAndLatestState() async {
+        let runner = RecordingRunner(error: .cancelled)
+        let service = makeService(
+            fileSystem: RecordingFileSystem(metadata: .init(exists: true)),
+            locator: RecordingLocator(url: executableURL),
+            runner: runner
+        )
+
+        let result = await service.probe(config())
+        let state = await service.state(for: "C1")
+
+        XCTAssertEqual(result.status, .cancelled)
+        XCTAssertTrue(result.isCancelled)
+        XCTAssertNil(result.failureCategory)
+        XCTAssertEqual(result.userMessage, "사용량 확인이 취소되었습니다.")
+        XCTAssertEqual(state.status, .cancelled)
+        XCTAssertEqual(state.result, result)
+    }
+
     func testMalformedOnlyOutputIsSafeFailure() async {
         let runner = RecordingRunner(result: .init(exitStatus: 0, stdout: Data("not json\n".utf8)))
         let service = makeService(
@@ -412,6 +431,28 @@ final class UsageWindowProbeTests: XCTestCase {
 
         XCTAssertEqual(result.stdout.count, UsageWindowProbeProcessResult.maximumStandardOutputBytes)
         XCTAssertEqual(result.stderr.count, UsageWindowProbeProcessResult.maximumStandardErrorBytes)
+    }
+
+    func testTokenUsageRejectsBooleanFractionAndOutOfRangeCounts() {
+        var parser = UsageWindowProbeJSONLParser()
+        parser.append(Data(
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":true,\"output_tokens\":1.5,\"total_tokens\":9223372036854775808}}\n".utf8
+        ))
+
+        let result = parser.finish()
+
+        XCTAssertNil(result.usage?.inputTokens)
+        XCTAssertNil(result.usage?.outputTokens)
+        XCTAssertNil(result.usage?.totalTokens)
+    }
+
+    func testTokenUsagePreservesIntMaxWithoutFloatingPointConversion() {
+        var parser = UsageWindowProbeJSONLParser()
+        parser.append(Data(
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":\(Int.max)}}\n".utf8
+        ))
+
+        XCTAssertEqual(parser.finish().usage?.inputTokens, Int.max)
     }
 
     /// 중복 실행 차단 후 첫 실행의 완료 결과 검증
@@ -469,6 +510,55 @@ final class UsageWindowProbeTests: XCTestCase {
         XCTAssertTrue(childPath.contains("/usr/bin:/bin"))
         XCTAssertTrue(childPath.contains("model_instructions_file=\""))
         XCTAssertTrue(childPath.contains("/ping-instructions\""))
+    }
+
+    func testLiveRunnerCancellationKillsSignalIgnoringChildPromptly() async throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("usage-window-cancel-\(UUID().uuidString)", isDirectory: true)
+        let accountHome = root.appendingPathComponent("account", isDirectory: true)
+        try fileManager.createDirectory(at: accountHome, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+        XCTAssertTrue(fileManager.createFile(
+            atPath: accountHome.appendingPathComponent("auth.json").path,
+            contents: Data("synthetic auth fixture".utf8)
+        ))
+
+        let marker = root.appendingPathComponent("child-started")
+        let executable = root.appendingPathComponent("fake-codex")
+        try Data("#!/bin/sh\ntrap '' TERM\n: > \"$CANCEL_MARKER\"\nwhile :; do :; done\n".utf8)
+            .write(to: executable)
+        try fileManager.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o755))],
+            ofItemAtPath: executable.path
+        )
+
+        let command = UsageWindowProbeCommand(
+            executableURL: executable,
+            configuredAccountHome: accountHome,
+            arguments: ["exec", "print 1"],
+            environmentOverrides: ["CANCEL_MARKER": marker.path]
+        )
+        let runner = UsageWindowProbeLiveProcessRunner(
+            gracefulTerminationTimeout: 0.05,
+            forcedTerminationTimeout: 0.1
+        )
+        let task = Task { try await runner.run(command: command, timeout: 1.5) }
+        let startDeadline = Date().addingTimeInterval(1)
+        while !fileManager.fileExists(atPath: marker.path), Date() < startDeadline {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(fileManager.fileExists(atPath: marker.path))
+
+        let cancellationStart = Date()
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertEqual(error as? UsageWindowProbeProcessError, .cancelled)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(cancellationStart), 0.75)
     }
 
     /// JSONL event 배열을 CLI stdout 형태의 byte stream으로 직렬화

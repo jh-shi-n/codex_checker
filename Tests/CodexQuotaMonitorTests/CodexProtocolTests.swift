@@ -76,6 +76,23 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertNotNil(CodexMessage(line: Data("{\"id\":7,\"result\":{}}\r\n".utf8)))
     }
 
+    func testResponseIDsRejectBooleansFractionsAndValuesOutsideIntRange() {
+        let malformedIDs = [
+            "true",
+            "1.5",
+            "9223372036854775808",
+            "-9223372036854775809",
+        ]
+
+        for id in malformedIDs {
+            XCTAssertNil(CodexMessage(line: Data("{\"id\":\(id),\"result\":{}}".utf8)), id)
+        }
+        XCTAssertEqual(
+            CodexMessage(line: Data("{\"id\":\"7\",\"result\":{}}".utf8))?.id,
+            7
+        )
+    }
+
     func testCodexProcessReadsResponseDrainsStderrAndTerminatesWithinBound() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

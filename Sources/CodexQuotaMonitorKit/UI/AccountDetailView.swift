@@ -22,6 +22,8 @@ public struct AccountDetailView: View {
     @State private var isTokenUsageExpanded = false
     @State private var probePresentation: UsageWindowProbePresentationResult?
     @State private var isProbeRunning = false
+    @State private var tokenUsageRefreshTask: Task<Void, Never>?
+    @State private var probeTask: Task<Void, Never>?
 
     public init(
         account: AccountState,
@@ -108,6 +110,12 @@ public struct AccountDetailView: View {
         }
         .onChange(of: account.id) { _, _ in
             probePresentation = nil
+            isProbeRunning = false
+        }
+        .onDisappear {
+            tokenUsageRefreshTask?.cancel()
+            probeTask?.cancel()
+            isTokenUsageLoading = false
             isProbeRunning = false
         }
     }
@@ -292,15 +300,12 @@ public struct AccountDetailView: View {
         return probePresentation
     }
 
-    /// 성공한 최신 한도 스냅샷 우선 표시
+    /// 현재 계정과 Ping 갱신 스냅샷 중 더 최신 한도 우선 표시
     private var displayedAccount: AccountState {
-        guard let presentation = currentProbePresentation,
-              presentation.result.isSuccess,
-              presentation.quotaRefreshSucceeded == true,
-              let refreshedAccount = presentation.refreshedAccount,
-              refreshedAccount.id == account.id
-        else { return account }
-        return refreshedAccount
+        AccountDashboardPresentation.accountForDisplay(
+            current: account,
+            probe: currentProbePresentation
+        )
     }
 
     /// 캐시 스냅샷을 60초 주기로 읽는 표시 갱신
@@ -330,7 +335,7 @@ public struct AccountDetailView: View {
     private func updateTokenUsage() {
         guard !isTokenUsageLoading else { return }
         isTokenUsageLoading = true
-        Task { @MainActor in
+        tokenUsageRefreshTask = Task { @MainActor in
             let snapshot = await refreshTokenUsage(account)
             guard !Task.isCancelled else { return }
             if snapshot.availability == .available {
@@ -355,7 +360,7 @@ public struct AccountDetailView: View {
         ) else { return }
 
         isProbeRunning = true
-        Task { @MainActor in
+        probeTask = Task { @MainActor in
             let presentation = await runUsageWindowProbe(account)
             guard !Task.isCancelled else { return }
             guard presentation.result.accountID == account.id else {

@@ -5,6 +5,7 @@ public enum CodexQuotaServiceError: Error, Equatable, Sendable {
     case loginRequired
     case codexNotFound
     case timeout
+    case cancelled
     case processCrashed(Int32?)
     case malformedResponse(String)
     case protocolError(String)
@@ -22,6 +23,8 @@ extension CodexQuotaServiceError: LocalizedError {
             return "Codex executable not found"
         case .timeout:
             return "Codex app-server timed out"
+        case .cancelled:
+            return "Codex app-server request was cancelled"
         case let .processCrashed(status):
             if let status { return "Codex app-server exited with status \(status)" }
             return "Codex app-server exited unexpectedly"
@@ -133,15 +136,33 @@ public struct CodexQuotaService: Sendable {
         self.processFactory = processFactory
     }
 
-    /// Async entry point that permits independent accounts to run concurrently.
+    /// 호출자 취소를 detached 조회와 transport에 전달
     public func fetch(for config: AccountConfig) async -> Result<CodexQuota, CodexQuotaServiceError> {
-        await Task.detached(priority: nil) {
-            fetchSync(for: config)
-        }.value
+        if Task.isCancelled { return .failure(.cancelled) }
+        let cancellation = CodexQuotaFetchCancellation()
+        let execution = Task.detached(priority: nil) {
+            self.fetchSync(for: config, cancellation: cancellation)
+        }
+        return await withTaskCancellationHandler {
+            let result = await execution.value
+            return Task.isCancelled ? .failure(.cancelled) : result
+        } onCancel: {
+            execution.cancel()
+            cancellation.cancel()
+        }
     }
 
     /// Synchronous core used by the async wrapper and deterministic transport tests.
     public func fetchSync(for config: AccountConfig) -> Result<CodexQuota, CodexQuotaServiceError> {
+        fetchSync(for: config, cancellation: nil)
+    }
+
+    /// 취소 token을 확인하며 동기 프로토콜 조회 수행
+    private func fetchSync(
+        for config: AccountConfig,
+        cancellation: CodexQuotaFetchCancellation?
+    ) -> Result<CodexQuota, CodexQuotaServiceError> {
+        guard cancellation?.isCancelled != true else { return .failure(.cancelled) }
         guard config.isConfigured else {
             return .failure(.notConfigured)
         }
@@ -154,7 +175,9 @@ public struct CodexQuotaService: Sendable {
 
         let deadline = Date().addingTimeInterval(Self.overallTimeout)
         let process = processFactory()
+        cancellation?.install(process)
         defer { process.terminate(until: deadline) }
+        guard cancellation?.isCancelled != true else { return .failure(.cancelled) }
 
         do {
             try process.launch(executable: executable, home: config.home)
@@ -182,25 +205,34 @@ public struct CodexQuotaService: Sendable {
             try validateResponse(accountResponse, requestName: "account/read")
             try validateResponse(rateLimitsResponse, requestName: "account/rateLimits/read")
 
+            if cancellation?.isCancelled == true { throw CodexProcessError.cancelled }
             return .success(try parseQuota(accountResponse: accountResponse, rateLimitsResponse: rateLimitsResponse))
         } catch let error as CodexQuotaServiceError {
-            return .failure(error)
+            return .failure(cancellation?.isCancelled == true ? .cancelled : error)
         } catch let error as CodexProcessError {
-            return .failure(map(error))
+            return .failure(cancellation?.isCancelled == true ? .cancelled : map(error))
         } catch {
-            return .failure(.transport(error.localizedDescription))
+            return .failure(cancellation?.isCancelled == true ? .cancelled : .transport(error.localizedDescription))
         }
     }
 
-    /// Convenience state API for AccountStore/UI workers.
+    /// 계정 상태 조회와 호출자 취소 전파
     public func state(for config: AccountConfig) async -> AccountState {
-        await Task.detached(priority: nil) {
-            stateSync(for: config)
-        }.value
+        let result = await fetch(for: config)
+        guard !Task.isCancelled else { return AccountState.loading(id: config.id) }
+        return state(from: result, for: config)
     }
 
     public func stateSync(for config: AccountConfig) -> AccountState {
-        switch fetchSync(for: config) {
+        state(from: fetchSync(for: config), for: config)
+    }
+
+    /// 취소된 조회는 이전 실패 상태를 새 결과처럼 보이지 않도록 loading으로 반환
+    private func state(
+        from result: Result<CodexQuota, CodexQuotaServiceError>,
+        for config: AccountConfig
+    ) -> AccountState {
+        switch result {
         case let .success(quota):
             let primaryIsOverall = quota.primaryWindowIsOverall
             return AccountState(
@@ -223,6 +255,9 @@ public struct CodexQuotaService: Sendable {
             if error == .notConfigured {
                 return AccountState.notConfigured(id: config.id)
             }
+            if error == .cancelled {
+                return AccountState.loading(id: config.id)
+            }
             let status: AccountStatus
             switch error {
             case .notConfigured:
@@ -235,7 +270,7 @@ public struct CodexQuotaService: Sendable {
                 status = .codexNotFound
             case .timeout:
                 status = .timeout
-            case .processCrashed, .malformedResponse, .protocolError, .transport:
+            case .processCrashed, .malformedResponse, .protocolError, .transport, .cancelled:
                 status = .error
             }
             return AccountState(
@@ -374,6 +409,8 @@ public struct CodexQuotaService: Sendable {
         switch error {
         case .timeout:
             return .timeout
+        case .cancelled:
+            return .cancelled
         case let .processExited(status):
             return .processCrashed(status)
         case let .launchFailed(message):
@@ -383,5 +420,40 @@ public struct CodexQuotaService: Sendable {
         case let .writeFailed(message), let .readFailed(message):
             return .transport(message)
         }
+    }
+}
+
+private final class CodexQuotaFetchCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var transport: (any CodexProcessTransport)?
+    private var transportCancellationSent = false
+
+    /// 잠금 안의 취소 상태 조회
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    /// 조회 transport를 등록하고 선행 취소를 한 번 전달
+    func install(_ transport: any CodexProcessTransport) {
+        lock.lock()
+        self.transport = transport
+        let shouldCancel = cancelled && !transportCancellationSent
+        if shouldCancel { transportCancellationSent = true }
+        lock.unlock()
+        if shouldCancel { transport.cancel() }
+    }
+
+    /// 동기 read를 깨울 transport 취소를 중복 없이 전달
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let transport = self.transport
+        let shouldCancel = transport != nil && !transportCancellationSent
+        if shouldCancel { transportCancellationSent = true }
+        lock.unlock()
+        if shouldCancel { transport?.cancel() }
     }
 }
