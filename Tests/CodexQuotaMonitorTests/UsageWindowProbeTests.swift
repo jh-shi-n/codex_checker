@@ -433,7 +433,27 @@ final class UsageWindowProbeTests: XCTestCase {
         XCTAssertEqual(result.stderr.count, UsageWindowProbeProcessResult.maximumStandardErrorBytes)
     }
 
+    func testTokenUsageRejectsBooleanFractionAndOutOfRangeCounts() {
+        var parser = UsageWindowProbeJSONLParser()
+        parser.append(Data(
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":true,\"output_tokens\":1.5,\"total_tokens\":9223372036854775808}}\n".utf8
+        ))
 
+        let result = parser.finish()
+
+        XCTAssertNil(result.usage?.inputTokens)
+        XCTAssertNil(result.usage?.outputTokens)
+        XCTAssertNil(result.usage?.totalTokens)
+    }
+
+    func testTokenUsagePreservesIntMaxWithoutFloatingPointConversion() {
+        var parser = UsageWindowProbeJSONLParser()
+        parser.append(Data(
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":\(Int.max)}}\n".utf8
+        ))
+
+        XCTAssertEqual(parser.finish().usage?.inputTokens, Int.max)
+    }
 
     /// 중복 실행 차단 후 첫 실행의 완료 결과 검증
     func testSameAccountOverlapIsRejectedWhileFirstCallRuns() async {
