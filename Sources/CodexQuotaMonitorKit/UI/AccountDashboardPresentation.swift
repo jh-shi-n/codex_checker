@@ -251,8 +251,7 @@ public enum AccountDashboardFormatting {
 }
 
 public enum AccountDashboardDefaults {
-    /// Produces the same fixed 84-day shape as the local provider without
-    /// touching a compatibility home URL or reading any file.
+    /// 계정 파일 접근 없이 로컬 집계와 동일한 168일 기본 스냅샷 제공
     public static func unavailableTokenUsageSnapshot(
         generatedAt: Date = Date()
     ) -> TokenUsageSnapshot {

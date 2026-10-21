@@ -19,6 +19,70 @@ final class TokenUsageTests: XCTestCase {
         ))!
     }
 
+    /// 자정 증가분·감소·중복 캐시의 날짜 배분 및 합계 중복 가산 제외 검증
+    @MainActor
+    func testProviderAggregatesCachedInputAcrossMidnightWithoutDoubleCounting() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeRollout(in: home, date: date(offset: -1), name: "cached-midnight.jsonl", lines: [
+            #"{"timestamp":"2026-08-29T23:59:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":4,"cached_input_tokens":6}}}}"#,
+            #"{"timestamp":"2026-08-30T00:01:00Z","type":"token_count","usage":{"input_tokens":25,"output_tokens":7,"cached_input_tokens":16}}"#,
+            #"{"timestamp":"2026-08-30T00:02:00Z","type":"token_count","usage":{"input_tokens":20,"output_tokens":6,"cached_input_tokens":12}}"#,
+            #"{"timestamp":"2026-08-30T00:03:00Z","type":"token_count","usage":{"input_tokens":25,"output_tokens":7,"cached_input_tokens":16}}"#,
+            #"{"timestamp":"2026-08-30T00:04:00Z","type":"token_count","usage":{"input_tokens":30,"output_tokens":8}}"#,
+            #"{"timestamp":"2026-08-30T00:05:00Z","type":"token_count","usage":{"input_tokens":35,"output_tokens":9,"cachedInputTokens":20}}"#,
+        ])
+        let reference = referenceDate
+        let snapshot = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+        XCTAssertEqual(snapshot.today, TokenUsageTotals(inputTokens: 25, outputTokens: 5, cachedInputTokens: 14))
+        XCTAssertEqual(snapshot.dailyPoints.dropLast().last?.cachedInputTokens, 6)
+        XCTAssertEqual(snapshot.last7Days.cachedInputTokens, 20)
+        XCTAssertEqual(snapshot.last30Days.cachedInputTokens, 20)
+        XCTAssertEqual(snapshot.last7Days.totalTokens, 44)
+        XCTAssertEqual(snapshot.totalSessions, 1)
+        XCTAssertEqual(try TokenUsageSnapshotPayload.decode(TokenUsageSnapshotPayload(snapshot: snapshot).encode()), snapshot)
+        let rebased = snapshot.rebased(to: date(offset: 1), calendar: calendar)
+        XCTAssertNil(rebased.today.cachedInputTokens)
+        XCTAssertEqual(rebased.last7Days.cachedInputTokens, 20)
+        XCTAssertTrue(TokenContributionGrid.tooltip(for: snapshot.dailyPoints.last!).contains("cache 14"))
+    }
+
+    /// 캐시 미제공·실제 0·Boolean 입력 구분 검증
+    @MainActor
+    func testCachedInputDistinguishesUnavailableFromZeroAndRejectsBooleans() async throws {
+        for (counter, expected) in [("", nil as Int64?), (",\"cached_input_tokens\":0", 0),
+                                     (",\"cached_input_tokens\":true", nil), (",\"cached_input_tokens\":1", 1)] {
+            let home = try makeHome()
+            defer { try? FileManager.default.removeItem(at: home) }
+            try writeRollout(in: home, date: referenceDate, name: "cache.jsonl", lines: [
+                "{\"type\":\"token_count\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1\(counter)}}",
+            ])
+            let reference = referenceDate
+            let snapshot = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+            XCTAssertEqual(snapshot.today.cachedInputTokens, expected)
+            XCTAssertEqual(snapshot.today.totalTokens, 3)
+            let point = try XCTUnwrap(snapshot.dailyPoints.last)
+            XCTAssertTrue(TokenContributionGrid.tooltip(for: point).contains("cache \(expected.map(String.init) ?? "—")"))
+        }
+    }
+
+    /// 캐시 미지원 버전 2의 입력·출력 복원 및 캐시 미제공 표시 검증
+    func testPayloadRestoresPreviousVersionWithoutInventingCacheUsage() throws {
+        let legacy = usageSnapshot(inputTokens: 30, outputTokens: 5)
+        let payload = try TokenUsageSnapshotPayload(snapshot: legacy).encode()
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        object["aggregationVersion"] = 2
+        let restored = try TokenUsageSnapshotPayload.decode(JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(restored, legacy)
+        XCTAssertNil(restored.today.cachedInputTokens)
+        object["aggregationVersion"] = 99
+        XCTAssertThrowsError(try TokenUsageSnapshotPayload.decode(JSONSerialization.data(withJSONObject: object)))
+        let maximum = TokenUsageTotals(inputTokens: Int64.max, cachedInputTokens: Int64.max)
+        XCTAssertEqual(maximum.adding(maximum).cachedInputTokens, Int64.max)
+        XCTAssertEqual(TokenUsageTotals(cachedInputTokens: -1).cachedInputTokens, 0)
+        XCTAssertNil(TokenUsageTotals.zero.adding(.zero).cachedInputTokens)
+    }
+
     func testProviderDeduplicatesCumulativeTokenCountsAndPreservesSplit() async throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
@@ -47,7 +111,7 @@ final class TokenUsageTests: XCTestCase {
         let snapshot = await provider.snapshot(home: home)
 
         XCTAssertEqual(snapshot.availability, .available)
-        XCTAssertEqual(snapshot.dailyPoints.count, 84)
+        XCTAssertEqual(snapshot.dailyPoints.count, 168)
         XCTAssertEqual(snapshot.today.inputTokens, 25)
         XCTAssertEqual(snapshot.today.outputTokens, 7)
         XCTAssertEqual(snapshot.today.totalTokens, 32)
@@ -120,12 +184,12 @@ final class TokenUsageTests: XCTestCase {
         XCTAssertEqual(snapshot.totalSessions, 1)
     }
 
-    /// 84일보다 오래된 디렉터리의 재개 세션에서 최근 증가분만 집계
+    /// 168일보다 오래된 디렉터리의 재개 세션에서 최근 증가분만 집계
     func testProviderIncludesResumedOldRollout() async throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
-        try writeRollout(in: home, date: date(offset: -100), name: "resumed.jsonl", lines: [
-            #"{"timestamp":"2026-05-22T10:00:00Z","type":"token_count","usage":{"input_tokens":100,"output_tokens":20}}"#,
+        try writeRollout(in: home, date: date(offset: -200), name: "resumed.jsonl", lines: [
+            #"{"timestamp":"2026-02-11T10:00:00Z","type":"token_count","usage":{"input_tokens":100,"output_tokens":20}}"#,
             #"{"timestamp":"2026-08-30T10:00:00Z","type":"token_count","usage":{"input_tokens":125,"output_tokens":25}}"#,
         ])
         let reference = referenceDate
@@ -179,7 +243,8 @@ final class TokenUsageTests: XCTestCase {
         XCTAssertThrowsError(try TokenUsageSnapshotPayload.decode(JSONSerialization.data(withJSONObject: object)))
     }
 
-    func testAggregatorZeroFills84DaysAndUsesInclusiveRangeBoundaries() {
+    /// 168일의 양 끝 날짜 포함과 오늘·7일·30일 요약 범위 유지 검증
+    func testAggregatorZeroFills168DaysAndUsesInclusiveRangeBoundaries() {
         let aggregator = TokenUsageAggregator(calendar: calendar)
         let sessions = [
             TokenUsageSessionUsage(date: referenceDate, inputTokens: 10, outputTokens: 1),
@@ -188,27 +253,28 @@ final class TokenUsageTests: XCTestCase {
             TokenUsageSessionUsage(date: date(offset: -29), inputTokens: 40, outputTokens: 4),
             TokenUsageSessionUsage(date: date(offset: -30), inputTokens: 50, outputTokens: 5),
             TokenUsageSessionUsage(date: date(offset: -84), inputTokens: 60, outputTokens: 6),
+            TokenUsageSessionUsage(date: date(offset: -167), inputTokens: 70, outputTokens: 7),
+            TokenUsageSessionUsage(date: date(offset: -168), inputTokens: 80, outputTokens: 8),
             TokenUsageSessionUsage(date: date(offset: 1), inputTokens: 70, outputTokens: 7),
         ]
 
         let snapshot = aggregator.aggregate(sessions: sessions, generatedAt: referenceDate)
         let today = calendar.startOfDay(for: referenceDate)
-        let first = calendar.date(byAdding: .day, value: -83, to: today)!
+        let first = calendar.date(byAdding: .day, value: -167, to: today)!
 
-        XCTAssertEqual(snapshot.dailyPoints.count, 84)
+        XCTAssertEqual(snapshot.dailyPoints.count, 168)
         XCTAssertEqual(snapshot.dailyPoints.first?.date, first)
         XCTAssertEqual(snapshot.dailyPoints.last?.date, today)
         XCTAssertEqual(snapshot.today.totalTokens, 11)
         XCTAssertEqual(snapshot.last7Days.totalTokens, 33)
         XCTAssertEqual(snapshot.last30Days.totalTokens, 110)
-        // The fixed grid is 84 inclusive days (-83...0), so -30 is still
-        // included in all-session totals even though it is outside last30.
-        XCTAssertEqual(snapshot.totalSessions, 5)
-        XCTAssertEqual(snapshot.averageTokensPerSession, 33, accuracy: 0.000_001)
+        // 최근 30일 밖의 과거 기록도 168일 전체 세션 집계에 포함
+        XCTAssertEqual(snapshot.totalSessions, 7)
+        XCTAssertEqual(snapshot.averageTokensPerSession, 44, accuracy: 0.000_001)
 
         let nonZero = snapshot.dailyPoints.filter { $0.totalTokens > 0 }
-        XCTAssertEqual(nonZero.count, 5)
-        XCTAssertEqual(nonZero.map(\.sessionCount), [1, 1, 1, 1, 1])
+        XCTAssertEqual(nonZero.count, 7)
+        XCTAssertEqual(nonZero.map(\.sessionCount), [1, 1, 1, 1, 1, 1, 1])
     }
 
     func testMalformedAndContentBearingLinesDoNotBecomeUsage() async throws {
@@ -277,7 +343,7 @@ final class TokenUsageTests: XCTestCase {
         let snapshot = await provider.snapshot(home: home)
 
         XCTAssertEqual(snapshot.availability, .available)
-        XCTAssertEqual(snapshot.dailyPoints.count, 84)
+        XCTAssertEqual(snapshot.dailyPoints.count, 168)
         XCTAssertTrue(snapshot.dailyPoints.allSatisfy { $0 == TokenUsageDailyPoint(date: $0.date) })
         XCTAssertEqual(snapshot.totalSessions, 0)
         XCTAssertEqual(snapshot.averageTokensPerSession, 0)
@@ -329,7 +395,7 @@ final class TokenUsageTests: XCTestCase {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let clock = MutableTokenUsageTestClock(referenceDate)
-        let snapshot = usageSnapshot(inputTokens: 31, outputTokens: 12)
+        let snapshot = usageSnapshot(inputTokens: 31, outputTokens: 12, cachedInputTokens: 19)
         let databaseURL = databaseDirectory.appendingPathComponent("token-usage.sqlite")
         let firstCache = TokenUsageSnapshotCache(
             provider: FixedTokenUsageProvider(snapshot: snapshot),
@@ -387,7 +453,7 @@ final class TokenUsageTests: XCTestCase {
         XCTAssertEqual(memory.last7Days.totalTokens, 12)
         XCTAssertEqual(memory.last30Days.totalTokens, 35)
         XCTAssertEqual(memory.generatedAt, reference)
-        XCTAssertEqual(memory.dailyPoints.count, 84)
+        XCTAssertEqual(memory.dailyPoints.count, 168)
         XCTAssertEqual(memory.dailyPoints.last?.date, calendar.startOfDay(for: clock.now()))
         clock.set(reference.addingTimeInterval(TokenUsageSnapshotCache.snapshotLifetime))
         let expired = await restarted.cachedSnapshot(for: "C1")
@@ -628,9 +694,10 @@ final class TokenUsageTests: XCTestCase {
     private func usageSnapshot(
         inputTokens: Int64,
         outputTokens: Int64,
+        cachedInputTokens: Int64? = nil,
         availability: TokenUsageAvailability = .available
     ) -> TokenUsageSnapshot {
-        let totals = TokenUsageTotals(inputTokens: inputTokens, outputTokens: outputTokens)
+        let totals = TokenUsageTotals(inputTokens: inputTokens, outputTokens: outputTokens, cachedInputTokens: cachedInputTokens)
         return TokenUsageSnapshot(
             generatedAt: referenceDate,
             dailyPoints: [TokenUsageDailyPoint(

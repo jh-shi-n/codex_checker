@@ -188,11 +188,14 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
             let day = calendar.startOfDay(for: date)
             let delta = TokenUsageTotals(
                 inputTokens: max(0, totals.inputTokens - highestTotals.inputTokens),
-                outputTokens: max(0, totals.outputTokens - highestTotals.outputTokens)
+                outputTokens: max(0, totals.outputTokens - highestTotals.outputTokens),
+                cachedInputTokens: totals.cachedInputTokens.map { max(0, $0 - (highestTotals.cachedInputTokens ?? 0)) }
             )
             highestTotals = TokenUsageTotals(
                 inputTokens: max(highestTotals.inputTokens, totals.inputTokens),
-                outputTokens: max(highestTotals.outputTokens, totals.outputTokens)
+                outputTokens: max(highestTotals.outputTokens, totals.outputTokens),
+                cachedInputTokens: totals.cachedInputTokens.map { max(highestTotals.cachedInputTokens ?? 0, $0) }
+                    ?? highestTotals.cachedInputTokens
             )
             byDay[day] = (byDay[day] ?? .zero).adding(delta)
             latestUsageDay = max(latestUsageDay ?? day, day)
@@ -276,8 +279,7 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         return false
     }
 
-    /// Reads usage dictionaries only from known token-count containers. In
-    /// particular, this never recursively walks prompt/message/content data.
+    /// 알려진 사용량 컨테이너의 입력·출력·캐시 숫자 추출; 메시지 내용 순회 제외
     private func tokenTotals(in root: [String: Any]) -> TokenUsageTotals? {
         var containers: [[String: Any]] = [root]
         if let payload = root["payload"] as? [String: Any] { containers.append(payload) }
@@ -302,7 +304,10 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
                 "output_tokens", "outputTokens", "completion_tokens", "completion"
             ])
             guard input != nil || output != nil else { continue }
-            return TokenUsageTotals(inputTokens: input ?? 0, outputTokens: output ?? 0)
+            let cached = numericCounter(in: usage, keys: [
+                "cached_input_tokens", "cachedInputTokens"
+            ])
+            return TokenUsageTotals(inputTokens: input ?? 0, outputTokens: output ?? 0, cachedInputTokens: cached)
         }
         return nil
     }

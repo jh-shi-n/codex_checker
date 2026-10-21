@@ -7,8 +7,8 @@ struct TokenUsageSnapshotPayload: Codable {
     /// 일별 집계 저장 상한
     private static let maximumDailyPoints = TokenUsageSnapshot.historyDayCount
 
-    /// 날짜별 증가분 집계와 호환되는 payload 버전
-    private static let currentAggregationVersion = 2
+    /// 캐시 토큰 저장 버전; 이전 일별 증가분 집계 버전 2 복원 지원
+    private static let currentAggregationVersion = 3
     private let aggregationVersion: Int
     private let generatedAt: Double
     private let dailyPoints: [DailyPoint]
@@ -44,7 +44,7 @@ struct TokenUsageSnapshotPayload: Codable {
     /// 직렬화 모델에서 불변 snapshot 복원
     static func decode(_ data: Data) throws -> TokenUsageSnapshot {
         let payload = try JSONDecoder().decode(Self.self, from: data)
-        guard payload.aggregationVersion == currentAggregationVersion,
+        guard [2, currentAggregationVersion].contains(payload.aggregationVersion),
               payload.dailyPoints.count <= maximumDailyPoints else {
             throw DecodingError.dataCorrupted(.init(
                 codingPath: [],
@@ -64,20 +64,22 @@ struct TokenUsageSnapshotPayload: Codable {
         )
     }
 
-    /// 저장되는 두 토큰 합계
+    /// 입력·출력과 선택적 캐시 토큰의 직렬화 집계
     private struct Totals: Codable {
         let inputTokens: Int64
         let outputTokens: Int64
+        let cachedInputTokens: Int64?
 
         /// 음수 정규화가 적용된 요약값 구성
         init(_ totals: TokenUsageTotals) {
             inputTokens = totals.inputTokens
             outputTokens = totals.outputTokens
+            cachedInputTokens = totals.cachedInputTokens
         }
 
         /// 직렬화 요약값 복원
         var restore: TokenUsageTotals {
-            TokenUsageTotals(inputTokens: inputTokens, outputTokens: outputTokens)
+            TokenUsageTotals(inputTokens: inputTokens, outputTokens: outputTokens, cachedInputTokens: cachedInputTokens)
         }
     }
 
@@ -86,6 +88,7 @@ struct TokenUsageSnapshotPayload: Codable {
         let date: Double
         let inputTokens: Int64
         let outputTokens: Int64
+        let cachedInputTokens: Int64?
         let sessionCount: Int64
 
         /// 일별 집계 한 행 구성
@@ -93,6 +96,7 @@ struct TokenUsageSnapshotPayload: Codable {
             date = point.date.timeIntervalSince1970
             inputTokens = point.inputTokens
             outputTokens = point.outputTokens
+            cachedInputTokens = point.cachedInputTokens
             sessionCount = point.sessionCount
         }
 
@@ -103,6 +107,7 @@ struct TokenUsageSnapshotPayload: Codable {
                 date: Date(timeIntervalSince1970: date),
                 inputTokens: inputTokens,
                 outputTokens: outputTokens,
+                cachedInputTokens: cachedInputTokens,
                 sessionCount: sessionCount
             )
         }
