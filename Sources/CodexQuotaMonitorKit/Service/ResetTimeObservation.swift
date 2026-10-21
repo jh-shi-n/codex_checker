@@ -10,7 +10,7 @@ public enum ResetTimeObservation: String, Equatable, Sendable {
     case movingObserved
 }
 
-/// 최소 1분 간격의 최근 3회 정상 관측 비교; 메모리 내 이력만 유지
+/// 첫 정상 조회 즉시 시각 반영; 이후 최근 3회로 이동 감지, 메모리 내 이력 유지
 struct ResetTimeTracker: Sendable {
     /// 서버 초기화 시각과 벽시계·단조 시계의 관측 기준
     private struct Sample: Sendable {
@@ -23,7 +23,7 @@ struct ResetTimeTracker: Sendable {
     private(set) var observation: ResetTimeObservation = .checking
     private let tolerance: TimeInterval = 2
 
-    /// 만료·시계 변경·긴 공백 제외 후 고정 시각 또는 경과 시간에 비례한 이동 판별
+    /// 유효한 시각 즉시 반영; 만료·누락 제외 및 경과 시간에 비례한 이동 판별
     mutating func observe(
         resetAt: Date?, observedAt: Date, uptime: TimeInterval,
         maximumGap: TimeInterval = 900
@@ -43,28 +43,28 @@ struct ResetTimeTracker: Sendable {
             if elapsed <= 0 || elapsed > maximumGap || monotonicElapsed < 0
                 || abs(elapsed - monotonicElapsed) > tolerance || last.resetAt <= observedAt {
                 samples = [next]
-                observation = .checking
+                observation = .stableObserved
                 return observation
             }
             // 짧은 간격의 재조회는 판정 횟수에서 제외하되 시각 변경 즉시 반영
             if elapsed < 60 {
                 if abs(resetAt.timeIntervalSince(last.resetAt)) > tolerance {
                     samples = [next]
-                    observation = .checking
+                    observation = .stableObserved
                 }
                 return observation
             }
             let resetDelta = resetAt.timeIntervalSince(last.resetAt)
             if abs(resetDelta) > tolerance && abs(resetDelta - elapsed) > tolerance {
                 samples = [next]
-                observation = .checking
+                observation = .stableObserved
                 return observation
             }
         }
         samples.append(next)
         samples = Array(samples.suffix(3))
         guard samples.count == 3, let first = samples.first else {
-            observation = .checking
+            observation = .stableObserved
             return observation
         }
         let stable = samples.allSatisfy { abs($0.resetAt.timeIntervalSince(first.resetAt)) <= tolerance }
@@ -72,7 +72,7 @@ struct ResetTimeTracker: Sendable {
             abs($0.resetAt.timeIntervalSince(first.resetAt)
                 - $0.observedAt.timeIntervalSince(first.observedAt)) <= tolerance
         }
-        observation = stable ? .stableObserved : moving ? .movingObserved : .checking
+        observation = !stable && moving ? .movingObserved : .stableObserved
         return observation
     }
 }
