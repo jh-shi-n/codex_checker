@@ -28,6 +28,17 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let preferences: PreferencesStore
     let accountStore: AccountStore
     let quotaResetNotifications: QuotaResetNotificationService
+    /// 안정 관측된 한도의 시각 도달 조회와 사전·도달 시스템 알림 연결
+    lazy var quotaResetScheduler = QuotaResetScheduler(
+        refresh: { [weak self] id in
+            guard let self else { return nil }
+            await self.accountStore.refresh(accountID: id, forceFresh: true)
+            return self.accountStore.state(for: id)
+        },
+        notify: { [weak self] alert in
+            await self?.quotaResetNotifications.delivery.notifyScheduled(alert)
+        }
+    )
     let refreshService: RefreshService
     let launchAtLoginService: LaunchAtLoginService
     let sessionActivityProvider: AppServerSessionActivityProvider
@@ -256,6 +267,9 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statesCancellable = accountStore.$states.sink { [weak self] states in
+            self?.quotaResetScheduler.reconcile(
+                states: states, reminderMinutes: preferences.resetReminderMinutes
+            )
             self?.render(states: states)
         }
     }
