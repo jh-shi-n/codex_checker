@@ -6,6 +6,21 @@ import XCTest
 
 @MainActor
 final class QuotaResetNotificationDeliveryTests: XCTestCase {
+
+    /// 요청 오류 직후 허용 권한을 재조회한 경우 오래된 오류 제거 검증
+    func testFailedRequestClearsErrorWhenImmediateStatusIsAuthorized() async {
+        for authorization in [QuotaResetNotificationAuthorization.authorized, .provisional, .ephemeral] {
+            let backend = StubNotificationBackend(status: authorization)
+            backend.requestError = StubNotificationError.authorization
+            let delivery = QuotaResetNotificationDelivery(backend: backend)
+
+            await delivery.requestAuthorization()
+
+            XCTAssertEqual(delivery.status.authorization, authorization)
+            XCTAssertNil(delivery.status.authorizationError)
+        }
+    }
+
     /// 시작 상태 확인과 명시적 권한 요청의 최신 결과 반영 검증
     func testStartReadsStatusWithoutRequestingPermissionAndRetryReadsFreshStatus() async {
         let backend = StubNotificationBackend(status: .notRequested)
