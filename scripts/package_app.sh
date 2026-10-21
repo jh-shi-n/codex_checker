@@ -75,8 +75,10 @@ fi
 build_bin_path="$(cd "$package_root" && swift build -c "$configuration" --show-bin-path)"
 binary="$build_bin_path/CodexQuotaMonitor"
 info_plist="$package_root/resource/Info.plist"
+app_icon="$package_root/resource/AppIcon.icns"
 [[ -x "$binary" ]] || { print -u2 "Built executable not found: $binary"; exit 1; }
 [[ -f "$info_plist" ]] || { print -u2 "Info.plist not found: $info_plist"; exit 1; }
+[[ -f "$app_icon" ]] || { print -u2 "App icon not found: $app_icon"; exit 1; }
 
 stage_dir="$(mktemp -d "$destination_dir/.CodexQuotaMonitor.stage.XXXXXX")"
 stage_owned=1
@@ -112,6 +114,7 @@ trap cleanup EXIT INT TERM
 mkdir -p "$stage_app/Contents/MacOS" "$stage_app/Contents/Resources"
 cp -- "$binary" "$stage_app/Contents/MacOS/CodexQuotaMonitor"
 cp -- "$info_plist" "$stage_app/Contents/Info.plist"
+cp -- "$app_icon" "$stage_app/Contents/Resources/AppIcon.icns"
 # 서비스 표정 SVG의 Swift 패키지 리소스 번들 포함
 resource_bundle="$build_bin_path/CodexQuotaMonitor_CodexQuotaMonitorKit.bundle"
 [[ -d "$resource_bundle" ]] || { print -u2 "Resource bundle not found: $resource_bundle"; exit 1; }

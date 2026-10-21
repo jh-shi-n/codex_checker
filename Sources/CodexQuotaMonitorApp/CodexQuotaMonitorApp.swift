@@ -405,7 +405,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         }
         guard hiddenAccountsStatusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "계정 표시 설정")
+        item.button?.image = AppBranding.menuBarIcon()
         item.button?.target = self
         item.button?.action = #selector(openHiddenAccountsSettings)
         item.button?.toolTip = "계정 표시 설정"
