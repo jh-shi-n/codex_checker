@@ -33,7 +33,6 @@ public final class AccountStore: ObservableObject {
     private var configRevision = 0
     private var accountGenerations: [String: Int] = [:]
     private var inFlightFetches: [FetchKey: FetchHandle] = [:]
-
     public init(
         configs: [AccountConfig] = AccountConfig.defaultAccounts(),
         preferencesStore: PreferencesStore? = nil,
@@ -119,9 +118,10 @@ public final class AccountStore: ObservableObject {
 
         guard config.isConfigured else {
             states = states.map { state in
-                state.id == id
-                    ? Self.initialState(for: config, preferencesStore: preferencesStore)
-                    : state
+                guard state.id == id else { return state }
+                var initial = Self.initialState(for: config, preferencesStore: preferencesStore)
+                initial.configurationGeneration = state.configurationGeneration
+                return initial
             }
             return false
         }
@@ -158,20 +158,19 @@ public final class AccountStore: ObservableObject {
     /// the default account configuration.
     public func reconfigure(_ newConfigs: [AccountConfig]) {
         configRevision += 1
+        for handle in inFlightFetches.values { handle.task.cancel() }
+        inFlightFetches.removeAll()
         let oldStates = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
         let oldConfigs = Dictionary(uniqueKeysWithValues: configs.map { ($0.id, $0) })
         let normalized = Self.normalizeConfigs(newConfigs)
         configs = normalized
         states = normalized.map { config in
-            guard let previous = oldStates[config.id],
-                  let oldConfig = oldConfigs[config.id],
-                  oldConfig.isConfigured,
-                  config.isConfigured,
-                  oldConfig.home == config.home
-            else {
-                return Self.initialState(for: config, preferencesStore: preferencesStore)
+            if let previous = oldStates[config.id], oldConfigs[config.id] == config {
+                return previous
             }
-            return previous
+            var initial = Self.initialState(for: config, preferencesStore: preferencesStore)
+            initial.configurationGeneration = (oldStates[config.id]?.configurationGeneration ?? 0) + 1
+            return initial
         }
     }
 
@@ -328,7 +327,9 @@ public final class AccountStore: ObservableObject {
     /// 최신 상태 및 정상 스냅샷 저장 후 조기 리셋 이벤트 전달
     private func apply(_ result: AccountFetchResult) {
         guard let index = states.firstIndex(where: { $0.id == result.config.id }) else { return }
-        states[index] = result.state
+        var state = result.state
+        state.configurationGeneration = states[index].configurationGeneration
+        states[index] = state
         guard result.config.isConfigured, result.state.status == .normal else { return }
         let earlyReset = EarlyQuotaReset.detect(
             previous: preferencesStore.quotaSnapshot(for: result.config.home),
@@ -376,21 +377,18 @@ public final class AccountStore: ObservableObject {
         )
     }
 
+    /// 직전 경로 세대를 유지한 로딩 상태 구성 및 이전 오류 해제
     private static func loadingState(for config: AccountConfig, previous: AccountState?) -> AccountState {
-        guard config.isConfigured else { return AccountState.notConfigured(id: config.id) }
+        guard config.isConfigured else {
+            var state = AccountState.notConfigured(id: config.id)
+            state.configurationGeneration = previous?.configurationGeneration ?? 0
+            return state
+        }
         guard let previous else { return AccountState.loading(id: config.id) }
-        return AccountState(
-            id: config.id,
-            email: previous.email,
-            planType: previous.planType,
-            primaryUsedPercent: previous.primaryUsedPercent,
-            secondaryUsedPercent: previous.secondaryUsedPercent,
-            primaryResetAt: previous.primaryResetAt,
-            secondaryResetAt: previous.secondaryResetAt,
-            resetCredits: previous.resetCredits,
-            lastUpdated: previous.lastUpdated,
-            status: .loading
-        )
+        var state = previous
+        state.status = .loading
+        state.errorMessage = nil
+        return state
     }
 
     nonisolated private static func errorState(
