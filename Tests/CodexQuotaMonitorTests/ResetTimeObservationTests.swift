@@ -11,11 +11,11 @@ final class ResetTimeObservationTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
     /// 1초 잡음이 있는 고정 시각과 이동 시각의 독립 판정 검증
-    func testThreeSpacedReadingsDistinguishStableAndMoving() {
+    func testFirstReadingAcceptsResetAndLaterReadingsDetectMovement() {
         var stable = ResetTimeTracker()
         var moving = ResetTimeTracker()
         for (index, elapsed) in [0.0, 300, 600].enumerated() {
-            let expected: ResetTimeObservation = index == 2 ? .stableObserved : .checking
+            let expected: ResetTimeObservation = .stableObserved
             XCTAssertEqual(stable.observe(
                 resetAt: start.addingTimeInterval(18_000 + (index == 1 ? 1 : 0)),
                 observedAt: start.addingTimeInterval(elapsed), uptime: elapsed
@@ -23,53 +23,53 @@ final class ResetTimeObservationTests: XCTestCase {
             XCTAssertEqual(moving.observe(
                 resetAt: start.addingTimeInterval(604_800 + elapsed),
                 observedAt: start.addingTimeInterval(elapsed), uptime: elapsed
-            ), index == 2 ? .movingObserved : .checking)
+            ), index == 2 ? .movingObserved : .stableObserved)
         }
     }
 
-    /// 연속 수동 조회와 누적 작은 이동을 안정 상태로 오인하지 않는지 검증
-    func testRapidReadsAndCumulativeDriftDoNotEstablishStability() {
+    /// 연속 수동 조회와 작은 시각 변경의 즉시 반영 검증
+    func testRapidReadsAndSmallChangesAcceptLatestReset() {
         var tracker = ResetTimeTracker()
         for elapsed in [0.0, 1, 2, 3] {
             XCTAssertEqual(tracker.observe(
                 resetAt: start.addingTimeInterval(18_000),
                 observedAt: start.addingTimeInterval(elapsed), uptime: elapsed
-            ), .checking)
+            ), .stableObserved)
         }
         tracker = ResetTimeTracker()
         for index in 0..<3 {
             XCTAssertEqual(tracker.observe(
                 resetAt: start.addingTimeInterval(18_000 + Double(index * 2)),
                 observedAt: start.addingTimeInterval(Double(index * 300)), uptime: Double(index * 300)
-            ), .checking)
+            ), .stableObserved)
         }
     }
 
-    /// 만료·누락·시계 변경·장시간 공백·반복 스냅샷의 이력 폐기 검증
+    /// 누락·만료 제외 및 시계 변경·긴 공백 이후 첫 유효 시각 반영 검증
     func testInvalidBoundariesAndClockChangesRestartObservation() {
-        let cases: [(Date?, Double, Double)] = [
-            (nil, 900, 900),
-            (start.addingTimeInterval(900), 900, 900),
-            (start.addingTimeInterval(18_000), 900, 905),
-            (start.addingTimeInterval(18_000), 2_000, 2_000),
-            (start.addingTimeInterval(18_000), 600, 900),
-            (Date(timeIntervalSince1970: .infinity), 900, 900),
+        let cases: [(Date?, Double, Double, ResetTimeObservation)] = [
+            (nil, 900, 900, .checking),
+            (start.addingTimeInterval(900), 900, 900, .checking),
+            (start.addingTimeInterval(18_000), 900, 905, .stableObserved),
+            (start.addingTimeInterval(18_000), 2_000, 2_000, .stableObserved),
+            (start.addingTimeInterval(18_000), 600, 900, .stableObserved),
+            (Date(timeIntervalSince1970: .infinity), 900, 900, .checking),
         ]
-        for (reset, elapsed, uptime) in cases {
+        for (reset, elapsed, uptime, expected) in cases {
             var tracker = stableTracker()
             XCTAssertEqual(tracker.observe(
                 resetAt: reset, observedAt: start.addingTimeInterval(elapsed), uptime: uptime
-            ), .checking)
+            ), expected)
         }
         var tracker = stableTracker()
         XCTAssertEqual(tracker.observe(
             resetAt: start.addingTimeInterval(25_000),
             observedAt: start.addingTimeInterval(900), uptime: 900
-        ), .checking)
+        ), .stableObserved)
     }
 
-    /// 이동 상태에서 고정 상태로 바뀐 뒤 새 3회 관측 요구 검증
-    func testMovingToStableRequiresNewObservations() {
+    /// 이동 이후 첫 고정 시각 조회로 표시 복귀 검증
+    func testMovingToStableAcceptsFirstFixedReading() {
         var tracker = ResetTimeTracker()
         for elapsed in [0.0, 300, 600] {
             _ = tracker.observe(resetAt: start.addingTimeInterval(18_000 + elapsed),
@@ -79,7 +79,7 @@ final class ResetTimeObservationTests: XCTestCase {
         for elapsed in [900.0, 1_200] {
             let result = tracker.observe(resetAt: start.addingTimeInterval(18_600),
                                          observedAt: start.addingTimeInterval(elapsed), uptime: elapsed)
-            XCTAssertEqual(result, elapsed == 1_200 ? .stableObserved : .checking)
+            XCTAssertEqual(result, .stableObserved)
         }
     }
 
@@ -106,6 +106,11 @@ final class ResetTimeObservationTests: XCTestCase {
                 secondaryResetAt: clock.now.addingTimeInterval(604_800), lastUpdated: clock.now, status: .normal
             ))
             await store.refresh(accountID: "C1")
+            XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .stableObserved)
+            if elapsed == 0 {
+                XCTAssertEqual(store.state(for: "C1")?.secondaryResetObservation, .stableObserved)
+                XCTAssertNotNil(AccountDashboardFormatting.fiveHourResetNotice(for: store.state(for: "C1")!, now: clock.now))
+            }
         }
         XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .stableObserved)
         XCTAssertEqual(store.state(for: "C1")?.secondaryResetObservation, .movingObserved)
@@ -121,7 +126,7 @@ final class ResetTimeObservationTests: XCTestCase {
                                       primaryResetAt: start.addingTimeInterval(18_000),
                                       lastUpdated: clock.now, status: .normal))
         await store.refresh(accountID: "C1")
-        XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .checking)
+        XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .stableObserved)
         for elapsed in [1_200.0, 1_500] {
             clock.now = start.addingTimeInterval(elapsed)
             clock.uptime = elapsed
@@ -137,9 +142,11 @@ final class ResetTimeObservationTests: XCTestCase {
                                       primaryResetAt: start.addingTimeInterval(18_000),
                                       lastUpdated: clock.now, status: .normal))
         await store.refresh(accountID: "C1")
-        XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .checking)
+        XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .stableObserved)
         store.reconfigure(pathStrings: ["/tmp/reset-observation-new", "", "", ""])
         XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .checking)
+        await store.refresh(accountID: "C1")
+        XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .stableObserved)
     }
 
     /// 영속 복원 시 이전 실행의 관측 상태를 재사용하지 않는지 검증

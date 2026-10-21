@@ -9,8 +9,8 @@ public struct AccountQuotaSection: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TimelineView(.periodic(from: .now, by: 30)) { context in
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("현재 할당량")
                         .font(.headline.weight(.semibold))
@@ -22,23 +22,25 @@ public struct AccountQuotaSection: View {
                             .lineLimit(2)
                     }
                 }
-            }
 
-            HStack(alignment: .top, spacing: 8) {
-                quotaCard(
-                    title: "5시간 할당량",
-                    subtitle: "5-hour quota",
-                    remaining: account.fiveHourRemainingPercent,
-                    resetAt: account.primaryResetAt,
-                    observation: account.primaryResetObservation
-                )
-                quotaCard(
-                    title: "전체 할당량",
-                    subtitle: "Overall quota",
-                    remaining: account.overallRemainingPercent,
-                    resetAt: account.secondaryResetAt,
-                    observation: account.secondaryResetObservation
-                )
+                HStack(alignment: .top, spacing: 8) {
+                    quotaCard(
+                        title: "5시간 할당량",
+                        subtitle: "5-hour quota",
+                        remaining: account.fiveHourRemainingPercent,
+                        resetAt: account.primaryResetAt,
+                        observation: account.primaryResetObservation,
+                        now: context.date
+                    )
+                    quotaCard(
+                        title: "전체 할당량",
+                        subtitle: "Overall quota",
+                        remaining: account.overallRemainingPercent,
+                        resetAt: account.secondaryResetAt,
+                        observation: account.secondaryResetObservation,
+                        now: context.date
+                    )
+                }
             }
         }
     }
@@ -50,7 +52,8 @@ public struct AccountQuotaSection: View {
         subtitle: String,
         remaining: Double?,
         resetAt: Date?,
-        observation: ResetTimeObservation
+        observation: ResetTimeObservation,
+        now: Date
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
@@ -67,7 +70,7 @@ public struct AccountQuotaSection: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                         Text(observation == .movingObserved ? "초기화 시각 변동 중" :
-                                AccountDashboardFormatting.remainingTimeText(until: resetAt))
+                                AccountDashboardFormatting.remainingTimeText(until: resetAt, now: now))
                             .font(.caption.weight(.medium))
                             .lineLimit(1)
                     }
