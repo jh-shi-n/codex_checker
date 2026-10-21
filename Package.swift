@@ -20,6 +20,7 @@ let package = Package(
         .target(
             name: "CodexQuotaMonitorKit",
             path: "Sources/CodexQuotaMonitorKit",
+            resources: [.process("Resources")],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
             ]

@@ -14,6 +14,7 @@ public struct AccountDetailView: View {
     public let refreshTokenUsage: TokenUsageSnapshotRefresh
     public let runUsageWindowProbe: UsageWindowProbeRunner
     public let onClose: () -> Void
+    public let serviceStatus: OpenAIServiceStatusStore?
 
     @State private var tokenUsageSnapshot: TokenUsageSnapshot?
     @State private var isTokenUsageLoading = false
@@ -35,7 +36,8 @@ public struct AccountDetailView: View {
         loadCachedTokenUsage: @escaping TokenUsageSnapshotLookup = AccountDashboardDefaults.emptyTokenUsageLookup,
         refreshTokenUsage: @escaping TokenUsageSnapshotRefresh = AccountDashboardDefaults.unavailableTokenUsageRefresh,
         runUsageWindowProbe: @escaping UsageWindowProbeRunner = AccountDetailView.defaultProbeRunner,
-        onClose: @escaping () -> Void = {}
+        onClose: @escaping () -> Void = {},
+        serviceStatus: OpenAIServiceStatusStore? = nil
     ) {
         self.account = account
         self.onRefresh = onRefresh
@@ -45,6 +47,7 @@ public struct AccountDetailView: View {
         self.refreshTokenUsage = refreshTokenUsage
         self.runUsageWindowProbe = runUsageWindowProbe
         self.onClose = onClose
+        self.serviceStatus = serviceStatus
     }
 
     public var tokenUsageCacheLookup: TokenUsageSnapshotLookup { loadCachedTokenUsage }
@@ -154,6 +157,9 @@ public struct AccountDetailView: View {
                                 lineWidth: 1
                             )
                         }
+                    if let serviceStatus {
+                        OpenAIServiceStatusBadge(store: serviceStatus)
+                    }
                 }
                 HStack(spacing: 7) {
                     Text(account.email ?? "—")
