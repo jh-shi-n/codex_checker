@@ -260,12 +260,21 @@ struct TransientPopoverPresenter<Content: View>: NSViewRepresentable {
             dismiss()
         }
 
+        /// 상세 팝오버 및 그 자식 서비스 알림 창의 클릭을 내부 입력으로 처리
         private func isInsidePopover(_ event: NSEvent) -> Bool {
             guard
                 let popoverWindow = popover?.contentViewController?.view.window,
-                let eventWindow = event.window,
-                eventWindow === popoverWindow
+                let eventWindow = event.window
             else {
+                return false
+            }
+
+            if eventWindow !== popoverWindow {
+                var parent = eventWindow.parent
+                while let window = parent {
+                    if window === popoverWindow { return true }
+                    parent = window.parent
+                }
                 return false
             }
 

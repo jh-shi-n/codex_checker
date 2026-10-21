@@ -27,6 +27,8 @@ struct CodexQuotaMonitorApp: App {
 final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let preferences: PreferencesStore
     let accountStore: AccountStore
+    /// 할당량 조회에 동반하여 갱신하는 네 계정 공용 서비스 상태
+    let serviceStatus: OpenAIServiceStatusStore
     let quotaResetNotifications: QuotaResetNotificationService
     /// 안정 관측된 한도의 시각 도달 조회와 사전·도달 시스템 알림 연결
     lazy var quotaResetScheduler = QuotaResetScheduler(
@@ -65,6 +67,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     /// 설정과 계정 서비스 초기화 및 표시·갱신 콜백 연결
     override init() {
         let preferences = PreferencesStore()
+        let serviceStatus = OpenAIServiceStatusStore()
         let accountStore = AccountStore(
             configs: Self.configs(for: preferences.accountPaths),
             preferencesStore: preferences
@@ -124,10 +127,11 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 ))
             }
         )
-        let notchLayoutManager = NotchLayoutManager()
+        let notchLayoutManager = NotchLayoutManager(serviceStatus: serviceStatus)
 
         self.preferences = preferences
         self.accountStore = accountStore
+        self.serviceStatus = serviceStatus
         self.quotaResetNotifications = quotaResetNotifications
         self.refreshService = refreshService
         self.launchAtLoginService = launchAtLoginService
@@ -206,6 +210,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             )
         )
         super.init()
+
+        accountStore.onQuotaRefreshStarted = { [weak serviceStatus] in
+            serviceStatus?.refresh()
+        }
 
         accountStore.onEarlyQuotaReset = { [weak self] reset in
             self?.quotaResetNotifications.notify(reset)

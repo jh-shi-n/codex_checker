@@ -112,6 +112,10 @@ trap cleanup EXIT INT TERM
 mkdir -p "$stage_app/Contents/MacOS" "$stage_app/Contents/Resources"
 cp -- "$binary" "$stage_app/Contents/MacOS/CodexQuotaMonitor"
 cp -- "$info_plist" "$stage_app/Contents/Info.plist"
+# 서비스 표정 SVG의 Swift 패키지 리소스 번들 포함
+resource_bundle="$build_bin_path/CodexQuotaMonitor_CodexQuotaMonitorKit.bundle"
+[[ -d "$resource_bundle" ]] || { print -u2 "Resource bundle not found: $resource_bundle"; exit 1; }
+cp -R -- "$resource_bundle" "$stage_app/Contents/Resources/"
 chmod 755 "$stage_app/Contents/MacOS/CodexQuotaMonitor"
 
 [[ -x "$stage_app/Contents/MacOS/CodexQuotaMonitor" ]] || {
