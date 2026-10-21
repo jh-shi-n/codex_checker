@@ -4,6 +4,17 @@ import SwiftUI
 
 @MainActor
 final class QuotaPresentationTests: XCTestCase {
+    /// 취소한 Ping 결과의 일반 실패 문구 노출 방지 검증
+    func testProbeCancellationIsDisplayedSeparatelyFromFailure() {
+        let now = Date()
+        let result = UsageWindowProbeResult(accountID: "C1", status: .cancelled, startedAt: now, completedAt: now)
+        let section = UsageWindowProbeSection(
+            account: AccountState(id: "C1", status: .normal),
+            probe: UsageWindowProbePresentationResult(result: result)
+        )
+        XCTAssertEqual(section.resultText, "취소됨")
+    }
+
     /// 화면에 맞춰 축소한 팝오버의 실제 내부 렌더 크기 검증
     func testAccountDetailContentFitsSmallPopoverSize() throws {
         let size = TransientPopoverSizingPolicy.clampedContentSize(

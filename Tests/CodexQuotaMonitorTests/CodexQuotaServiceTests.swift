@@ -188,6 +188,51 @@ final class CodexQuotaServiceTests: XCTestCase {
         XCTAssertEqual(service.fetchSync(for: config), .failure(.timeout))
     }
 
+    func testFetchCancellationWakesTransportReadAndReturnsCancelled() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("auth.json"))
+
+        let transport = BlockingCancellationTransport()
+        let service = CodexQuotaService(
+            locator: FixedCodexLocator(url: directory.appendingPathComponent("codex")),
+            processFactory: { transport }
+        )
+        let config = AccountConfig(id: "C1", home: directory, position: .left)
+        let task = Task { await service.fetch(for: config) }
+        XCTAssertEqual(transport.readStarted.wait(timeout: .now() + 1), .success)
+
+        task.cancel()
+        let result = await task.value
+
+        XCTAssertEqual(result, .failure(.cancelled))
+        XCTAssertEqual(transport.cancelCount, 1)
+        XCTAssertEqual(transport.terminationCount, 1)
+    }
+
+    func testStateCancellationStopsTransportAndDoesNotPublishStaleFailure() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("auth.json"))
+
+        let transport = BlockingCancellationTransport()
+        let service = CodexQuotaService(
+            locator: FixedCodexLocator(url: directory.appendingPathComponent("codex")),
+            processFactory: { transport }
+        )
+        let config = AccountConfig(id: "C1", home: directory, position: .left)
+        let task = Task { await service.state(for: config) }
+        XCTAssertEqual(transport.readStarted.wait(timeout: .now() + 1), .success)
+
+        task.cancel()
+        let state = await task.value
+
+        XCTAssertEqual(state.status, .loading)
+        XCTAssertEqual(state.errorMessage, nil)
+        XCTAssertEqual(transport.cancelCount, 1)
+        XCTAssertEqual(transport.terminationCount, 1)
+    }
+
     func testInitializeTimeoutIsMappedBeforeFollowUpRequestsAreSent() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -379,4 +424,55 @@ private final class RecordingTransport: CodexProcessTransport, @unchecked Sendab
     }
 
     func terminate() {}
+}
+
+/// 취소 wakeup과 worker 종료를 세마포어로 검증하는 동기 fake transport
+private final class BlockingCancellationTransport: CodexProcessTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private let cancellation = DispatchSemaphore(value: 0)
+    private var didCancel = false
+    private var cancellations = 0
+    private var terminations = 0
+    let readStarted = DispatchSemaphore(value: 0)
+
+    var cancelCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancellations
+    }
+
+    var terminationCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminations
+    }
+
+    func launch(executable: URL, home: URL) throws {}
+
+    func send(_ request: CodexRequest) throws {}
+
+    func readResponses(for ids: Set<Int>, until deadline: Date) throws -> [Int: CodexMessage] {
+        readStarted.signal()
+        let remaining = max(0, deadline.timeIntervalSinceNow)
+        _ = cancellation.wait(timeout: .now() + remaining)
+        lock.lock()
+        let wasCancelled = didCancel
+        lock.unlock()
+        if wasCancelled { throw CodexProcessError.cancelled }
+        throw CodexProcessError.timeout
+    }
+
+    func cancel() {
+        lock.lock()
+        didCancel = true
+        cancellations += 1
+        lock.unlock()
+        cancellation.signal()
+    }
+
+    func terminate() {
+        lock.lock()
+        terminations += 1
+        lock.unlock()
+    }
 }

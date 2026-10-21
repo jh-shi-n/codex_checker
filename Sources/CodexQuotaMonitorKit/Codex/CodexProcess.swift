@@ -9,17 +9,24 @@ public enum CodexProcessError: Error, Equatable, Sendable {
     case readFailed(String)
     case processExited(Int32)
     case timeout
+    case cancelled
 }
 
 public protocol CodexProcessTransport: AnyObject, Sendable {
     func launch(executable: URL, home: URL) throws
     func send(_ request: CodexRequest) throws
     func readResponses(for ids: Set<Int>, until deadline: Date) throws -> [Int: CodexMessage]
+    func cancel()
     func terminate()
     func terminate(until deadline: Date)
 }
 
 public extension CodexProcessTransport {
+    /// 호환 transport의 취소를 기존 종료 동작으로 연결
+    func cancel() {
+        terminate()
+    }
+
     /// Compatibility default for deterministic transports that do not own a child process.
     func terminate(until deadline: Date) {
         terminate()
@@ -41,6 +48,8 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
     private var resourcesCleanedUp = true
     private var decoder = CodexLineDecoder()
     private let wakeSignal = DispatchSemaphore(value: 0)
+    private let cancellationLock = NSLock()
+    private var cancellationRequested = false
 
     public init() {
         self.inheritedEnvironment = ProcessInfo.processInfo.environment
@@ -130,6 +139,7 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
 
         var responses: [Int: CodexMessage] = [:]
         while responses.count < ids.count {
+            if isCancellationRequested { throw CodexProcessError.cancelled }
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0 else { throw CodexProcessError.timeout }
 
@@ -139,6 +149,7 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
             if wakeSignal.wait(timeout: .now() + waitInterval) == .timedOut {
                 throw CodexProcessError.timeout
             }
+            if isCancellationRequested { throw CodexProcessError.cancelled }
 
             switch try readAvailable(from: output) {
             case let .data(data):
@@ -191,6 +202,15 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
         terminate(until: Date().addingTimeInterval(Self.gracefulTerminationTimeout))
     }
 
+    /// 읽기 대기를 깨우고 종료 책임을 조회 worker에 맡김
+    public func cancel() {
+        cancellationLock.lock()
+        let shouldWake = !cancellationRequested
+        cancellationRequested = true
+        cancellationLock.unlock()
+        if shouldWake { wakeSignal.signal() }
+    }
+
     /// Sends SIGTERM, then force-kills an uncooperative child. Both waits are
     /// bounded by the caller's deadline and explicit short termination windows.
     public func terminate(until deadline: Date) {
@@ -222,6 +242,12 @@ public final class CodexProcess: CodexProcessTransport, @unchecked Sendable {
             guard remaining > 0 else { return }
             Thread.sleep(forTimeInterval: min(0.01, remaining))
         }
+    }
+
+    private var isCancellationRequested: Bool {
+        cancellationLock.lock()
+        defer { cancellationLock.unlock() }
+        return cancellationRequested
     }
 
     private enum NonBlockingRead {

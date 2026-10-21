@@ -510,11 +510,14 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         self.forcedTerminationTimeout = max(0, forcedTerminationTimeout)
     }
 
+    /// 취소 wakeup과 제한 종료를 포함해 격리 프로세스 실행
     public func run(
         command: UsageWindowProbeCommand,
         timeout: TimeInterval
     ) async throws -> UsageWindowProbeProcessResult {
-        let cancellation = ProcessCancellation()
+        let wakeSignal = DispatchSemaphore(value: 0)
+        let exitSignal = DispatchSemaphore(value: 0)
+        let cancellation = ProcessCancellation(wakeSignal: wakeSignal)
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<UsageWindowProbeProcessResult, Error>) in
@@ -523,7 +526,9 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
                         continuation.resume(returning: try self.runSynchronously(
                             command: command,
                             timeout: timeout,
-                            cancellation: cancellation
+                            cancellation: cancellation,
+                            wakeSignal: wakeSignal,
+                            exitSignal: exitSignal
                         ))
                     } catch {
                         continuation.resume(throwing: error)
@@ -538,7 +543,9 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
     private func runSynchronously(
         command: UsageWindowProbeCommand,
         timeout: TimeInterval,
-        cancellation: ProcessCancellation
+        cancellation: ProcessCancellation,
+        wakeSignal: DispatchSemaphore,
+        exitSignal: DispatchSemaphore
     ) throws -> UsageWindowProbeProcessResult {
         let isolation: UsageWindowProbeExecutionIsolation
         do {
@@ -559,8 +566,6 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         let errorPipe = Pipe()
         let outputCollector = BoundedDataCollector(limit: UsageWindowProbeProcessResult.maximumStandardOutputBytes)
         let errorCollector = BoundedDataCollector(limit: UsageWindowProbeProcessResult.maximumStandardErrorBytes)
-        let termination = DispatchSemaphore(value: 0)
-
         process.executableURL = command.executableURL
         let modelInstructionsPath = isolation.modelInstructionsURL.path
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -588,7 +593,11 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         process.standardInput = inputPipe
         process.standardOutput = outputPipe
         process.standardError = errorPipe
-        process.terminationHandler = { _ in termination.signal() }
+        process.terminationHandler = {
+            _ in
+            exitSignal.signal()
+            wakeSignal.signal()
+        }
 
         outputPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
@@ -622,11 +631,10 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
             close(pipe: inputPipe)
             close(pipe: outputPipe)
             close(pipe: errorPipe)
+            if cancellation.isCancelled {
+                throw UsageWindowProbeProcessError.cancelled
+            }
             throw UsageWindowProbeProcessError.launchFailure
-        }
-        cancellation.install(process)
-        if cancellation.isCancelled {
-            process.terminate()
         }
         // The parent must release its copies of the pipe write ends. Keeping
         // them open would make the post-exit drain wait forever for EOF.
@@ -634,9 +642,12 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
 
         let boundedTimeout = max(0.001, timeout)
         var didTimeout = false
-        if termination.wait(timeout: .now() + boundedTimeout) == .timedOut {
+        let waitResult = wakeSignal.wait(timeout: .now() + boundedTimeout)
+        if cancellation.isCancelled {
+            terminateForCancellation(process, exitSignal: exitSignal)
+        } else if waitResult == .timedOut {
             didTimeout = true
-            terminate(process, termination: termination)
+            terminate(process, exitSignal: exitSignal)
         }
 
         outputPipe.fileHandleForReading.readabilityHandler = nil
@@ -650,11 +661,11 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         close(pipe: outputPipe)
         close(pipe: errorPipe)
 
-        if didTimeout {
-            throw UsageWindowProbeProcessError.timeout
-        }
         if cancellation.isCancelled {
             throw UsageWindowProbeProcessError.cancelled
+        }
+        if didTimeout {
+            throw UsageWindowProbeProcessError.timeout
         }
         guard status != nil else {
             throw UsageWindowProbeProcessError.processFailure
@@ -666,14 +677,19 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         )
     }
 
-    private func terminate(_ process: Process, termination: DispatchSemaphore) {
+    private func terminate(_ process: Process, exitSignal: DispatchSemaphore) {
         guard process.isRunning else { return }
         process.terminate()
-        if termination.wait(timeout: .now() + gracefulTerminationTimeout) == .timedOut,
+        if exitSignal.wait(timeout: .now() + gracefulTerminationTimeout) == .timedOut,
            process.isRunning {
             _ = kill(process.processIdentifier, SIGKILL)
-            _ = termination.wait(timeout: .now() + forcedTerminationTimeout)
+            _ = exitSignal.wait(timeout: .now() + forcedTerminationTimeout)
         }
+    }
+
+    /// 취소 wakeup 이후 유예 종료와 강제 종료를 순서대로 수행
+    private func terminateForCancellation(_ process: Process, exitSignal: DispatchSemaphore) {
+        terminate(process, exitSignal: exitSignal)
     }
 
     private func drain(_ handle: FileHandle, into collector: BoundedDataCollector) {
@@ -700,8 +716,12 @@ public typealias LiveUsageWindowProbeProcessRunner = UsageWindowProbeLiveProcess
 
 private final class ProcessCancellation: @unchecked Sendable {
     private let lock = NSLock()
+    private let wakeSignal: DispatchSemaphore
     private var cancelled = false
-    private var process: Process?
+
+    init(wakeSignal: DispatchSemaphore) {
+        self.wakeSignal = wakeSignal
+    }
 
     var isCancelled: Bool {
         lock.lock()
@@ -709,24 +729,16 @@ private final class ProcessCancellation: @unchecked Sendable {
         return cancelled
     }
 
-    func install(_ process: Process) {
-        lock.lock()
-        self.process = process
-        let shouldTerminate = cancelled
-        lock.unlock()
-        if shouldTerminate, process.isRunning {
-            process.terminate()
-        }
-    }
-
+    /// 취소 상태를 한 번 기록하고 child 종료 대기를 깨움
     func cancel() {
         lock.lock()
-        cancelled = true
-        let process = self.process
-        lock.unlock()
-        if let process, process.isRunning {
-            process.terminate()
+        guard !cancelled else {
+            lock.unlock()
+            return
         }
+        cancelled = true
+        lock.unlock()
+        wakeSignal.signal()
     }
 }
 
@@ -817,7 +829,7 @@ public actor UsageWindowProbeService {
         activeAccountIDs.remove(config.id)
         states[config.id] = UsageWindowProbeState(
             accountID: config.id,
-            status: result.isSuccess ? .success : .failure,
+            status: result.isCancelled ? .cancelled : (result.isSuccess ? .success : .failure),
             startedAt: result.startedAt,
             completedAt: result.completedAt,
             result: result,
@@ -842,11 +854,15 @@ public actor UsageWindowProbeService {
         state(for: accountID)
     }
 
+    /// 사전 점검부터 runner 완료까지 취소 상태를 유지
     private func execute(
         config: AccountConfig,
         startedAt: Date
     ) async -> UsageWindowProbeResult {
         let metadata = commandBuilder.metadata
+        if Task.isCancelled {
+            return cancelled(accountID: config.id, startedAt: startedAt, metadata: metadata)
+        }
         guard config.isConfigured, let configuredHome = config.configuredHome else {
             return failure(
                 accountID: config.id,
@@ -857,6 +873,9 @@ public actor UsageWindowProbeService {
         }
 
         let authMetadata = fileSystem.metadata(config.authFile)
+        if Task.isCancelled {
+            return cancelled(accountID: config.id, startedAt: startedAt, metadata: metadata)
+        }
         guard authMetadata.isUsableAuthenticationFile else {
             return failure(
                 accountID: config.id,
@@ -874,6 +893,9 @@ public actor UsageWindowProbeService {
                 metadata: metadata
             )
         }
+        if Task.isCancelled {
+            return cancelled(accountID: config.id, startedAt: startedAt, metadata: metadata)
+        }
 
         let command = commandBuilder.build(
             executable: executable,
@@ -882,6 +904,9 @@ public actor UsageWindowProbeService {
 
         do {
             let processResult = try await processRunner.run(command: command, timeout: timeout)
+            if Task.isCancelled {
+                return cancelled(accountID: config.id, startedAt: startedAt, metadata: command.metadata)
+            }
             var parser = UsageWindowProbeJSONLParser()
             parser.append(processResult.stdout)
             let parsed = parser.finish()
@@ -931,15 +956,18 @@ public actor UsageWindowProbeService {
                 commandMetadata: command.metadata
             )
         } catch let error as UsageWindowProbeProcessError {
+            if Task.isCancelled {
+                return cancelled(accountID: config.id, startedAt: startedAt, metadata: command.metadata)
+            }
             let category: UsageWindowProbeFailureCategory
             switch error {
+            case .cancelled:
+                return cancelled(accountID: config.id, startedAt: startedAt, metadata: command.metadata)
             case .timeout:
                 category = .timeout
             case .launchFailure:
                 category = .launchFailure
             case .processFailure:
-                category = .processFailure
-            case .cancelled:
                 category = .processFailure
             }
             return failure(
@@ -949,6 +977,9 @@ public actor UsageWindowProbeService {
                 metadata: command.metadata
             )
         } catch {
+            if Task.isCancelled {
+                return cancelled(accountID: config.id, startedAt: startedAt, metadata: command.metadata)
+            }
             return failure(
                 accountID: config.id,
                 startedAt: startedAt,
@@ -956,6 +987,21 @@ public actor UsageWindowProbeService {
                 metadata: command.metadata
             )
         }
+    }
+
+    /// 취소 결과를 failure 상태와 분리해 보존
+    private func cancelled(
+        accountID: String,
+        startedAt: Date,
+        metadata: UsageWindowProbeCommandMetadata
+    ) -> UsageWindowProbeResult {
+        UsageWindowProbeResult(
+            accountID: accountID,
+            status: .cancelled,
+            startedAt: startedAt,
+            completedAt: clock(),
+            commandMetadata: metadata
+        )
     }
 
     private func failure(

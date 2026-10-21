@@ -63,6 +63,7 @@ public enum UsageWindowProbeFailureCategory: String, Codable, Equatable, Sendabl
 public enum UsageWindowProbeResultStatus: String, Codable, Equatable, Sendable {
     case success
     case failure
+    case cancelled
 }
 
 /// Counts reported by Codex. A missing field stays nil; the probe never
@@ -164,11 +165,13 @@ public struct UsageWindowProbeResult: Codable, Equatable, Sendable {
         self.completedAt = completedAt
         self.usage = usage
         self.failureCategory = failureCategory
-        self.userMessage = userMessage ?? failureCategory?.userMessage ?? "사용량 확인이 완료되었습니다."
+        self.userMessage = userMessage ?? failureCategory?.userMessage ??
+            (status == .cancelled ? "사용량 확인이 취소되었습니다." : "사용량 확인이 완료되었습니다.")
         self.commandMetadata = commandMetadata
     }
 
     public var isSuccess: Bool { status == .success }
+    public var isCancelled: Bool { status == .cancelled }
     public var succeeded: Bool { isSuccess }
     public var failure: UsageWindowProbeFailureCategory? { failureCategory }
 
@@ -182,6 +185,7 @@ public enum UsageWindowProbeStateStatus: String, Codable, Equatable, Sendable {
     case running
     case success
     case failure
+    case cancelled
 }
 
 /// Latest per-account state retained by the service for UI observation.
