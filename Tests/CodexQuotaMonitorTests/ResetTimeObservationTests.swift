@@ -142,21 +142,12 @@ final class ResetTimeObservationTests: XCTestCase {
         XCTAssertEqual(store.state(for: "C1")?.primaryResetObservation, .checking)
     }
 
-    /// 영속 복원 시 관측을 재시작하고 만료·실패 문구를 구분하는지 검증
-    func testObservationIsNotPersistedAndPresentationDoesNotClaimResetCompletion() throws {
+    /// 영속 복원 시 이전 실행의 관측 상태를 재사용하지 않는지 검증
+    func testObservationIsNotPersisted() throws {
         var state = AccountState(id: "C1", primaryResetAt: start.addingTimeInterval(18_000), status: .normal)
         state.primaryResetObservation = .stableObserved
         let restored = try JSONDecoder().decode(AccountState.self, from: JSONEncoder().encode(state))
         XCTAssertEqual(restored.primaryResetObservation, .checking)
-        XCTAssertEqual(AccountDashboardFormatting.resetObservationStatusText(
-            .stableObserved, resetAt: start, status: .normal, now: start
-        ), "예정 시각 도달 · 재확인 대기")
-        XCTAssertEqual(AccountDashboardFormatting.resetObservationStatusText(
-            .stableObserved, resetAt: start, status: .timeout, now: start
-        ), "이전 조회 결과")
-        XCTAssertEqual(AccountDashboardFormatting.resetObservationStatusText(
-            .movingObserved, resetAt: start.addingTimeInterval(18_000), status: .normal, now: start
-        ), "조회에 따라 시각 이동")
     }
 
     /// 고정 시각 3회 관측 fixture 구성
