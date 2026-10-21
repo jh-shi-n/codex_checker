@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="288" height="40" viewBox="0 0 144 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g stroke="currentColor" fill="none">
+    <path d="M5 11 A5 5 0 0 1 15 11" stroke-width="1.9" stroke-linecap="round"/>
+    <line x1="8.2" y1="8.1" x2="8.9" y2="8.8" stroke-width="1.4" stroke-linecap="round"/>
+    <line x1="10.0" y1="6.8" x2="10.0" y2="7.8" stroke-width="1.4" stroke-linecap="round"/>
+    <line x1="10.0" y1="10.3" x2="12.7" y2="7.6" stroke-width="1.8" stroke-linecap="round"/>
+    <circle cx="10" cy="11" r="1.5" fill="currentColor" stroke="none"/>
+    <polyline points="7.0,12.2 5.4,13.8 7.0,15.4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="13.0,12.2 14.6,13.8 13.0,15.4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
