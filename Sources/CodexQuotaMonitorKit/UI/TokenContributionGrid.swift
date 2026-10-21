@@ -91,7 +91,7 @@ public struct TokenContributionGrid: View {
     @ViewBuilder
     private func grid(snapshot: TokenUsageSnapshot) -> some View {
         let points = Self.normalizedPoints(snapshot.dailyPoints)
-        let distribution = points.map(\.totalTokens)
+        let intensities = TokenContributionIntensity.levels(for: points.map(\.totalTokens))
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 6) {
                 VStack(alignment: .trailing, spacing: 4) {
@@ -119,7 +119,7 @@ public struct TokenContributionGrid: View {
                                 let point = points[index]
                                 contributionCell(
                                     point: point,
-                                    intensity: Self.intensity(for: point.totalTokens, distribution: distribution)
+                                    intensity: intensities[point.totalTokens] ?? .none
                                 )
                             }
                         }

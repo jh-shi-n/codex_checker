@@ -108,8 +108,8 @@ public struct UsageWindowProbeSection: View {
         return AccountDashboardFormatting.dateText(completedAt)
     }
 
-    /// Ping 실행과 한도 재조회 결과를 구분한 문구
-    private var resultText: String {
+    /// Ping 실행·취소와 한도 재조회 결과를 구분한 문구
+    var resultText: String {
         // While a new request is active, do not leave a previous failure or
         // success looking like the current result. The terminal categorical
         // result is shown again as soon as the callback completes.
@@ -117,6 +117,7 @@ public struct UsageWindowProbeSection: View {
         guard let result = probe?.result else {
             return "대기"
         }
+        if result.isCancelled { return "취소됨" }
         if result.isSuccess, probe?.quotaRefreshSucceeded == false {
             return "Ping 성공 · 한도 조회 실패"
         }

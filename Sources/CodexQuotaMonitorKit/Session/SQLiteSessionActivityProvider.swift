@@ -311,6 +311,7 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
         }
     }
 
+    /// 단일 인접 목록을 이용한 세션 그래프 투영
     private func buildSnapshot(
         accountID: String,
         threads: [ThreadRow],
@@ -323,6 +324,10 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
         }
 
         let orderedEdges = edges.sorted(by: edgeComesBefore)
+        var edgesByParent: [String: [EdgeRow]] = [:]
+        for edge in orderedEdges {
+            edgesByParent[edge.parentID, default: []].append(edge)
+        }
         let childIDs = Set(orderedEdges.map(\.childID))
         let roots = threads.filter { !$0.archived && !childIDs.contains($0.id) }
         let candidates = roots.compactMap { root -> RootCandidate? in
@@ -331,7 +336,11 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
                 // promoted to a visible main session.
                 return nil
             }
-            let descendants = descendants(of: root.id, edges: orderedEdges, threadsByID: threadsByID)
+            let descendants = descendants(
+                of: root.id,
+                edgesByParent: edgesByParent,
+                threadsByID: threadsByID
+            )
             // Edge status can remain open after an interrupted Codex process,
             // so recency of thread metadata—not the status alone—proves that
             // this session still belongs in the live activity projection.
@@ -422,18 +431,22 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
         return lhs.root.id < rhs.root.id
     }
 
+    /// 인접 목록과 인덱스 큐 기반 너비 우선 descendant 탐색
     private func descendants(
         of rootID: String,
-        edges: [EdgeRow],
+        edgesByParent: [String: [EdgeRow]],
         threadsByID: [String: ThreadRow]
     ) -> [EdgeRow] {
         var queue = [rootID]
+        var queueIndex = 0
         var visited: Set<String> = [rootID]
         var result: [EdgeRow] = []
 
-        while !queue.isEmpty {
-            let parent = queue.removeFirst()
-            for edge in edges where edge.parentID == parent {
+        while queueIndex < queue.count {
+            let parent = queue[queueIndex]
+            queueIndex += 1
+            guard let outgoingEdges = edgesByParent[parent] else { continue }
+            for edge in outgoingEdges {
                 guard let child = threadsByID[edge.childID],
                       !child.archived,
                       !visited.contains(edge.childID) else { continue }
