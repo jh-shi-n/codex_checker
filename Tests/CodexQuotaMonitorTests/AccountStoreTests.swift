@@ -4,6 +4,31 @@ import XCTest
 
 @MainActor
 final class AccountStoreTests: XCTestCase {
+    /// 경로 변경 슬롯의 상세 세대 갱신과 다른 슬롯·일반 새로고침의 세대 보존 검증
+    func testConfigurationGenerationChangesOnlyForReconfiguredSlot() async {
+        let configs = makeConfigs()
+        let store = AccountStore(configs: configs) { config in
+            AccountState(id: config.id, usedPercent: 20, status: .normal)
+        }
+        let original = store.states.map(\.configurationGeneration)
+        var changed = configs
+        changed[0] = AccountConfig(id: "C1", home: URL(fileURLWithPath: "/tmp/changed-codex-home"), position: .left)
+
+        store.reconfigure(changed)
+        XCTAssertEqual(store.state(for: "C1")?.configurationGeneration, original[0] + 1)
+        XCTAssertEqual(Array(store.states.dropFirst()).map(\.configurationGeneration), Array(original.dropFirst()))
+        await store.refreshAll()
+        XCTAssertEqual(store.state(for: "C1")?.configurationGeneration, original[0] + 1)
+        store.reconfigure(changed)
+        XCTAssertEqual(store.state(for: "C1")?.configurationGeneration, original[0] + 1)
+
+        store.reconfigure(pathStrings: ["", changed[1].home.path, changed[2].home.path, changed[3].home.path])
+        XCTAssertEqual(store.state(for: "C1")?.configurationGeneration, original[0] + 2)
+        await store.refresh(accountID: "C1")
+        await store.refreshAll()
+        XCTAssertEqual(store.state(for: "C1")?.configurationGeneration, original[0] + 2)
+    }
+
     /// 초기화 갱신의 정상 조회와 이전 값을 보존하는 실패 조회 구분 확인
     func testRefreshReportsOnlyAppliedNormalResultAsSuccess() async {
         let counter = CallCounter()

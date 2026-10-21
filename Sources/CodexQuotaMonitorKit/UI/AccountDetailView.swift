@@ -22,6 +22,8 @@ public struct AccountDetailView: View {
     @State private var isTokenUsageExpanded = false
     @State private var probePresentation: UsageWindowProbePresentationResult?
     @State private var isProbeRunning = false
+    @State private var tokenUsageRefreshTask: Task<Void, Never>?
+    @State private var probeTask: Task<Void, Never>?
 
     public init(
         account: AccountState,
@@ -108,6 +110,12 @@ public struct AccountDetailView: View {
         }
         .onChange(of: account.id) { _, _ in
             probePresentation = nil
+            isProbeRunning = false
+        }
+        .onDisappear {
+            tokenUsageRefreshTask?.cancel()
+            probeTask?.cancel()
+            isTokenUsageLoading = false
             isProbeRunning = false
         }
     }
@@ -327,7 +335,7 @@ public struct AccountDetailView: View {
     private func updateTokenUsage() {
         guard !isTokenUsageLoading else { return }
         isTokenUsageLoading = true
-        Task { @MainActor in
+        tokenUsageRefreshTask = Task { @MainActor in
             let snapshot = await refreshTokenUsage(account)
             guard !Task.isCancelled else { return }
             if snapshot.availability == .available {
@@ -352,7 +360,7 @@ public struct AccountDetailView: View {
         ) else { return }
 
         isProbeRunning = true
-        Task { @MainActor in
+        probeTask = Task { @MainActor in
             let presentation = await runUsageWindowProbe(account)
             guard !Task.isCancelled else { return }
             guard presentation.result.accountID == account.id else {
