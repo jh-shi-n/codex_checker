@@ -293,6 +293,22 @@ public enum TokenContributionIntensity: Int, CaseIterable, Equatable, Sendable {
     public static var normal: Self { .medium }
     public static var veryLow: Self { .low }
 
+    /// 분포 정렬 한 번으로 중복 값의 마지막 순위를 유지한 강도표 구성
+    public static func levels(for distribution: [Int64]) -> [Int64: Self] {
+        let positive = distribution.filter { $0 > 0 }.sorted()
+        var levels: [Int64: Self] = [:]
+        for (rank, value) in positive.enumerated() {
+            levels[value] = intensity(rank: rank, count: positive.count)
+        }
+        return levels
+    }
+
+    /// 양수 분포 순위의 사분위 강도 변환
+    private static func intensity(rank: Int, count: Int) -> Self {
+        let bucket = min(3, (rank * 4) / max(1, count))
+        return [.low, .medium, .high, .veryHigh][bucket]
+    }
+
     public static func level(
         for value: Int64,
         distribution: [Int64]
@@ -309,8 +325,7 @@ public enum TokenContributionIntensity: Int, CaseIterable, Equatable, Sendable {
             }
             return insertion
         }()
-        let bucket = min(3, (rank * 4) / max(1, positive.count))
-        return [.low, .medium, .high, .veryHigh][bucket]
+        return intensity(rank: rank, count: positive.count)
     }
 
     public static func level(for value: Int64, in distribution: [Int64]) -> Self {
