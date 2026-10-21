@@ -261,6 +261,103 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertFalse(invalidatedPresentation.isCurrentAccount)
     }
 
+    /// 새 일반 갱신이 이전 Ping 스냅샷보다 우선
+    func testAccountDisplayKeepsNewerNormalRefreshAfterOlderProbe() {
+        let olderUpdate = Date(timeIntervalSince1970: 1_700_000_000)
+        let newerUpdate = olderUpdate.addingTimeInterval(60)
+        let current = AccountState(
+            id: "C1",
+            primaryRemainingPercent: 88,
+            lastUpdated: newerUpdate,
+            status: .normal
+        )
+        let olderProbeAccount = AccountState(
+            id: "C1",
+            primaryRemainingPercent: 20,
+            lastUpdated: olderUpdate,
+            status: .normal
+        )
+
+        let displayed = AccountDashboardPresentation.accountForDisplay(
+            current: current,
+            probe: successfulQuotaProbe(refreshing: olderProbeAccount)
+        )
+
+        XCTAssertEqual(displayed, current)
+    }
+
+    /// Loading·오류 상태의 최신 캐시 한도 유지
+    func testAccountDisplayKeepsLatestCachedSnapshotDuringLoadingAndError() {
+        let olderUpdate = Date(timeIntervalSince1970: 1_700_000_000)
+        let newerUpdate = olderUpdate.addingTimeInterval(60)
+        let olderProbeAccount = AccountState(
+            id: "C1",
+            primaryRemainingPercent: 20,
+            lastUpdated: olderUpdate,
+            status: .normal
+        )
+
+        for status in [AccountStatus.loading, .error] {
+            let current = AccountState(
+                id: "C1",
+                primaryRemainingPercent: 88,
+                lastUpdated: newerUpdate,
+                status: status,
+                errorMessage: status == .error ? "refresh failed" : nil
+            )
+
+            let displayed = AccountDashboardPresentation.accountForDisplay(
+                current: current,
+                probe: successfulQuotaProbe(refreshing: olderProbeAccount)
+            )
+
+            XCTAssertEqual(displayed, current, "cached quota during \(status)")
+        }
+    }
+
+    /// 동일하거나 비교할 시각이 없으면 현재 계정 스냅샷 유지
+    func testAccountDisplayKeepsCurrentSnapshotWhenUpdateTimesTieOrAreMissing() {
+        let updateTime = Date(timeIntervalSince1970: 1_700_000_000)
+        let currentWithTime = AccountState(
+            id: "C1",
+            primaryRemainingPercent: 88,
+            lastUpdated: updateTime,
+            status: .normal
+        )
+        let tiedProbeAccount = AccountState(
+            id: "C1",
+            primaryRemainingPercent: 20,
+            lastUpdated: updateTime,
+            status: .normal
+        )
+        let currentWithoutTime = AccountState(
+            id: "C1",
+            primaryRemainingPercent: 76,
+            status: .normal
+        )
+        let datedProbeAccount = AccountState(
+            id: "C1",
+            primaryRemainingPercent: 20,
+            lastUpdated: updateTime,
+            status: .normal
+        )
+
+        XCTAssertEqual(
+            AccountDashboardPresentation.accountForDisplay(
+                current: currentWithTime,
+                probe: successfulQuotaProbe(refreshing: tiedProbeAccount)
+            ),
+            currentWithTime
+        )
+        XCTAssertEqual(
+            AccountDashboardPresentation.accountForDisplay(
+                current: currentWithoutTime,
+                probe: successfulQuotaProbe(refreshing: datedProbeAccount)
+            ),
+            currentWithoutTime
+        )
+    }
+
     /// Loading 상태에서 직전 한도 값의 도넛 표시 유지
     func testLoadingAccountRetainsKnownQuotaDonutPresentation() {
         let account = AccountState(
@@ -1104,6 +1201,23 @@ final class QuotaPresentationTests: XCTestCase {
             if case let .entry(id, _) = event { return id == stale.id }
             return false
         })
+    }
+
+    /// 계정 스냅샷을 담은 성공한 Ping 갱신 결과 구성
+    private func successfulQuotaProbe(
+        refreshing account: AccountState
+    ) -> UsageWindowProbePresentationResult {
+        let completedAt = account.lastUpdated ?? Date(timeIntervalSince1970: 0)
+        return UsageWindowProbePresentationResult(
+            result: UsageWindowProbeResult(
+                accountID: account.id,
+                status: .success,
+                startedAt: completedAt,
+                completedAt: completedAt
+            ),
+            quotaRefreshSucceeded: true,
+            refreshedAccount: account
+        )
     }
 
     private func makeActivityToast(
