@@ -80,6 +80,34 @@ enum AccountDashboardPresentation {
 /// Pure formatting and semantic helpers shared by the dashboard and focused
 /// presentation tests.  They never access account files or invoke a service.
 public enum AccountDashboardFormatting {
+    /// 현재 할당량 제목 옆의 5시간 한도 안내; 이동·실패·만료·7일 한도 제외
+    public static func fiveHourResetNotice(for account: AccountState, now: Date = Date()) -> String? {
+        guard [.normal, .loading].contains(account.status),
+              account.primaryResetObservation == .stableObserved,
+              let reset = account.primaryResetAt,
+              reset.timeIntervalSince1970.isFinite,
+              reset > now else { return nil }
+        let minutes = Int(ceil(reset.timeIntervalSince(now) / 60))
+        return "\(minutes)분 뒤 5시간 할당량이 초기화될 예정입니다."
+    }
+
+    /// 초기화 시각 만료·조회 실패와 관측 결과를 구분한 상태 문구
+    public static func resetObservationStatusText(
+        _ observation: ResetTimeObservation,
+        resetAt: Date?, status: AccountStatus, now: Date = Date()
+    ) -> String {
+        guard status == .normal || status == .loading else {
+            return resetAt == nil ? "초기화 시각 확인 불가" : "이전 조회 결과"
+        }
+        guard let resetAt else { return "초기화 시각 확인 중" }
+        guard resetAt > now else { return "예정 시각 도달 · 재확인 대기" }
+        switch observation {
+        case .checking: return "초기화 시각 확인 중"
+        case .stableObserved: return "초기화 시각 안정 관측"
+        case .movingObserved: return "조회에 따라 시각 이동"
+        }
+    }
+
     /// 서버 구독 코드의 한글 뱃지 표시명 변환 및 미확인 값 처리
     public static func subscriptionBadgeText(_ planType: String?) -> String {
         guard let planType else { return "—" }

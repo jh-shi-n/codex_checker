@@ -8,6 +8,7 @@ extension CodexQuotaMonitorAppDelegate {
         _ = notification
         installWakeObserver()
         quotaResetNotifications.start()
+        quotaResetScheduler.start()
         lifecycleCoordinator.launch()
         Task { await sessionActivityMonitor.start() }
         tokenCleanupTask = Task { [tokenUsageCache] in
@@ -25,6 +26,7 @@ extension CodexQuotaMonitorAppDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         _ = notification
         sessionActivityDelivery.stop()
+        quotaResetScheduler.stop()
         tokenCleanupTask?.cancel()
         tokenCleanupTask = nil
         if let hiddenAccountsStatusItem {
@@ -60,6 +62,7 @@ extension CodexQuotaMonitorAppDelegate {
             Task { @MainActor [weak self] in
                 await self?.tokenUsageCache.purgeExpired()
                 await self?.lifecycleCoordinator.wake()
+                await self?.quotaResetScheduler.tick()
             }
         }
     }
