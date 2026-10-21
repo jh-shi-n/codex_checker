@@ -98,6 +98,7 @@ public struct SettingsView: View {
     }
 
     @Binding public var refreshIntervalMinutes: Int
+    @Binding public var resetReminderMinutes: Int
     @Binding public var accountPaths: [String]
     @Binding public var launchAtLogin: Bool
     @Binding public var showAccountLabels: Bool
@@ -132,12 +133,14 @@ public struct SettingsView: View {
         accountPathValidator: AccountPathValidator = .live,
         enabledAccountIDs: Binding<[String]> = .constant(PreferencesStore.defaultEnabledAccountIDs),
         accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
+        resetReminderMinutes: Binding<Int> = .constant(5),
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
         onOpenNotificationSettings: @escaping () -> Void = {}
     ) {
         self._refreshIntervalMinutes = refreshIntervalMinutes
+        self._resetReminderMinutes = resetReminderMinutes
         self._accountPaths = accountPaths
         self._launchAtLogin = launchAtLogin
         self._showAccountLabels = showAccountLabels
@@ -176,12 +179,14 @@ public struct SettingsView: View {
         accountPathValidator: AccountPathValidator = .live,
         enabledAccountIDs: Binding<[String]> = .constant(PreferencesStore.defaultEnabledAccountIDs),
         accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
+        resetReminderMinutes: Binding<Int> = .constant(5),
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
         onOpenNotificationSettings: @escaping () -> Void = {}
     ) {
         self._refreshIntervalMinutes = refreshIntervalMinutes
+        self._resetReminderMinutes = resetReminderMinutes
         self._accountPaths = Binding(
             get: {
                 [account1Path.wrappedValue, account2Path.wrappedValue, account3Path.wrappedValue, account4Path.wrappedValue]
@@ -329,6 +334,15 @@ public struct SettingsView: View {
                 }
 
                 Section(Self.quotaResetNotificationSectionTitle) {
+                    Picker("초기화 사전 알림", selection: $resetReminderMinutes) {
+                        Text("끔").tag(0)
+                        Text("10분 전").tag(10)
+                        Text("5분 전").tag(5)
+                        Text("3분 전").tag(3)
+                    }
+                    Text("안정 관측된 초기화 시각에 다시 조회하고 도달 알림을 보냅니다. 사전 알림을 꺼도 도달 알림은 유지됩니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 5) {
                         Text("권한: \(notificationAuthorizationText)")
                         Text("전달: \(notificationOutcomeText)")
@@ -438,6 +452,7 @@ public struct SettingsView: View {
         case .fallback: "노치 활동 토스트에 대체 표시"
         case .testDelivered: "테스트 알림 전달 완료"
         case .testFailed: "테스트 알림 전달 실패"
+        case .failed: "시스템 알림 전달 불가"
         }
     }
 

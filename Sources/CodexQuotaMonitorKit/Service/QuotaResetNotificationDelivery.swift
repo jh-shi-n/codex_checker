@@ -24,6 +24,7 @@ public enum QuotaResetNotificationOutcome: Equatable, Sendable {
     case fallback
     case testDelivered
     case testFailed
+    case failed
 }
 
 /// 설정 화면에 노출하는 권한·전달 상태
@@ -180,6 +181,21 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
         }
     }
 
+    /// 예정 시각 사전·도달 알림의 시스템 전달과 실패 상태 기록
+    public func notifyScheduled(_ alert: QuotaResetAlert) async {
+        guard await isAuthorizedForDelivery() else {
+            status = replacingDelivery(outcome: .failed, error: nil)
+            onDiagnostic("scheduled_notification_authorization_unavailable")
+            return
+        }
+        do {
+            try await backend?.deliver(title: alert.title, body: alert.body)
+            status = replacingDelivery(outcome: .delivered, error: nil)
+        } catch {
+            status = replacingDelivery(outcome: .failed, error: error.localizedDescription)
+            onDiagnostic("scheduled_notification_delivery_failed")
+        }
+    }
 
     /// 사용자 동작으로만 테스트 알림 전달
     public func sendTestNotification() async {

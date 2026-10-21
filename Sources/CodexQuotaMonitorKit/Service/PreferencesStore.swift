@@ -9,6 +9,7 @@ public final class PreferencesStore: ObservableObject {
     /// 목적: UserDefaults 저장 키 정의
     public enum Keys {
         public static let refreshIntervalMinutes = "CodexQuotaMonitor.refreshIntervalMinutes"
+        public static let resetReminderMinutes = "CodexQuotaMonitor.resetReminderMinutes"
         public static let accountPaths = "CodexQuotaMonitor.accountPaths"
         public static let enabledAccountIDs = "CodexQuotaMonitor.enabledAccountIDs"
         public static let accountDisplayOrder = "CodexQuotaMonitor.accountDisplayOrder"
@@ -68,6 +69,8 @@ public final class PreferencesStore: ObservableObject {
     nonisolated public static let maximumActivityNotificationDurationSeconds = 10
 
     @Published public private(set) var refreshIntervalMinutes: Int
+    /// 초기화 사전 알림 시점; 0은 사전 알림만 해제
+    @Published public private(set) var resetReminderMinutes: Int
     @Published public private(set) var accountPaths: [String]
     /// 활성 표시 계정 ID, 빈 배열 허용
     @Published public private(set) var enabledAccountIDs: [String]
@@ -100,6 +103,9 @@ public final class PreferencesStore: ObservableObject {
         let persistedInterval = rawInterval as? Int
         let normalizedInterval = RefreshService.normalizedIntervalMinutes(persistedInterval ?? 5)
         self.refreshIntervalMinutes = normalizedInterval
+        self.resetReminderMinutes = Self.normalizedResetReminderMinutes(
+            userDefaults.object(forKey: Keys.resetReminderMinutes) as? Int ?? 5
+        )
 
         let rawPaths = userDefaults.object(forKey: Keys.accountPaths)
         let persistedPaths = rawPaths as? [String]
@@ -261,6 +267,17 @@ public final class PreferencesStore: ObservableObject {
         persist()
     }
 
+    /// 사전 알림 시점 저장; 도달 시각 재조회와 알림은 별도 유지
+    public func updateResetReminder(minutes: Int) {
+        resetReminderMinutes = Self.normalizedResetReminderMinutes(minutes)
+        persist()
+    }
+
+    /// 사전 알림 선택값의 허용 범위 정규화
+    nonisolated public static func normalizedResetReminderMinutes(_ minutes: Int) -> Int {
+        [0, 3, 5, 10].contains(minutes) ? minutes : 5
+    }
+
     public func updateAccountPaths(_ paths: [String]) {
         guard paths.count == Self.accountPathCount else { return }
 
@@ -360,6 +377,7 @@ public final class PreferencesStore: ObservableObject {
     /// 목적: 현재 설정값 전체를 UserDefaults에 기록
     public func persist() {
         userDefaults.set(refreshIntervalMinutes, forKey: Keys.refreshIntervalMinutes)
+        userDefaults.set(resetReminderMinutes, forKey: Keys.resetReminderMinutes)
         userDefaults.set(accountPaths, forKey: Keys.accountPaths)
         userDefaults.set(enabledAccountIDs, forKey: Keys.enabledAccountIDs)
         userDefaults.set(accountDisplayOrder, forKey: Keys.accountDisplayOrder)

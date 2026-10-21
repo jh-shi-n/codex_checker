@@ -75,6 +75,19 @@ extension CodexQuotaMonitorAppDelegate {
                 },
                 set: { [weak self] ids in self?.applyAccountDisplayOrder(ids) }
             ),
+            resetReminderMinutes: Binding(
+                get: { [weak self] in self?.preferences.resetReminderMinutes ?? 5 },
+                set: { [weak self] minutes in
+                    guard let self else { return }
+                    self.preferences.updateResetReminder(minutes: minutes)
+                    self.quotaResetScheduler.reconcile(
+                        states: self.accountStore.states, reminderMinutes: self.preferences.resetReminderMinutes
+                    )
+                    if minutes > 0 && self.quotaResetNotifications.delivery.status.authorization == .notRequested {
+                        self.quotaResetNotifications.retryAuthorization()
+                    }
+                }
+            ),
             notificationDelivery: quotaResetNotifications.delivery,
             onRetryNotificationAuthorization: { [weak self] in
                 self?.quotaResetNotifications.retryAuthorization()
