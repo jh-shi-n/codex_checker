@@ -18,24 +18,28 @@ public struct AccountQuotaSection: View {
                     title: "5시간 할당량",
                     subtitle: "5-hour quota",
                     remaining: account.fiveHourRemainingPercent,
-                    resetAt: account.primaryResetAt
+                    resetAt: account.primaryResetAt,
+                    observation: account.primaryResetObservation
                 )
                 quotaCard(
                     title: "전체 할당량",
                     subtitle: "Overall quota",
                     remaining: account.overallRemainingPercent,
-                    resetAt: account.secondaryResetAt
+                    resetAt: account.secondaryResetAt,
+                    observation: account.secondaryResetObservation
                 )
             }
         }
     }
 
+    /// 한도 잔여량과 현재 실행에서 누적한 초기화 시각 관측 표시
     @ViewBuilder
     private func quotaCard(
         title: String,
         subtitle: String,
         remaining: Double?,
-        resetAt: Date?
+        resetAt: Date?,
+        observation: ResetTimeObservation
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
@@ -50,16 +54,25 @@ public struct AccountQuotaSection: View {
                     Text("남은 시간")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text(AccountDashboardFormatting.remainingTimeText(until: resetAt))
+                    Text(observation == .movingObserved ? "초기화 시각 변동 중" :
+                            AccountDashboardFormatting.remainingTimeText(until: resetAt))
                         .font(.caption.weight(.medium))
                         .lineLimit(1)
 
                     Text("초기화")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text(AccountDashboardFormatting.dateText(resetAt))
+                    Text(observation == .movingObserved ? "시각 이동 관측" :
+                            AccountDashboardFormatting.dateText(resetAt))
                         .font(.caption.weight(.medium))
                         .lineLimit(1)
+
+                    Text(AccountDashboardFormatting.resetObservationStatusText(
+                        observation, resetAt: resetAt, status: account.status
+                    ))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
 
                     Text(AccountDetailView.statusText(for: account.status))
                         .font(.caption.weight(.medium))
