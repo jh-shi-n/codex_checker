@@ -27,6 +27,7 @@ extension CodexQuotaMonitorAppDelegate {
         _ = notification
         sessionActivityDelivery.stop()
         quotaResetScheduler.stop()
+        serviceStatus.cancel()
         tokenCleanupTask?.cancel()
         tokenCleanupTask = nil
         if let hiddenAccountsStatusItem {

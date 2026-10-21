@@ -147,6 +147,7 @@ struct NotchClusterBackgroundShape: Shape {
 /// 설정 순서의 계정 도넛을 왼쪽부터 배치하는 노치 클러스터
 public struct QuotaClusterView: View {
     public let accounts: [AccountState]
+    public let serviceStatus: OpenAIServiceStatusStore?
     public let side: NotchSide
     public let menuBarHeight: CGFloat
     public let diameterOverride: CGFloat?
@@ -189,9 +190,11 @@ public struct QuotaClusterView: View {
         onClose: @escaping () -> Void = {},
         activityToast: SessionActivityToast? = nil,
         activityToastWidth: CGFloat? = nil,
-        activityPresentation: NotchActivityPresentationModel? = nil
+        activityPresentation: NotchActivityPresentationModel? = nil,
+        serviceStatus: OpenAIServiceStatusStore? = nil
     ) {
         self.accounts = accounts
+        self.serviceStatus = serviceStatus
         self.side = side
         self.menuBarHeight = menuBarHeight
         self.diameterOverride = diameterOverride
@@ -243,6 +246,7 @@ public struct QuotaClusterView: View {
                         runUsageWindowProbe: runUsageWindowProbe,
                         onClose: onClose
                     )
+                    .environment(\.openAIServiceStatus, serviceStatus)
                 }
             }
             .frame(width: contentWidth)
