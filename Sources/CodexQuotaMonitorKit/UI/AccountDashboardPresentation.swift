@@ -87,8 +87,8 @@ public enum AccountDashboardFormatting {
               let reset = account.primaryResetAt,
               reset.timeIntervalSince1970.isFinite,
               reset > now else { return nil }
-        let minutes = Int(ceil(reset.timeIntervalSince(now) / 60))
-        return "\(minutes)분 뒤 5시간 할당량이 초기화될 예정입니다."
+        let remaining = remainingTimeText(until: reset, now: now)
+        return "\(remaining) 뒤 5시간 할당량이 초기화될 예정입니다."
     }
 
     /// 서버 구독 코드의 한글 뱃지 표시명 변환 및 미확인 값 처리
