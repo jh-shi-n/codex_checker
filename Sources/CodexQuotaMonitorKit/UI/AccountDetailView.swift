@@ -120,6 +120,7 @@ public struct AccountDetailView: View {
         }
     }
 
+    /// 계정 정보와 버튼에 인접한 조회 시각·상태의 2행 표시
     private var header: some View {
         HStack(alignment: .center, spacing: 8) {
             Circle()
@@ -156,13 +157,27 @@ public struct AccountDetailView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button(action: onRefresh) {
-                Label("새로고침", systemImage: "arrow.clockwise")
+            HStack(alignment: .center, spacing: 4) {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("마지막 조회 \(AccountDashboardFormatting.dateText(displayedAccount.lastUpdated, dateStyle: .none, timeStyle: .medium))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(Self.statusText(for: account.status))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(statusColor)
+                }
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityElement(children: .combine)
+
+                Button(action: onRefresh) {
+                    Label("새로고침", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .keyboardShortcut("r", modifiers: [.command])
+                .help("이 계정만 새로고침")
+                .accessibilityLabel("계정 새로고침")
             }
-            .buttonStyle(.bordered)
-            .keyboardShortcut("r", modifiers: [.command])
-            .help("이 계정만 새로고침")
-            .accessibilityLabel("계정 새로고침")
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -372,6 +387,7 @@ public struct AccountDetailView: View {
         }
     }
 
+    /// 계정 조회 상태의 상세 화면 표시명 변환
     public static func statusText(for status: AccountStatus) -> String {
         switch status {
         case .notConfigured:
