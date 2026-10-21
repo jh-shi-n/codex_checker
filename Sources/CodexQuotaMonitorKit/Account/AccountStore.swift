@@ -25,6 +25,9 @@ public final class AccountStore: ObservableObject {
     /// 최신 정상 결과에서 감지한 조기 리셋 전달; 동일 결과 재조회 시 재통지 제외
     public var onEarlyQuotaReset: (@MainActor (EarlyQuotaReset) -> Void)?
 
+    /// 일반 한도 조회 시작 시 공용 서비스 상태 갱신 요청; 계정별 결과 대기와 분리
+    public var onQuotaRefreshStarted: (@MainActor () -> Void)?
+
     /// 계정 설정 변경에 따른 비동기 결과 격리용 버전
     public var configurationRevision: Int { configRevision }
 
@@ -86,6 +89,7 @@ public final class AccountStore: ObservableObject {
     /// soon as its task finishes, and an individual failure becomes an error
     /// state without cancelling sibling tasks.
     public func refreshAll() async {
+        if configs.contains(where: \.isConfigured) { onQuotaRefreshStarted?() }
         let revision = configRevision
         let configsSnapshot = configs
         let previousStates = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
@@ -139,6 +143,7 @@ public final class AccountStore: ObservableObject {
             return false
         }
 
+        onQuotaRefreshStarted?()
         let revision = configRevision
         let generation = (accountGenerations[id] ?? 0) + 1
         accountGenerations[id] = generation

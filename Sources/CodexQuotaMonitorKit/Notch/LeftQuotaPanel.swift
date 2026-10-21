@@ -111,6 +111,7 @@ open class NotchQuotaPanel: NSPanel {
 @MainActor
 public final class LeftQuotaPanel: NotchQuotaPanel {
     public private(set) var accounts: [AccountState]
+    public let serviceStatus: OpenAIServiceStatusStore?
     public private(set) var menuBarHeight: CGFloat
     public private(set) var diameterOverride: CGFloat?
     public private(set) var showAccountLabels: Bool
@@ -148,9 +149,11 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
         onClose: @escaping () -> Void = {},
         activityToast: SessionActivityToast? = nil,
         activityToastWidth: CGFloat? = nil,
-        activityPresentation: NotchActivityPresentationModel? = nil
+        activityPresentation: NotchActivityPresentationModel? = nil,
+        serviceStatus: OpenAIServiceStatusStore? = nil
     ) {
         self.accounts = accounts
+        self.serviceStatus = serviceStatus
         self.menuBarHeight = menuBarHeight
         self.diameterOverride = diameterOverride
         self.showAccountLabels = showAccountLabels
@@ -267,7 +270,8 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
             refreshTokenUsage: refreshTokenUsage,
             runUsageWindowProbe: runUsageWindowProbe,
             onClose: onClose,
-            activityPresentation: activityPresentation
+            activityPresentation: activityPresentation,
+            serviceStatus: serviceStatus
         )
         if let activityHostingView {
             activityHostingView.rootView = root

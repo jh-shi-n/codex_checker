@@ -242,6 +242,7 @@ public struct QuotaDonutView: View {
 
     @State private var isHovered = false
     @State private var isDetailPresented = false
+    @Environment(\.openAIServiceStatus) private var serviceStatus
 
     public init(
         account: AccountState,
@@ -304,7 +305,8 @@ public struct QuotaDonutView: View {
                     onClose: {
                         isDetailPresented = false
                         onClose()
-                    }
+                    },
+                    serviceStatus: serviceStatus
                 )
                 .id(account.configurationGeneration)
             }
