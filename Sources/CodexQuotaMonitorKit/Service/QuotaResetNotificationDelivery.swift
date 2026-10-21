@@ -144,7 +144,8 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
 
         do {
             let authorization = try await backend.authorizationStatus()
-            updateAuthorization(authorization, error: requestError)
+            let recovered = [.authorized, .provisional, .ephemeral].contains(authorization)
+            updateAuthorization(authorization, error: recovered ? nil : requestError)
             onDiagnostic("authorization_status_read")
         } catch {
             updateAuthorization(.error, error: error.localizedDescription)
@@ -178,6 +179,7 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
             onFallback(fallback)
         }
     }
+
 
     /// 사용자 동작으로만 테스트 알림 전달
     public func sendTestNotification() async {
