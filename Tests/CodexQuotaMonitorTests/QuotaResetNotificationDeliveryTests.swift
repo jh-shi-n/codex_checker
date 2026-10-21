@@ -6,6 +6,26 @@ import XCTest
 
 @MainActor
 final class QuotaResetNotificationDeliveryTests: XCTestCase {
+    /// 사전·도달 알림의 실제 어댑터 입력과 권한 거부·전달 실패 상태 검증
+    func testScheduledAlertsUseSystemBackendAndReportUnavailableDelivery() async {
+        let backend = StubNotificationBackend(status: .authorized)
+        let delivery = QuotaResetNotificationDelivery(backend: backend)
+        let alert = QuotaResetAlert(accountID: "C1", title: "할당량 초기화 예정", body: "5분 뒤 초기화 예정")
+        await delivery.notifyScheduled(alert)
+        XCTAssertEqual(backend.delivered.count, 1)
+        XCTAssertEqual(backend.delivered.first?.title, alert.title)
+        XCTAssertEqual(backend.delivered.first?.body, alert.body)
+        XCTAssertEqual(delivery.status.outcome, .delivered)
+        backend.status = .denied
+        await delivery.notifyScheduled(alert)
+        XCTAssertEqual(delivery.status.outcome, .failed)
+        XCTAssertEqual(backend.delivered.count, 1)
+        backend.status = .authorized
+        backend.deliveryError = StubNotificationError.delivery
+        await delivery.notifyScheduled(alert)
+        XCTAssertEqual(delivery.status.outcome, .failed)
+        XCTAssertEqual(delivery.status.deliveryError, "모의 알림 전달 오류")
+    }
 
     /// 요청 오류 직후 허용 권한을 재조회한 경우 오래된 오류 제거 검증
     func testFailedRequestClearsErrorWhenImmediateStatusIsAuthorized() async {

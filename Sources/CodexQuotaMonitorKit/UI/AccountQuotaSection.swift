@@ -10,8 +10,19 @@ public struct AccountQuotaSection: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("현재 할당량")
-                .font(.headline.weight(.semibold))
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("현재 할당량")
+                        .font(.headline.weight(.semibold))
+                        .fixedSize()
+                    if let notice = AccountDashboardFormatting.fiveHourResetNotice(for: account, now: context.date) {
+                        Text(notice)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+            }
 
             HStack(alignment: .top, spacing: 8) {
                 quotaCard(
