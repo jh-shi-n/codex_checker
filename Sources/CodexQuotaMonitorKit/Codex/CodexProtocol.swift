@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 /// A small Sendable JSON representation used by the app-server wire protocol.
@@ -187,8 +188,8 @@ public struct CodexMessage: Equatable, Sendable {
 
         let id: Int?
         if let rawID = dictionary["id"] {
-            guard let number = rawID as? NSNumber else { return nil }
-            id = number.intValue
+            guard let parsedID = integerResponseID(from: rawID) else { return nil }
+            id = parsedID
         } else {
             id = nil
         }
@@ -229,6 +230,24 @@ public struct CodexMessage: Equatable, Sendable {
         self.hasResult = dictionary.keys.contains("result")
         self.containsError = containsError
     }
+}
+
+/// 응답 ID의 정수성, 형식, Int 범위를 손실 없이 검사
+private func integerResponseID(from value: Any) -> Int? {
+    if let text = value as? String {
+        return Int(text)
+    }
+    guard let number = value as? NSNumber,
+          CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+    let decimal = number.decimalValue
+    guard !decimal.isNaN,
+          decimal >= Decimal(Int.min),
+          decimal <= Decimal(Int.max) else { return nil }
+    var rounded = Decimal()
+    var source = decimal
+    NSDecimalRound(&rounded, &source, 0, .plain)
+    guard rounded == decimal else { return nil }
+    return Int(NSDecimalNumber(decimal: rounded).stringValue)
 }
 
 public enum CodexLineDecoderError: Error, Equatable, Sendable {
