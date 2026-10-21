@@ -78,6 +78,48 @@ final class TokenUsageTests: XCTestCase {
         XCTAssertEqual(snapshot.dailyPoints.dropLast().last?.sessionCount, 0)
     }
 
+    /// 정수 0·1과 Boolean 구분 및 자정 누적량 배분
+    func testProviderAcceptsZeroAndOneCountersAcrossMidnightAndSkipsBooleans() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try writeRollout(in: home, date: date(offset: -1), name: "small-counters.jsonl", lines: [
+            #"{"timestamp":"2026-08-29T23:58:00Z","type":"token_count","usage":{"input_tokens":0,"output_tokens":0}}"#,
+            #"{"timestamp":"2026-08-29T23:58:30Z","type":"token_count","usage":{"input_tokens":true,"output_tokens":true}}"#,
+            #"{"timestamp":"2026-08-29T23:59:00Z","type":"token_count","usage":{"input_tokens":1,"output_tokens":0}}"#,
+            #"{"timestamp":"2026-08-30T00:01:00Z","type":"token_count","usage":{"input_tokens":2,"output_tokens":1}}"#,
+        ])
+        try writeRollout(in: home, date: date(offset: 0), name: "booleans-only.jsonl", lines: [
+            #"{"timestamp":"2026-08-30T00:02:00Z","type":"token_count","usage":{"input_tokens":true,"output_tokens":false}}"#,
+        ])
+
+        let reference = referenceDate
+        let snapshot = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+
+        XCTAssertEqual(snapshot.dailyPoints.dropLast().last?.totals, TokenUsageTotals(inputTokens: 1, outputTokens: 0))
+        XCTAssertEqual(snapshot.today, TokenUsageTotals(inputTokens: 1, outputTokens: 1))
+        XCTAssertEqual(snapshot.last7Days.totalTokens, 3)
+        XCTAssertEqual(snapshot.totalSessions, 1)
+        XCTAssertEqual(snapshot.dailyPoints.last?.sessionCount, 1)
+    }
+
+    /// 숫자 epoch 0·1과 Boolean 시각의 구분 및 fallback 보존
+    func testProviderDistinguishesSmallNumericTimestampsFromBooleans() async throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let reference = calendar.date(from: DateComponents(year: 1970, month: 1, day: 2, hour: 12))!
+        try writeRollout(in: home, date: Date(timeIntervalSince1970: 0), name: "timestamps.jsonl", lines: [
+            #"{"timestamp":0,"created_at":"1969-12-31T23:59:59Z","type":"token_count","usage":{"input_tokens":1}}"#,
+            #"{"timestamp":1,"created_at":"1969-12-31T23:59:59Z","type":"token_count","usage":{"input_tokens":2}}"#,
+            #"{"timestamp":true,"created_at":"1970-01-02T00:01:00Z","type":"token_count","usage":{"input_tokens":3}}"#,
+        ])
+
+        let snapshot = await LocalTokenUsageProvider(calendar: calendar, now: { reference }).snapshot(home: home)
+
+        XCTAssertEqual(snapshot.dailyPoints.suffix(3).map(\.totalTokens), [0, 2, 1])
+        XCTAssertEqual(snapshot.today.inputTokens, 1)
+        XCTAssertEqual(snapshot.totalSessions, 1)
+    }
+
     /// 84일보다 오래된 디렉터리의 재개 세션에서 최근 증가분만 집계
     func testProviderIncludesResumedOldRollout() async throws {
         let home = try makeHome()
