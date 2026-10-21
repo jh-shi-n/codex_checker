@@ -519,29 +519,41 @@ private actor AccountLoaderProbe {
     }
 }
 
+/// 취소된 가상 조회의 반복 양보 없이 세대별 시작·해제 신호를 전달하는 fixture
 private actor OverlappingLoaderProbe {
     private var startedByGeneration: [Int: Int] = [:]
     private var releasedGenerations: Set<Int> = []
+    private var startWaiters: [Int: [CheckedContinuation<Void, Never>]] = [:]
+    private var releaseWaiters: [Int: [CheckedContinuation<Void, Never>]] = [:]
     private var loadCount = 0
 
+    /// 세대별 네 계정 시작을 통지하고 명시적 해제까지 이전 조회 결과 보류
     func load(_ id: String) async -> AccountState {
         loadCount += 1
         let generation = ((loadCount - 1) / 4) + 1
         startedByGeneration[generation, default: 0] += 1
-        while !releasedGenerations.contains(generation) {
-            await Task.yield()
+        if startedByGeneration[generation] == 4 {
+            let waiters = startWaiters.removeValue(forKey: generation) ?? []
+            for waiter in waiters { waiter.resume() }
+        }
+        if !releasedGenerations.contains(generation) {
+            await withCheckedContinuation { releaseWaiters[generation, default: []].append($0) }
         }
         return AccountState(id: id, email: "generation-\(generation)", usedPercent: 15, status: .normal)
     }
 
+    /// 해당 세대의 네 계정 조회가 시작될 때까지 신호 대기
     func waitForGeneration(_ generation: Int) async {
-        while (startedByGeneration[generation] ?? 0) < 4 {
-            await Task.yield()
+        if (startedByGeneration[generation] ?? 0) < 4 {
+            await withCheckedContinuation { startWaiters[generation, default: []].append($0) }
         }
     }
 
+    /// 해당 세대의 보류 결과를 모두 해제
     func release(generation: Int) {
         releasedGenerations.insert(generation)
+        let waiters = releaseWaiters.removeValue(forKey: generation) ?? []
+        for waiter in waiters { waiter.resume() }
     }
 }
 
