@@ -1,3 +1,4 @@
+import CoreFoundation
 import Darwin
 import Dispatch
 import Foundation
@@ -267,11 +268,13 @@ public struct UsageWindowProbeJSONLParser: Sendable {
         return (rank[candidate] ?? 0) > (rank[current] ?? 0) ? candidate : current
     }
 
+    /// 제한된 JSON 트리에서 사용량 필드를 수집
     private mutating func collectUsage(from root: [String: Any]) {
         var remainingNodes = 2_048
         collectUsage(from: root, depth: 0, remainingNodes: &remainingNodes)
     }
 
+    /// 부모 값을 먼저 적용한 뒤 자식 노드를 순회
     private mutating func collectUsage(
         from value: Any,
         depth: Int,
@@ -284,6 +287,7 @@ public struct UsageWindowProbeJSONLParser: Sendable {
             var input = usage.inputTokens
             var output = usage.outputTokens
             var total = usage.totalTokens
+            var children: [Any] = []
             for (key, rawValue) in dictionary {
                 let normalizedKey = canonicalKey(key)
                 if isInputTokenKey(normalizedKey), let count = tokenCount(rawValue) {
@@ -293,6 +297,9 @@ public struct UsageWindowProbeJSONLParser: Sendable {
                 } else if isTotalTokenKey(normalizedKey), let count = tokenCount(rawValue) {
                     total = count
                 }
+                if isUsageContainerKey(normalizedKey) || rawValue is [String: Any] || rawValue is [Any] {
+                    children.append(rawValue)
+                }
             }
             usage = UsageWindowProbeTokenUsage(
                 inputTokens: input,
@@ -300,11 +307,8 @@ public struct UsageWindowProbeJSONLParser: Sendable {
                 totalTokens: total
             )
 
-            for (key, nested) in dictionary {
-                let normalizedKey = canonicalKey(key)
-                if isUsageContainerKey(normalizedKey) || nested is [String: Any] || nested is [Any] {
-                    collectUsage(from: nested, depth: depth + 1, remainingNodes: &remainingNodes)
-                }
+            for nested in children {
+                collectUsage(from: nested, depth: depth + 1, remainingNodes: &remainingNodes)
             }
         } else if let array = value as? [Any] {
             for nested in array {
@@ -333,13 +337,19 @@ public struct UsageWindowProbeJSONLParser: Sendable {
         ["usage", "tokenusage", "tokencounts", "tokens", "response", "result", "data", "turn"].contains(key)
     }
 
+    /// Boolean, 분수, Int 범위 밖의 토큰 수를 거부
     private func tokenCount(_ value: Any) -> Int? {
         if let number = value as? NSNumber {
-            let double = number.doubleValue
-            guard double.isFinite, double >= 0, double.rounded() == double,
-                  double <= Double(Int.max)
-            else { return nil }
-            return Int(double)
+            guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+            let decimal = number.decimalValue
+            guard !decimal.isNaN,
+                  decimal >= 0,
+                  decimal <= Decimal(Int.max) else { return nil }
+            var rounded = Decimal()
+            var source = decimal
+            NSDecimalRound(&rounded, &source, 0, .plain)
+            guard rounded == decimal else { return nil }
+            return Int(NSDecimalNumber(decimal: rounded).stringValue)
         }
         if let text = value as? String,
            let parsed = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)),
