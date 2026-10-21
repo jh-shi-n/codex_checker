@@ -178,7 +178,16 @@ final class QuotaResetSchedulerTests: XCTestCase {
         account.secondaryResetAt = now.addingTimeInterval(604_800)
         account.secondaryResetObservation = .stableObserved
         XCTAssertEqual(AccountDashboardFormatting.fiveHourResetNotice(for: account, now: now),
-                       "4분 뒤 5시간 할당량이 초기화될 예정입니다.")
+                       "3분 뒤 5시간 할당량이 초기화될 예정입니다.")
+        for (seconds, expected) in [(59.0, "1분"), (3_599.0, "59분"),
+                                    (3_600.0, "1시간"), (10_861.0, "3시간 1분")] {
+            account.primaryResetAt = now.addingTimeInterval(seconds)
+            XCTAssertEqual(AccountDashboardFormatting.remainingTimeText(until: account.primaryResetAt, now: now),
+                           expected)
+            XCTAssertEqual(AccountDashboardFormatting.fiveHourResetNotice(for: account, now: now),
+                           "\(expected) 뒤 5시간 할당량이 초기화될 예정입니다.")
+        }
+        account.primaryResetAt = now.addingTimeInterval(181)
         account.primaryResetObservation = .movingObserved
         XCTAssertNil(AccountDashboardFormatting.fiveHourResetNotice(for: account, now: now))
         account.primaryResetObservation = .stableObserved
