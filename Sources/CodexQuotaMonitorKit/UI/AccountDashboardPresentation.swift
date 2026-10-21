@@ -52,6 +52,31 @@ public struct UsageWindowProbePresentationResult: Equatable, Sendable {
 public typealias UsageWindowProbeCompositeResult = UsageWindowProbePresentationResult
 public typealias UsageWindowProbeOutcome = UsageWindowProbePresentationResult
 
+/// 계정 대시보드의 스냅샷 선택 정책
+enum AccountDashboardPresentation {
+    /// - 목적: 계정 상세에 표시할 최신 한도 스냅샷 선택
+    /// - 우선순위: 동일 계정의 성공한 Ping 갱신 결과 중 더 최신 `lastUpdated`
+    /// - 동률·시각 누락: 현재 전달된 계정 스냅샷 유지
+    static func accountForDisplay(
+        current: AccountState,
+        probe: UsageWindowProbePresentationResult?
+    ) -> AccountState {
+        guard let probe,
+              probe.isCurrentAccount,
+              probe.result.accountID == current.id,
+              probe.result.isSuccess,
+              probe.quotaRefreshSucceeded == true,
+              let refreshedAccount = probe.refreshedAccount,
+              refreshedAccount.id == current.id,
+              let currentUpdatedAt = current.lastUpdated,
+              let refreshedUpdatedAt = refreshedAccount.lastUpdated,
+              refreshedUpdatedAt > currentUpdatedAt
+        else { return current }
+
+        return refreshedAccount
+    }
+}
+
 /// Pure formatting and semantic helpers shared by the dashboard and focused
 /// presentation tests.  They never access account files or invoke a service.
 public enum AccountDashboardFormatting {

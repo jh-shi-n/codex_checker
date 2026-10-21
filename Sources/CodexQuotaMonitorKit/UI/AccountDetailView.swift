@@ -292,15 +292,12 @@ public struct AccountDetailView: View {
         return probePresentation
     }
 
-    /// 성공한 최신 한도 스냅샷 우선 표시
+    /// 현재 계정과 Ping 갱신 스냅샷 중 더 최신 한도 우선 표시
     private var displayedAccount: AccountState {
-        guard let presentation = currentProbePresentation,
-              presentation.result.isSuccess,
-              presentation.quotaRefreshSucceeded == true,
-              let refreshedAccount = presentation.refreshedAccount,
-              refreshedAccount.id == account.id
-        else { return account }
-        return refreshedAccount
+        AccountDashboardPresentation.accountForDisplay(
+            current: account,
+            probe: currentProbePresentation
+        )
     }
 
     /// 캐시 스냅샷을 60초 주기로 읽는 표시 갱신
