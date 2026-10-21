@@ -1,27 +1,35 @@
+// 목적: 로컬 입력·출력·캐시 토큰과 일별 집계 모델 정의
+// 이용처: 세션 기록 집계·SQLite 저장·기여량 표시
+// 사용방법: 캐시 필드 미제공 시 nil, 합계는 입력·출력만 사용
 import Foundation
 
-/// The two token counters that are safe for the local usage presentation.
-/// Values are normalized at construction time so a malformed negative value
-/// can never cross the usage boundary.
+/// 음수 정규화가 적용된 토큰 집계; 캐시는 입력의 일부이며 nil은 기록 미제공
 public struct TokenUsageTotals: Equatable, Sendable {
     public let inputTokens: Int64
     public let outputTokens: Int64
+    public let cachedInputTokens: Int64?
 
     public var totalTokens: Int64 {
         TokenUsageArithmetic.saturatingAdd(inputTokens, outputTokens)
     }
 
-    public init(inputTokens: Int64 = 0, outputTokens: Int64 = 0) {
+    /// 입력·출력과 선택적 캐시 사용량 초기화; 캐시의 합계 중복 가산 제외
+    public init(inputTokens: Int64 = 0, outputTokens: Int64 = 0, cachedInputTokens: Int64? = nil) {
         self.inputTokens = max(0, inputTokens)
         self.outputTokens = max(0, outputTokens)
+        self.cachedInputTokens = cachedInputTokens.map { max(0, $0) }
     }
 
     public static let zero = Self()
 
+    /// 알려진 캐시 사용량의 포화 합산; 양쪽 모두 미제공인 경우 nil 유지
     public func adding(_ other: Self) -> Self {
         Self(
             inputTokens: TokenUsageArithmetic.saturatingAdd(inputTokens, other.inputTokens),
-            outputTokens: TokenUsageArithmetic.saturatingAdd(outputTokens, other.outputTokens)
+            outputTokens: TokenUsageArithmetic.saturatingAdd(outputTokens, other.outputTokens),
+            cachedInputTokens: cachedInputTokens == nil && other.cachedInputTokens == nil
+                ? nil
+                : TokenUsageArithmetic.saturatingAdd(cachedInputTokens ?? 0, other.cachedInputTokens ?? 0)
         )
     }
 }
@@ -33,6 +41,7 @@ public struct TokenUsageSessionUsage: Equatable, Sendable {
 
     public var inputTokens: Int64 { totals.inputTokens }
     public var outputTokens: Int64 { totals.outputTokens }
+    public var cachedInputTokens: Int64? { totals.cachedInputTokens }
     public var totalTokens: Int64 { totals.totalTokens }
 
     public init(date: Date, totals: TokenUsageTotals = .zero) {
@@ -40,10 +49,11 @@ public struct TokenUsageSessionUsage: Equatable, Sendable {
         self.totals = totals
     }
 
-    public init(date: Date, inputTokens: Int64, outputTokens: Int64) {
+    /// 세션 날짜와 입력·출력·선택적 캐시 사용량 구성
+    public init(date: Date, inputTokens: Int64, outputTokens: Int64, cachedInputTokens: Int64? = nil) {
         self.init(
             date: date,
-            totals: TokenUsageTotals(inputTokens: inputTokens, outputTokens: outputTokens)
+            totals: TokenUsageTotals(inputTokens: inputTokens, outputTokens: outputTokens, cachedInputTokens: cachedInputTokens)
         )
     }
 }
@@ -56,6 +66,7 @@ public struct TokenUsageDailyPoint: Equatable, Sendable {
 
     public var inputTokens: Int64 { totals.inputTokens }
     public var outputTokens: Int64 { totals.outputTokens }
+    public var cachedInputTokens: Int64? { totals.cachedInputTokens }
     public var totalTokens: Int64 { totals.totalTokens }
 
     public init(
@@ -68,15 +79,17 @@ public struct TokenUsageDailyPoint: Equatable, Sendable {
         self.sessionCount = max(0, sessionCount)
     }
 
+    /// 일별 입력·출력·선택적 캐시 사용량과 세션 수 구성
     public init(
         date: Date,
         inputTokens: Int64,
         outputTokens: Int64,
+        cachedInputTokens: Int64? = nil,
         sessionCount: Int64 = 0
     ) {
         self.init(
             date: date,
-            totals: TokenUsageTotals(inputTokens: inputTokens, outputTokens: outputTokens),
+            totals: TokenUsageTotals(inputTokens: inputTokens, outputTokens: outputTokens, cachedInputTokens: cachedInputTokens),
             sessionCount: sessionCount
         )
     }
@@ -112,7 +125,7 @@ public enum TokenUsageSnapshotError: String, Codable, Equatable, Sendable {
 
 /// Immutable, privacy-bounded usage data for one configured CODEX_HOME.
 public struct TokenUsageSnapshot: Equatable, Sendable {
-    public static let historyDayCount = 84
+    public static let historyDayCount = 168
 
     public let generatedAt: Date
     public let dailyPoints: [TokenUsageDailyPoint]

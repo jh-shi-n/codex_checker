@@ -58,7 +58,17 @@ public struct AccountDetailView: View {
 
                 AccountQuotaSection(account: displayedAccount)
 
-                TokenContributionGrid(snapshot: tokenUsageSnapshot)
+                TokenContributionGrid(
+                    snapshot: tokenUsageSnapshot,
+                    isLoading: isTokenUsageLoading,
+                    onUpdate: updateTokenUsage
+                )
+
+                if tokenUsageRefreshFailed {
+                    Text(tokenUsageRefreshError?.userMessage ?? "토큰 사용량 업데이트 실패")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
 
                 tokenUsageDisclosure
 
@@ -214,30 +224,6 @@ public struct AccountDetailView: View {
                     isLoading: isTokenUsageLoading
                 )
 
-                if tokenUsageRefreshFailed {
-                    Text(tokenUsageRefreshError?.userMessage ?? "토큰 사용량 업데이트 실패")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                Button(action: updateTokenUsage) {
-                    HStack(spacing: 6) {
-                        if isTokenUsageLoading {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
-                        Label("업데이트", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                }
-                .buttonStyle(.bordered)
-                .disabled(isTokenUsageLoading)
-                .help("로컬 토큰 사용량 다시 읽기")
-                .accessibilityLabel(
-                    isTokenUsageLoading
-                        ? "토큰 사용량 업데이트 중"
-                        : "토큰 사용량 업데이트"
-                )
-                .accessibilityHint("버튼을 누를 때만 로컬 세션 사용량을 읽습니다")
             }
         }
         .animation(.easeOut(duration: 0.15), value: isTokenUsageExpanded)
