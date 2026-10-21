@@ -119,7 +119,7 @@ final class QuotaPresentationTests: XCTestCase {
         )
     }
 
-    /// 모든 종료 요일에서 잔디의 날짜·요일 라벨 일치 및 84일 유지
+    /// 모든 종료 요일에서 날짜·요일 일치 및 168일 유지와 이전 84일 날짜 보완 검증
     func testContributionWeekdaysFollowActualDatesForEveryEndWeekday() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -128,7 +128,22 @@ final class QuotaPresentationTests: XCTestCase {
         for offset in 0..<7 {
             let end = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: firstEnd))
             let snapshot = TokenUsageAggregator(calendar: calendar).emptySnapshot(generatedAt: end)
-            XCTAssertEqual(snapshot.dailyPoints.count, 84)
+            XCTAssertEqual(snapshot.dailyPoints.count, 168)
+            let legacyPoints = Array(snapshot.dailyPoints.suffix(84))
+            let expanded = TokenContributionGrid.normalizedPoints(legacyPoints, calendar: calendar)
+            XCTAssertEqual(expanded.count, 168)
+            XCTAssertEqual(expanded.first?.date, snapshot.dailyPoints.first?.date)
+            XCTAssertEqual(Array(expanded.suffix(84)), legacyPoints)
+            XCTAssertEqual(TokenContributionGrid.columnCount, 24)
+            XCTAssertEqual(TokenContributionGrid.detailPoint(in: snapshot, hoveredDate: nil, now: end, calendar: calendar).date,
+                           calendar.startOfDay(for: end))
+            let yesterday = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: end))
+            XCTAssertEqual(TokenContributionGrid.detailPoint(in: snapshot, hoveredDate: yesterday, now: end, calendar: calendar).date,
+                           calendar.startOfDay(for: yesterday))
+            let nextDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: end))
+            let nextPoint = TokenContributionGrid.detailPoint(in: snapshot, hoveredDate: nil, now: nextDay, calendar: calendar)
+            XCTAssertEqual(nextPoint.date, calendar.startOfDay(for: nextDay))
+            XCTAssertEqual(nextPoint.totals, .zero)
             let first = try XCTUnwrap(snapshot.dailyPoints.first)
             let displayed = TokenContributionGrid.weekdayLabels(startingAt: first.date, calendar: calendar)
             for (index, point) in snapshot.dailyPoints.enumerated() {
