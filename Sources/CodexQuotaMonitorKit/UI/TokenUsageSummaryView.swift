@@ -51,7 +51,7 @@ public struct TokenUsageSummaryView: View {
         } else {
             dashboardEmptyState(
                 title: "No token usage",
-                detail: "No local token usage was recorded in the last 84 days."
+                detail: "No local token usage was recorded in the last 168 days."
             )
         }
     }

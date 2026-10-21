@@ -1,7 +1,6 @@
 import Foundation
 
-/// Deterministically converts one-session records into an 84-day local
-/// calendar series and inclusive today/7-day/30-day summaries.
+/// 168일의 로컬 날짜별 사용량과 오늘·7일·30일 요약 집계
 public struct TokenUsageAggregator: Sendable {
     public static let historyDayCount = TokenUsageSnapshot.historyDayCount
 
