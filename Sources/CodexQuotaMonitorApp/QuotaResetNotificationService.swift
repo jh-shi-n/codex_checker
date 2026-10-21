@@ -1,69 +1,110 @@
-// 목적: 할당량 조기 리셋의 macOS 시각 알림 전달
-// 이용처: 앱 시작 시 권한 요청 및 계정 갱신 이벤트 처리
-// 사용방법: start 호출 후 notify에 조기 리셋 이벤트 전달
+// 목적: macOS 시스템 알림 어댑터와 조기 리셋 전달 연결
+// 이용처: 앱 시작, 설정의 권한·테스트 동작, 조기 리셋 이벤트
+// 사용방법: start 호출 후 retryAuthorization·sendTestNotification·notify 사용
 import Foundation
 import OSLog
 import UserNotifications
 import CodexQuotaMonitorKit
 
-/// 앱 번들의 알림 권한과 전면 실행 중 배너 표시 관리
+/// 앱 번들의 알림 권한 조회와 노치 대체 전달 관리
 @MainActor
 final class QuotaResetNotificationService: NSObject, UNUserNotificationCenterDelegate {
+    let delivery: QuotaResetNotificationDelivery
+
     private let center: UNUserNotificationCenter?
     private let logger = Logger(subsystem: "com.example.codexquotamonitor", category: "QuotaResetNotification")
-    private var authorizationTask: Task<Bool, Never>?
 
-    /// 번들이 없는 swift run 실행에서는 시스템 알림 센터 접근 제외
-    override init() {
-        center = Bundle.main.bundleURL.pathExtension == "app" ? .current() : nil
+    /// 앱 번들에 한해 시스템 알림 어댑터 구성
+    init(
+        onFallback: @escaping @MainActor @Sendable (QuotaResetNotificationFallback) -> Void
+    ) {
+        let center = Bundle.main.bundleURL.pathExtension == "app" ? UNUserNotificationCenter.current() : nil
+        self.center = center
+        let backend = center.map(UNQuotaResetNotificationBackend.init(center:))
+        self.delivery = QuotaResetNotificationDelivery(
+            backend: backend,
+            onFallback: onFallback,
+            onDiagnostic: { [logger] event in
+                logger.notice("\(event, privacy: .public)")
+            }
+        )
         super.init()
     }
 
-    /// 최초 앱 실행 시 시각 알림 권한 요청 및 전면 알림 대리자 연결
+    /// 앱 시작 시 시스템 알림 권한 상태만 조회
     func start() {
-        guard let center, authorizationTask == nil else { return }
-        center.delegate = self
-        authorizationTask = Task { [logger] in
-            do {
-                return try await center.requestAuthorization(options: [.alert])
-            } catch {
-                logger.error("알림 권한 요청 실패: \(error.localizedDescription, privacy: .private)")
-                return false
-            }
-        }
+        center?.delegate = self
+        Task { await delivery.start() }
     }
 
-    /// 계정별 동시 초기화를 하나의 무음 배너로 전달
+    /// 설정 화면의 사용자 동작에 따른 권한 요청·재확인
+    func retryAuthorization() {
+        Task { await delivery.requestAuthorization() }
+    }
+
+    /// 설정 화면의 사용자 동작에 따른 테스트 알림 전달
+    func sendTestNotification() {
+        Task { await delivery.sendTestNotification() }
+    }
+
+    /// 감지된 조기 리셋의 시스템 알림 전달 시도
     func notify(_ reset: EarlyQuotaReset) {
-        guard let center else { return }
-        Task { [authorizationTask, logger] in
-            _ = await authorizationTask?.value
-            let settings = await center.notificationSettings()
-            guard settings.authorizationStatus == .authorized
-                    || settings.authorizationStatus == .provisional
-            else { return }
-            let content = UNMutableNotificationContent()
-            content.title = "할당량 조기 리셋"
-            let windows = reset.windows.map(\.title).joined(separator: ", ")
-            content.body = "\(reset.accountID)의 \(windows)가 예정 시각보다 일찍 초기화되었습니다."
-            let request = UNNotificationRequest(
-                identifier: UUID().uuidString,
-                content: content,
-                trigger: nil
-            )
-            do {
-                try await center.add(request)
-            } catch {
-                logger.error("할당량 리셋 알림 전달 실패: \(error.localizedDescription, privacy: .private)")
-            }
-        }
+        logger.notice("reset_detected windows=\(reset.windows.count, privacy: .public)")
+        Task { await delivery.notifyReset(reset) }
     }
 
-    /// 앱이 전면에 있는 동안에도 배너와 알림 센터에 표시
+    /// 앱 전면 실행 중 배너와 알림 센터 표시
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
         [.banner, .list]
+    }
+}
+
+/// UserNotifications 프레임워크 접근을 공통 전달 계약에 연결
+@MainActor
+private final class UNQuotaResetNotificationBackend: QuotaResetNotificationBackend {
+    private let center: UNUserNotificationCenter
+
+    /// 공유 알림 센터 주입
+    init(center: UNUserNotificationCenter) {
+        self.center = center
+    }
+
+    /// 최신 시스템 권한 상태 조회
+    func authorizationStatus() async throws -> QuotaResetNotificationAuthorization {
+        switch await center.notificationSettings().authorizationStatus {
+        case .notDetermined:
+            .notRequested
+        case .denied:
+            .denied
+        case .authorized:
+            .authorized
+        case .provisional:
+            .provisional
+        case .ephemeral:
+            .ephemeral
+        @unknown default:
+            .unknown
+        }
+    }
+
+    /// 시스템 알림 권한 요청
+    func requestAuthorization() async throws {
+        _ = try await center.requestAuthorization(options: [.alert])
+    }
+
+    /// 조용한 즉시 표시 알림 전달
+    func deliver(title: String, body: String) async throws {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        try await center.add(request)
     }
 }
