@@ -30,9 +30,22 @@ public final class AccountStore: ObservableObject {
 
     private let preferencesStore: PreferencesStore
     private let stateLoader: AccountStateLoader
+    /// 관측 시계 주입용 내부 경계; 기본값은 현재 시각과 시스템 가동 시간
+    var observationNow: @MainActor () -> Date = { Date() }
+    var observationUptime: @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     private var configRevision = 0
     private var accountGenerations: [String: Int] = [:]
     private var inFlightFetches: [FetchKey: FetchHandle] = [:]
+    private var resetHistories: [String: ResetHistory] = [:]
+
+    /// 동일 슬롯의 계정·구독 변경 시 관측 이력을 분리하는 식별 정보
+    private struct ResetHistory {
+        let email: String?
+        let planType: String?
+        var primary = ResetTimeTracker()
+        var secondary = ResetTimeTracker()
+    }
+
     public init(
         configs: [AccountConfig] = AccountConfig.defaultAccounts(),
         preferencesStore: PreferencesStore? = nil,
@@ -168,6 +181,7 @@ public final class AccountStore: ObservableObject {
             if let previous = oldStates[config.id], oldConfigs[config.id] == config {
                 return previous
             }
+            resetHistories[config.id] = nil
             var initial = Self.initialState(for: config, preferencesStore: preferencesStore)
             initial.configurationGeneration = (oldStates[config.id]?.configurationGeneration ?? 0) + 1
             return initial
@@ -329,6 +343,36 @@ public final class AccountStore: ObservableObject {
         guard let index = states.firstIndex(where: { $0.id == result.config.id }) else { return }
         var state = result.state
         state.configurationGeneration = states[index].configurationGeneration
+        if state.status == .normal {
+            var history = resetHistories[state.id]
+            if history?.email != state.email || history?.planType != state.planType {
+                history = nil
+            }
+            var current = history ?? ResetHistory(email: state.email, planType: state.planType)
+            let now = observationNow()
+            let uptime = observationUptime()
+            let maximumGap = max(900, Double(preferencesStore.refreshIntervalMinutes) * 120 + 30)
+            if let updated = state.lastUpdated,
+               abs(updated.timeIntervalSince(now)) <= 30 {
+                state.primaryResetObservation = current.primary.observe(
+                    resetAt: state.primaryResetAt, observedAt: updated,
+                    uptime: uptime, maximumGap: maximumGap
+                )
+                state.secondaryResetObservation = current.secondary.observe(
+                    resetAt: state.secondaryResetAt, observedAt: updated,
+                    uptime: uptime, maximumGap: maximumGap
+                )
+                resetHistories[state.id] = current
+            } else {
+                resetHistories[state.id] = nil
+            }
+        } else {
+            resetHistories[state.id] = nil
+            if Self.shouldPreservePreviousSnapshot(for: state.status) {
+                state.primaryResetObservation = states[index].primaryResetObservation
+                state.secondaryResetObservation = states[index].secondaryResetObservation
+            }
+        }
         states[index] = state
         guard result.config.isConfigured, result.state.status == .normal else { return }
         let earlyReset = EarlyQuotaReset.detect(

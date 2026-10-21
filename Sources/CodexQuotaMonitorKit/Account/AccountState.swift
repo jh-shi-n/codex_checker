@@ -11,6 +11,9 @@ public struct AccountState: Identifiable, Codable, Equatable, Sendable {
     public var planType: String?
     public var primaryResetAt: Date?
     public var secondaryResetAt: Date?
+    /// 영속 스냅샷과 분리한 현재 실행의 초기화 시각 관측
+    public var primaryResetObservation: ResetTimeObservation = .checking
+    public var secondaryResetObservation: ResetTimeObservation = .checking
     public var lastUpdated: Date?
     public var status: AccountStatus
     public var errorMessage: String?
