@@ -142,6 +142,49 @@ final class EarlyQuotaResetTests: XCTestCase {
         XCTAssertNil(EarlyQuotaReset.detect(previous: legacyBefore, current: current, now: now))
     }
 
+    /// 잔여 리셋권이 있는 주간 11%→0% 초기화의 저장·알림·중복 방지 검증
+    func testWeeklyResetWithUnchangedAvailableCreditsNotifiesOnce() async {
+        let suite = "WeeklyResetRegression.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = PreferencesStore(userDefaults: defaults)
+        let reference = Date()
+        let credits = RateLimitResetCredits(availableCount: 3, credits: (1...3).map {
+            .init(id: "fixture-\($0)", expiresAt: reference.addingTimeInterval(10 * 86_400))
+        })
+        let config = AccountConfig.defaultAccounts()[3]
+        preferences.updateQuotaSnapshot(for: config.home, snapshot: .init(
+            usedPercent: 4,
+            resetAt: reference.addingTimeInterval(2 * 3_600),
+            secondaryUsedPercent: 11,
+            secondaryResetAt: reference.addingTimeInterval(5 * 86_400),
+            resetCredits: credits,
+            lastUpdated: reference.addingTimeInterval(-300)
+        ))
+        let fresh = AccountState(
+            id: config.id,
+            primaryUsedPercent: 0,
+            secondaryUsedPercent: 0,
+            primaryResetAt: reference.addingTimeInterval(5 * 3_600),
+            secondaryResetAt: reference.addingTimeInterval(7 * 86_400),
+            resetCredits: credits,
+            lastUpdated: reference,
+            status: .normal
+        )
+        let store = AccountStore(preferencesStore: preferences) { _ in fresh }
+        var events: [EarlyQuotaReset] = []
+        store.onEarlyQuotaReset = { events.append($0) }
+
+        await store.refresh(accountID: config.id)
+        await store.refresh(accountID: config.id)
+
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.accountID, "C4")
+        XCTAssertTrue(events.first?.windows.contains(.secondary) == true)
+        XCTAssertEqual(store.state(for: "C4")?.secondaryUsedPercent, 0)
+        XCTAssertEqual(preferences.quotaSnapshot(for: config.home)?.secondaryUsedPercent, 0)
+    }
+
     /// 고정 기준 시각의 이전 정상 스냅샷 구성
     private func snapshot(reset: Date? = Date(timeIntervalSince1970: 1_800_003_600)) -> PreferencesStore.QuotaSnapshot {
         PreferencesStore.QuotaSnapshot(

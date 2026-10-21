@@ -27,7 +27,7 @@ struct CodexQuotaMonitorApp: App {
 final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let preferences: PreferencesStore
     let accountStore: AccountStore
-    let quotaResetNotifications = QuotaResetNotificationService()
+    let quotaResetNotifications: QuotaResetNotificationService
     let refreshService: RefreshService
     let launchAtLoginService: LaunchAtLoginService
     let sessionActivityProvider: AppServerSessionActivityProvider
@@ -82,6 +82,19 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         let sessionActivityDelivery = SessionActivityToastDeliveryGate(
             queue: sessionActivityToastQueue
         )
+        let quotaResetNotifications = QuotaResetNotificationService { fallback in
+            let visible = preferences.visibleAccounts(accountStore.states)
+            guard let index = visible.firstIndex(where: { $0.id == fallback.accountID }) else { return }
+            let windows = fallback.windowTitles.joined(separator: " · ")
+            sessionActivityDelivery.deliver(SessionActivityTransition(
+                accountID: fallback.accountID,
+                side: index < 2 ? .left : .right,
+                sessionID: fallback.id,
+                agentLabel: "할당량 리셋 알림",
+                taskName: "\(windows) 조기 초기화",
+                status: .completed
+            ))
+        }
         let sessionActivityMonitor = SessionActivityMonitor(
             accounts: accountStore.configs,
             provider: sessionActivityProvider,
@@ -104,6 +117,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
         self.preferences = preferences
         self.accountStore = accountStore
+        self.quotaResetNotifications = quotaResetNotifications
         self.refreshService = refreshService
         self.launchAtLoginService = launchAtLoginService
         self.sessionActivityProvider = sessionActivityProvider

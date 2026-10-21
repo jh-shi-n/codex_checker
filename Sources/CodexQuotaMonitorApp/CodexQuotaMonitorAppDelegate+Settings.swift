@@ -74,8 +74,26 @@ extension CodexQuotaMonitorAppDelegate {
                     self?.preferences.accountDisplayOrder ?? PreferencesStore.defaultAccountDisplayOrder
                 },
                 set: { [weak self] ids in self?.applyAccountDisplayOrder(ids) }
-            )
+            ),
+            notificationDelivery: quotaResetNotifications.delivery,
+            onRetryNotificationAuthorization: { [weak self] in
+                self?.quotaResetNotifications.retryAuthorization()
+            },
+            onSendNotificationTest: { [weak self] in
+                self?.quotaResetNotifications.sendTestNotification()
+            },
+            onOpenNotificationSettings: { [weak self] in
+                self?.openNotificationSettings()
+            }
         )
+    }
+
+    /// 사용자 동작 시 macOS 알림 시스템 설정 열기
+    private func openNotificationSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     private func applyRefreshInterval(_ minutes: Int) {
