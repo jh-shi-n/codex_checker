@@ -420,7 +420,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             item.button?.image = AppBranding.menuBarIcon()
             item.button?.target = self
             item.button?.action = #selector(openEmptyAccountsInfo)
-            item.button?.toolTip = "Codex Quota Monitor"
+            item.button?.toolTip = "Codex Quota Checker"
             hiddenAccountsStatusItem = item
         }
         if let controller = emptyAccountsPopover?.contentViewController as? NSHostingController<EmptyAccountsView> {

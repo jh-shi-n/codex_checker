@@ -1,4 +1,4 @@
-# Codex Quota Monitor
+# Codex Quota Checker
 
 - macOS 메뉴 막대·노치에서 최대 4개 Codex 계정의 할당량과 로컬 활동 확인
 - Codex를 활용해 제작한 비공식 독립 앱
@@ -32,7 +32,7 @@
 - Intel Mac은 소스 빌드 필요; 별도 검증된 Intel 배포 파일 미제공
 
 1. [GitHub Releases](https://github.com/jh-shi-n/codex_quota_checker/releases)에서 앱 ZIP 다운로드
-2. 압축 해제 후 `CodexQuotaMonitor.app`을 응용 프로그램 폴더로 이동
+2. 압축 해제 후 `CodexQuotaChecker.app`을 응용 프로그램 폴더로 이동
 3. 앱 실행
 4. 개발자 확인 불가 또는 Apple의 악성 소프트웨어 검사 여부를 확인할 수 없다는 경고로 차단된 경우, 출처를 신뢰하는 앱에 한해 **시스템 설정 → 개인정보 보호 및 보안 → 확인 없이 열기** 선택
 5. 확인 창에서 실행 허용
@@ -50,8 +50,8 @@
 ```bash
 git clone https://github.com/jh-shi-n/codex_quota_checker.git
 cd codex_quota_checker
-scripts/package_app.sh --output "$PWD/codex/CodexQuotaMonitor.app" --configuration release
-open "$PWD/codex/CodexQuotaMonitor.app"
+scripts/package_app.sh --output "$PWD/codex/CodexQuotaChecker.app" --configuration release
+open "$PWD/codex/CodexQuotaChecker.app"
 ```
 
 - 이미 저장소를 내려받은 경우 저장소 루트에서 패키징 명령부터 실행
