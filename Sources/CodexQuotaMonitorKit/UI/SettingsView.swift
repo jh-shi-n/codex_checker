@@ -322,31 +322,13 @@ public struct SettingsView: View {
                 }
 
                 Section(Self.accountDisplayOrderSectionTitle) {
-                    ForEach(normalizedAccountDisplayOrder, id: \.self) { accountID in
-                        let order = normalizedAccountDisplayOrder
-                        let index = order.firstIndex(of: accountID) ?? 0
-                        HStack {
-                            Text(accountID)
-                            Spacer()
-                            Button {
-                                moveAccount(accountID, up: true)
-                            } label: {
-                                Image(systemName: "chevron.up")
-                            }
-                            .disabled(index == 0)
-                            .accessibilityLabel("\(accountID) 위로 이동")
-                            .accessibilityIdentifier("account-order-up-\(accountID.lowercased())")
-
-                            Button {
-                                moveAccount(accountID, up: false)
-                            } label: {
-                                Image(systemName: "chevron.down")
-                            }
-                            .disabled(index == order.count - 1)
-                            .accessibilityLabel("\(accountID) 아래로 이동")
-                            .accessibilityIdentifier("account-order-down-\(accountID.lowercased())")
-                        }
-                    }
+                    AccountOrderEditor(
+                        order: Binding(get: { normalizedAccountDisplayOrder }, set: { ids in updateAccountDisplayOrder(ids) }),
+                        names: accountDisplayNames
+                    )
+                    Text("오른쪽 손잡이나 행을 드래그해 원하는 위치에 놓으세요.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section(Self.activitySectionTitle) {
@@ -580,16 +562,6 @@ public struct SettingsView: View {
         let missingIDs = stableIDs.filter { !normalized.contains($0) }
         normalized.append(contentsOf: missingIDs)
         return normalized
-    }
-
-    /// 목적: 지정 계정을 위·아래 한 칸 이동
-    private func moveAccount(_ accountID: String, up: Bool) {
-        var order = normalizedAccountDisplayOrder
-        guard let index = order.firstIndex(of: accountID) else { return }
-        let destination = index + (up ? -1 : 1)
-        guard order.indices.contains(destination) else { return }
-        order.swapAt(index, destination)
-        updateAccountDisplayOrder(order)
     }
 
     /// 목적: 직접 입력한 갱신 간격의 유효값 반영

@@ -1084,6 +1084,20 @@ final class QuotaPresentationTests: XCTestCase {
         }
     }
 
+    /// 양방향 끝 이동·동일 위치·무효 입력에서 슬롯 순열 보존 검증
+    func testAccountOrderDropAdjustsInsertionBoundaries() {
+        let order = ["C1", "C2", "C3", "C4"]
+        XCTAssertEqual(AccountOrderEditor.moving(order, slotID: "C1", toInsertionIndex: 4), ["C2", "C3", "C4", "C1"])
+        XCTAssertEqual(AccountOrderEditor.moving(order, slotID: "C4", toInsertionIndex: 0), ["C4", "C1", "C2", "C3"])
+        XCTAssertEqual(AccountOrderEditor.moving(order, slotID: "C2", toInsertionIndex: 3), ["C1", "C3", "C2", "C4"])
+        XCTAssertEqual(AccountOrderEditor.moving(order, slotID: "C3", toInsertionIndex: 1), ["C1", "C3", "C2", "C4"])
+        for destination in [0, 1] {
+            XCTAssertEqual(AccountOrderEditor.moving(order, slotID: "C1", toInsertionIndex: destination), order)
+        }
+        XCTAssertEqual(AccountOrderEditor.moving(order, slotID: "unknown", toInsertionIndex: 2), order)
+        XCTAssertEqual(AccountOrderEditor.moving(order, slotID: "C1", toInsertionIndex: 5), order)
+    }
+
     func testNotchActivityToastUsesSafeTwoLineCopyAndShortSessionID() {
         let transition = SessionActivityTransition(
             accountID: "C4",
