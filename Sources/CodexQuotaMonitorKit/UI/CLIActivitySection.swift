@@ -8,9 +8,9 @@ public typealias SessionActivitySnapshotSink = @MainActor @Sendable (SessionActi
 
 /// Popover content for one account's local CLI/Codex App activity.
 public struct CLIActivitySection: View {
-    public static let loadingText = "Loading session activity…"
-    public static let emptyText = "No recent Codex activity"
-    public static let unavailableText = "Session status unavailable"
+    public static let loadingText = "세션 실행 기록을 불러오는 중입니다…"
+    public static let emptyText = "최근 15분간 실행 기록이 없습니다."
+    public static let unavailableText = "세션 실행 기록을 불러올 수 없습니다."
     /// Bounded refresh cadence while the account popover remains mounted.
     /// Loads are sequential, so a slow provider read cannot overlap another.
     public static let activityRefreshInterval: TimeInterval = 5
@@ -92,19 +92,19 @@ public struct CLIActivitySection: View {
     public static func statusText(_ status: SessionActivityStatus) -> String {
         switch status {
         case .working:
-            return "Working"
+            return "작업 중"
         case .waiting:
-            return "Waiting"
+            return "대기 중"
         case .inactive:
-            return "Inactive"
+            return "활동 없음"
         case .completed:
-            return "Completed"
+            return "완료"
         case .stopped:
-            return "Stopped"
+            return "중단"
         case .error:
-            return "Error"
+            return "오류"
         case .unknown:
-            return "Unknown"
+            return "확인 불가"
         }
     }
 
@@ -150,7 +150,7 @@ public struct CLIActivitySection: View {
     }
 
     public static func sessionRowLabel(for source: SessionActivitySource) -> String {
-        source == .lastKnown ? "Last-known session" : "Current session"
+        source == .lastKnown ? "마지막 확인 세션" : "최근 세션"
     }
 
     public static func displayName(for agent: SessionActivityAgent) -> String {
@@ -161,7 +161,7 @@ public struct CLIActivitySection: View {
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized.isEmpty ? "Agent" : String(normalized.prefix(80))
+        return normalized.isEmpty || normalized == "Agent" ? "에이전트" : String(normalized.prefix(80))
     }
 
     /// Small async seam used by tests with fake snapshots. SwiftUI's `.task`
@@ -270,11 +270,11 @@ public struct CLIActivitySection: View {
             sessionHeader(item, isExpanded: expanded)
 
             if let planStep = item.planStep {
-                metadataRow(label: "Plan", value: planStep)
+                metadataRow(label: "진행 단계", value: planStep)
             }
 
             if let activeOperation = item.activeOperation {
-                metadataRow(label: "Operation", value: activeOperation)
+                metadataRow(label: "현재 작업", value: Self.operationText(activeOperation))
             }
 
             if expanded && !item.agents.isEmpty {
@@ -323,7 +323,7 @@ public struct CLIActivitySection: View {
                     .frame(width: 7, height: 7)
                     .accessibilityHidden(true)
 
-                Text(item.title)
+                Text(Self.sessionTitle(item.title))
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -349,8 +349,8 @@ public struct CLIActivitySection: View {
         .buttonStyle(.plain)
         .help(sessionAccessibilityLabel(for: item))
         .accessibilityLabel(sessionAccessibilityLabel(for: item))
-        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-        .accessibilityHint(item.agents.isEmpty ? "No child agents" : "Toggle child agents")
+        .accessibilityValue(isExpanded ? "펼쳐짐" : "접힘")
+        .accessibilityHint(item.agents.isEmpty ? "하위 에이전트 없음" : "하위 에이전트 펼치기 또는 접기")
     }
 
     @ViewBuilder
@@ -411,7 +411,7 @@ public struct CLIActivitySection: View {
     }
 
     private func sessionAccessibilityLabel(for item: SessionActivityPresentationItem) -> String {
-        var values = [item.title, Self.mainStatusText(for: item)]
+        var values = [Self.sessionTitle(item.title), Self.mainStatusText(for: item)]
         if let time = Self.activityTimeText(for: item.lastActivityAt) {
             values.append(time)
         }
@@ -440,7 +440,24 @@ public struct CLIActivitySection: View {
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized.isEmpty ? "Agent" : String(normalized.prefix(80))
+        return normalized.isEmpty || normalized == "Agent" ? "작업 정보 없음" : String(normalized.prefix(80))
+    }
+
+    /// 사용자 지정 제목을 보존하고 기본 세션 이름만 한국어로 표시
+    private static func sessionTitle(_ title: String) -> String {
+        title == "Codex session" ? "이름 없는 세션" : title
+    }
+
+    /// 내부 작업 종류의 화면 표시 문구 변환
+    private static func operationText(_ operation: String) -> String {
+        switch operation {
+        case "Command": return "명령 실행"
+        case "File change": return "파일 수정"
+        case "Tool": return "도구 사용"
+        case "Review": return "검토"
+        case "Agent": return "에이전트 작업"
+        default: return operation
+        }
     }
 
     private static func statusColor(for status: SessionActivityStatus) -> Color {
