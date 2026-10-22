@@ -1,6 +1,6 @@
-// 목적: 앱 설정과 설치 이력의 단일 config.json 저장소
-// 이용처: 앱 시작·설정 변경·최초 계정 등록
-// 사용방법: PreferencesStore와 InstallationHistoryStore에 동일 파일 경로 연결
+// 목적: 기존 config.json 설정·등록 이력의 이관용 읽기 경계
+// 이용처: 새 UserDefaults 설정 묶음이 없는 최초 이관
+// 사용방법: PreferencesStore에 이관 원본 경로 전달
 import Foundation
 
 /// 인증 정보 없이 저장 가능한 앱 설정의 명시적 허용 목록
@@ -29,14 +29,14 @@ public struct AppPreferencesPayload: Codable, Equatable, Sendable {
     }
 }
 
-/// 실행 이력과 앱 설정을 분리한 버전 2 설정 파일
+/// 과거 실행 이력과 앱 설정을 읽기 위한 버전 2 호환 자료형
 public struct AppConfigurationDocument: Codable, Equatable, Sendable {
     public var schemaVersion = 2
     public var installation: InstallationHistory?
     public var settings: AppPreferencesPayload?
 }
 
-/// 서로 다른 소비자의 이력·설정 저장 시 다른 섹션을 보존하는 파일 경계
+/// 운영 중 설정 재로드 없이 이관 원본과 테스트 자료를 관리하는 파일 경계
 @MainActor
 public final class AppConfigurationFile {
     public let fileURL: URL
