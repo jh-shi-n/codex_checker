@@ -307,7 +307,14 @@ public struct SettingsView: View {
 
                 Section(Self.accountVisibilitySectionTitle) {
                     ForEach(PreferencesStore.stableAccountIDs, id: \.self) { accountID in
-                        Toggle(accountID, isOn: enabledAccountBinding(for: accountID))
+                        Toggle(isOn: enabledAccountBinding(for: accountID)) {
+                            HStack(spacing: 8) {
+                                Text(accountID)
+                                if let name = accountDisplayNames[accountID], !name.isEmpty {
+                                    Text(name).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                     }
                     Text("선택한 계정은 왼쪽부터 최대 두 개씩 채워집니다. 모두 숨기거나 등록된 계정이 없으면 메뉴 막대 아이콘의 안내에서 설정을 열 수 있습니다.")
                         .font(.caption)
