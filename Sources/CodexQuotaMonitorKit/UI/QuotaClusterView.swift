@@ -158,6 +158,7 @@ public struct QuotaClusterView: View {
     public let loadSessionActivity: SessionActivityLoader
     public let loadCachedTokenUsage: TokenUsageSnapshotLookup
     public let refreshTokenUsage: TokenUsageSnapshotRefresh
+    public let consumeResetCredit: ResetCreditRunner
     public let runUsageWindowProbe: UsageWindowProbeRunner
     public let onClose: () -> Void
     /// Stable main-actor state object supplied by the panel host. Queue
@@ -185,6 +186,7 @@ public struct QuotaClusterView: View {
         },
         loadCachedTokenUsage: @escaping TokenUsageSnapshotLookup = AccountDashboardDefaults.emptyTokenUsageLookup,
         refreshTokenUsage: @escaping TokenUsageSnapshotRefresh = AccountDashboardDefaults.unavailableTokenUsageRefresh,
+        consumeResetCredit: @escaping ResetCreditRunner = ResetCreditDefaults.unavailable,
         runUsageWindowProbe: @escaping UsageWindowProbeRunner = { account in
             AccountDashboardDefaults.unavailableProbe(accountID: account.id)
         },
@@ -207,6 +209,7 @@ public struct QuotaClusterView: View {
         self.loadSessionActivity = loadSessionActivity
         self.loadCachedTokenUsage = loadCachedTokenUsage
         self.refreshTokenUsage = refreshTokenUsage
+        self.consumeResetCredit = consumeResetCredit
         self.runUsageWindowProbe = runUsageWindowProbe
         self.onClose = onClose
         let presentation = activityPresentation ?? NotchActivityPresentationModel(
@@ -246,6 +249,7 @@ public struct QuotaClusterView: View {
                         loadSessionActivity: loadSessionActivity,
                         loadCachedTokenUsage: loadCachedTokenUsage,
                         refreshTokenUsage: refreshTokenUsage,
+                        consumeResetCredit: consumeResetCredit,
                         runUsageWindowProbe: runUsageWindowProbe,
                         onClose: onClose
                     )

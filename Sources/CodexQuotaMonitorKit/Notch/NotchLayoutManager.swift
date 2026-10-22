@@ -64,6 +64,7 @@ public final class NotchLayoutManager: NSObject {
         onSettings: @escaping () -> Void = {},
         loadCachedTokenUsage: @escaping TokenUsageSnapshotLookup = AccountDashboardDefaults.emptyTokenUsageLookup,
         refreshTokenUsage: @escaping TokenUsageSnapshotRefresh = AccountDashboardDefaults.unavailableTokenUsageRefresh,
+        consumeResetCredit: @escaping ResetCreditRunner = ResetCreditDefaults.unavailable,
         runUsageWindowProbe: @escaping UsageWindowProbeRunner = { account in
             AccountDashboardDefaults.unavailableProbe(accountID: account.id)
         },
@@ -78,6 +79,7 @@ public final class NotchLayoutManager: NSObject {
             onSettings: onSettings,
             loadCachedTokenUsage: loadCachedTokenUsage,
             refreshTokenUsage: refreshTokenUsage,
+            consumeResetCredit: consumeResetCredit,
             runUsageWindowProbe: runUsageWindowProbe,
             onClose: onClose,
             serviceStatus: serviceStatus
@@ -89,6 +91,7 @@ public final class NotchLayoutManager: NSObject {
             onSettings: onSettings,
             loadCachedTokenUsage: loadCachedTokenUsage,
             refreshTokenUsage: refreshTokenUsage,
+            consumeResetCredit: consumeResetCredit,
             runUsageWindowProbe: runUsageWindowProbe,
             onClose: onClose,
             serviceStatus: serviceStatus
@@ -168,18 +171,21 @@ public final class NotchLayoutManager: NSObject {
     public func setDashboardCallbacks(
         loadCachedTokenUsage: @escaping TokenUsageSnapshotLookup,
         refreshTokenUsage: @escaping TokenUsageSnapshotRefresh,
+        consumeResetCredit: @escaping ResetCreditRunner = ResetCreditDefaults.unavailable,
         runUsageWindowProbe: @escaping UsageWindowProbeRunner,
         onClose: @escaping () -> Void = {}
     ) {
         leftPanel.setDashboardCallbacks(
             loadCachedTokenUsage: loadCachedTokenUsage,
             refreshTokenUsage: refreshTokenUsage,
+            consumeResetCredit: consumeResetCredit,
             runUsageWindowProbe: runUsageWindowProbe,
             onClose: onClose
         )
         rightPanel.setDashboardCallbacks(
             loadCachedTokenUsage: loadCachedTokenUsage,
             refreshTokenUsage: refreshTokenUsage,
+            consumeResetCredit: consumeResetCredit,
             runUsageWindowProbe: runUsageWindowProbe,
             onClose: onClose
         )

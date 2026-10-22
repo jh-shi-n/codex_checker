@@ -3,6 +3,58 @@ import XCTest
 @testable import CodexQuotaMonitorKit
 
 final class CodexQuotaServiceTests: XCTestCase {
+    /// 선택 리셋권·재시도 키 전송 및 서버 결과 4종 구분 검증
+    func testResetCreditConsumptionUsesSelectedIDAndIdempotencyKey() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("auth.json"))
+        for outcome in [ResetCreditOutcome.reset, .nothingToReset, .noCredit, .alreadyRedeemed] {
+            let transport = RecordingTransport(responses: [
+                0: CodexMessage(id: 0, result: .object([:])),
+                3: CodexMessage(id: 3, result: .object(["outcome": .string(outcome.rawValue)])),
+            ])
+            let service = CodexQuotaService(
+                locator: FixedCodexLocator(url: directory.appendingPathComponent("codex")),
+                processFactory: { transport }
+            )
+            XCTAssertEqual(service.consumeResetCreditSync(
+                for: AccountConfig(id: "C1", home: directory, position: .left),
+                creditID: "selected-credit", idempotencyKey: "same-attempt"
+            ), .success(outcome))
+            XCTAssertEqual(transport.sentRequests.map(\.method), [
+                "initialize", "initialized", "account/rateLimitResetCredit/consume",
+            ])
+            XCTAssertEqual(transport.sentRequests.last?.params, .object([
+                "creditId": .string("selected-credit"), "idempotencyKey": .string("same-attempt"),
+            ]))
+            XCTAssertEqual(transport.readIDs, [[0], [3]])
+        }
+    }
+
+    /// 서버 오류·미지원·알 수 없는 응답을 성공으로 오인하지 않는 경계 검증
+    func testResetCreditConsumptionRejectsErrorsAndUnknownOutcome() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("auth.json"))
+        for response in [
+            CodexMessage(id: 3, error: CodexProtocolError(code: -32601, message: "Method not found")),
+            CodexMessage(id: 3, result: .object(["outcome": .string("unknown")])),
+        ] {
+            let transport = RecordingTransport(responses: [
+                0: CodexMessage(id: 0, result: .object([:])), 3: response,
+            ])
+            let service = CodexQuotaService(
+                locator: FixedCodexLocator(url: directory.appendingPathComponent("codex")),
+                processFactory: { transport }
+            )
+            if case .success = service.consumeResetCreditSync(
+                for: AccountConfig(id: "C1", home: directory, position: .left),
+                creditID: "selected-credit", idempotencyKey: "same-attempt"
+            ) { XCTFail("실패 또는 미확인 응답의 성공 처리") }
+            XCTAssertEqual(transport.sentRequests.filter { $0.method.hasSuffix("/consume") }.count, 1)
+        }
+    }
+
     /// 서버 리셋권 응답의 계정 상태 전달 및 일부 상세에서도 통합 개수 유지 확인
     func testRateLimitResetCreditsReachAccountState() throws {
         let directory = try makeTemporaryDirectory()

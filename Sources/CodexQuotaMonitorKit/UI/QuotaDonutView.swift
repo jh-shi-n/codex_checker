@@ -237,6 +237,7 @@ public struct QuotaDonutView: View {
     public let loadSessionActivity: SessionActivityLoader
     public let loadCachedTokenUsage: TokenUsageSnapshotLookup
     public let refreshTokenUsage: TokenUsageSnapshotRefresh
+    public let consumeResetCredit: ResetCreditRunner
     public let runUsageWindowProbe: UsageWindowProbeRunner
     public let onClose: () -> Void
 
@@ -257,6 +258,7 @@ public struct QuotaDonutView: View {
         },
         loadCachedTokenUsage: @escaping TokenUsageSnapshotLookup = AccountDashboardDefaults.emptyTokenUsageLookup,
         refreshTokenUsage: @escaping TokenUsageSnapshotRefresh = AccountDashboardDefaults.unavailableTokenUsageRefresh,
+        consumeResetCredit: @escaping ResetCreditRunner = ResetCreditDefaults.unavailable,
         runUsageWindowProbe: @escaping UsageWindowProbeRunner = { account in
             AccountDashboardDefaults.unavailableProbe(accountID: account.id)
         },
@@ -271,6 +273,7 @@ public struct QuotaDonutView: View {
         self.loadSessionActivity = loadSessionActivity
         self.loadCachedTokenUsage = loadCachedTokenUsage
         self.refreshTokenUsage = refreshTokenUsage
+        self.consumeResetCredit = consumeResetCredit
         self.runUsageWindowProbe = runUsageWindowProbe
         self.onClose = onClose
     }
@@ -302,6 +305,7 @@ public struct QuotaDonutView: View {
                     loadSessionActivity: loadSessionActivity,
                     loadCachedTokenUsage: loadCachedTokenUsage,
                     refreshTokenUsage: refreshTokenUsage,
+                    consumeResetCredit: consumeResetCredit,
                     runUsageWindowProbe: runUsageWindowProbe,
                     onClose: {
                         isDetailPresented = false
