@@ -359,10 +359,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Ping 이전 조회 재사용을 막고 완료 이후 한도 조회 보장
-        let revision = accountStore.configurationRevision
+        let generation = accountStore.state(for: account.id)?.configurationGeneration
         let before = accountStore.state(for: account.id) ?? account
         let result = await usageWindowProbeService.probe(config)
-        let isCurrent = revision == accountStore.configurationRevision
+        let isCurrent = generation == accountStore.state(for: account.id)?.configurationGeneration
             && accountStore.configs.first(where: { $0.id == account.id }) == config
         guard result.isSuccess,
               isCurrent
@@ -375,8 +375,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 isCurrentAccount: isCurrent
             )
         }
-        let didRefresh = await accountStore.refresh(accountID: account.id, forceFresh: true)
-        let isStillCurrent = revision == accountStore.configurationRevision
+        let refresh = await accountStore.refreshOutcome(accountID: account.id, forceFresh: true)
+        let didRefresh = refresh.isSuccess
+        let isStillCurrent = generation == accountStore.state(for: account.id)?.configurationGeneration
+            && accountStore.configs.first(where: { $0.id == account.id }) == config
         let after = didRefresh && isStillCurrent ? accountStore.state(for: account.id) : nil
         return UsageWindowProbePresentationResult(
             result: result,
