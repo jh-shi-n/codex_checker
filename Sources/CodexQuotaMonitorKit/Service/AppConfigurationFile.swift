@@ -71,6 +71,16 @@ public final class AppConfigurationFile {
             return date
         }
         let header = try decoder.decode(VersionHeader.self, from: data)
+        if header.schemaVersion == nil {
+            let record = try decoder.decode(RegistrationRecord.self, from: data)
+            guard record.hasRegisteredAccount || record.firstAccountRegisteredAt == nil else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            return AppConfigurationDocument(installation: InstallationHistory(
+                hasRegisteredAccount: record.hasRegisteredAccount,
+                firstAccountRegisteredAt: record.firstAccountRegisteredAt
+            ), settings: record.settings)
+        }
         if header.schemaVersion == 1 {
             let history = try decoder.decode(InstallationHistory.self, from: data)
             guard history.schemaVersion == 1, history.hasRegisteredAccount || history.firstAccountRegisteredAt == nil else {
@@ -101,7 +111,10 @@ public final class AppConfigurationFile {
             throw CocoaError(.coderInvalidValue)
         }
         var document = try read() ?? AppConfigurationDocument()
-        if exists && document.installation == history { return }
+        if exists, document.installation == history,
+           try JSONDecoder().decode(VersionHeader.self, from: Data(contentsOf: fileURL)).schemaVersion == nil {
+            return
+        }
         document.installation = history
         try write(document)
     }
@@ -118,7 +131,12 @@ public final class AppConfigurationFile {
             try container.encode(Self.registrationDateText(date))
         }
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(document).write(to: fileURL, options: .atomic)
+        let record = RegistrationRecord(
+            hasRegisteredAccount: document.installation?.hasRegisteredAccount ?? false,
+            firstAccountRegisteredAt: document.installation?.firstAccountRegisteredAt,
+            settings: document.settings
+        )
+        try encoder.encode(record).write(to: fileURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
     }
 
@@ -146,8 +164,27 @@ public final class AppConfigurationFile {
         return formatter.date(from: text)
     }
 
+    /// 등록 여부·등록일자의 새 파일 형식; 과거 설정은 이관 원본으로만 보존
+    private struct RegistrationRecord: Codable {
+        let hasRegisteredAccount: Bool
+        let firstAccountRegisteredAt: Date?
+        let settings: AppPreferencesPayload?
+
+        private enum CodingKeys: String, CodingKey {
+            case hasRegisteredAccount, firstAccountRegisteredAt, settings
+        }
+
+        /// 날짜 미상도 null로 명시하고 형식 버전·실행 횟수 저장 제외
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(hasRegisteredAccount, forKey: .hasRegisteredAccount)
+            try values.encode(firstAccountRegisteredAt, forKey: .firstAccountRegisteredAt)
+            try values.encodeIfPresent(settings, forKey: .settings)
+        }
+    }
+
     /// 임의 필드 저장 없이 파일 형식 버전만 판별하는 읽기 경계
     private struct VersionHeader: Decodable {
-        let schemaVersion: Int
+        let schemaVersion: Int?
     }
 }

@@ -128,7 +128,8 @@
 - 계정 경로·표시·갱신·알림·자동 실행 선호와 최초 등록 Boolean·날짜의 버전 포함 UserDefaults 단일 묶음 저장
 - 최초 등록 날짜의 의미: 검증된 계정 경로의 앱 설정 반영 시각, 디스크 기록 완료 시각과 별개
 - 계정 추가·전체 삭제 이후에도 최초 등록 이력 유지, 실제 날짜가 없는 과거 등록 이력은 날짜 미설정 허용
-- `~/Library/Application Support/CodexQuotaMonitor/config.json`에 최초 등록 Boolean·날짜를 UserDefaults와 동일하게 저장
+- `~/Library/Application Support/CodexQuotaMonitor/config.json`의 최상위에 `hasRegisteredAccount`·`firstAccountRegisteredAt` 저장, `schemaVersion` 저장 제외
+- 등록일자는 실제 최초 등록 완료 시각의 ISO 8601 UTC 표현, 과거 날짜 미상은 명시적 `null` 유지
 - 앱 시작 시 config.json 부재와 등록 이력·경로 부재를 함께 확인하여 최초 실행 판정, 파일 생성 이후 등록 미완료 실행은 연결 가이드 유지
 - 기존 등록 사용자는 파일이 없어도 등록 이력·실제 날짜 보존 후 파일 생성, 파일 삭제만으로 등록 이력 초기화 제외
 - 경로·표시·갱신·알림 등 운영 설정은 UserDefaults 유지, 기존 JSON 설정·installation.json·개별 키는 이관 원본으로 활용
