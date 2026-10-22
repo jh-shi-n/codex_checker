@@ -324,17 +324,15 @@ public struct SettingsView: View {
                 }
 
                 Section(Self.activitySectionTitle) {
-                    Stepper(
-                        value: activityNotificationDurationBinding,
-                        in: Self.minimumActivityNotificationDurationSeconds...Self.maximumActivityNotificationDurationSeconds
-                    ) {
-                        HStack {
-                            Text(Self.activityNotificationDurationLabel)
-                            Spacer()
-                            Text("\(activityNotificationDurationSeconds)초")
-                                .foregroundStyle(.secondary)
+                    Picker(Self.activityNotificationDurationLabel, selection: activityNotificationDurationBinding) {
+                        ForEach(Self.minimumActivityNotificationDurationSeconds...Self.maximumActivityNotificationDurationSeconds, id: \.self) { seconds in
+                            Text("\(seconds)초").tag(seconds)
                         }
                     }
+                    .pickerStyle(.menu)
+                    Text("1~10초 중 선택할 수 있습니다. 기본값은 3초이며 다음 활동 알림부터 적용됩니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section(Self.quotaResetNotificationSectionTitle) {
