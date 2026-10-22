@@ -33,7 +33,7 @@ extension CodexQuotaMonitorAppDelegate {
         }
     }
 
-    /// 진행 서비스 종료와 마지막 진단 이벤트의 디스크 기록 대기
+    /// 진행 서비스 종료와 마지막 진단 이벤트의 최대 1초 디스크 기록 대기
     func applicationWillTerminate(_ notification: Notification) {
         _ = notification
         DiagnosticLogContext.record(.appTerminating)
@@ -63,7 +63,7 @@ extension CodexQuotaMonitorAppDelegate {
         fallbackSettingsWindow = nil
         accountSetupModel?.cancelCheck()
         accountSetupWindow?.close()
-        DiagnosticLogger.shared.flush()
+        DiagnosticLogger.shared.flush(timeout: 1)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

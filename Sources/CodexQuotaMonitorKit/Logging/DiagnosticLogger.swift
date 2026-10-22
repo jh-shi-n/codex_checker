@@ -143,10 +143,16 @@ public final class DiagnosticLogger: @unchecked Sendable {
         }
     }
 
-    /// - 목적: 대기 중인 기록·정리 작업의 동기 배출
-    public func flush() {
-        guard DispatchQueue.getSpecific(key: queueKey) == nil else { return }
-        storageQueue.sync {}
+    /// - 목적: 대기 중인 기록·정리 작업을 제한 시간 내 배출
+    /// - 매개변수: timeout — 대기 초, 기본 2초·허용 범위 0–60초
+    /// - 반환: 완료 여부, 시간 초과 후에도 기존 큐 작업 지속
+    @discardableResult
+    public func flush(timeout: TimeInterval = 2) -> Bool {
+        guard DispatchQueue.getSpecific(key: queueKey) == nil else { return true }
+        let completion = DispatchSemaphore(value: 0)
+        storageQueue.async { completion.signal() }
+        let seconds = timeout.isFinite ? min(60, max(0, timeout)) : 2
+        return completion.wait(timeout: .now() + seconds) == .success
     }
 
     /// - 목적: 로거 해제 시 주기 타이머 종료
@@ -183,12 +189,24 @@ public final class DiagnosticLogger: @unchecked Sendable {
         guard fstat(lockFD, &lockInfo) == 0,
               Self.isOwnedRegularFile(lockInfo),
               fchmod(lockFD, Self.fileMode) == 0,
-              flock(lockFD, LOCK_EX) == 0 else {
+              acquireStorageLock(lockFD) else {
             reportStorageFailure()
             return
         }
         defer { _ = flock(lockFD, LOCK_UN) }
         body(directoryFD)
+    }
+
+    /// - 목적: 비차단 재시도와 단조 시계로 프로세스 간 잠금 대기를 250ms 이내 제한
+    private func acquireStorageLock(_ fileDescriptor: Int32) -> Bool {
+        let deadline = DispatchTime.now() + .milliseconds(250)
+        repeat {
+            if flock(fileDescriptor, LOCK_EX | LOCK_NB) == 0 { return true }
+            guard errno == EWOULDBLOCK || errno == EINTR else { return false }
+            guard DispatchTime.now() < deadline else { return false }
+            usleep(10_000)
+        } while DispatchTime.now() < deadline
+        return false
     }
 
     /// - 목적: 디렉터리 생성·소유권·형식·권한 검증
