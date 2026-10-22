@@ -5,6 +5,9 @@ public struct UsageWindowProbeSection: View {
     /// 섹션 제목
     public static let sectionTitle = "초기화 시간 설정"
 
+    /// 실제 요청과 서버 초기화 시각의 관계를 설명하는 안내
+    public static let informationText = "짧은 확인 요청을 보내 사용 구간을 시작하고, 서버에서 초기화 시간을 다시 확인합니다. 소량의 토큰이 사용되며, 초기화 시간은 서버 상태에 따라 달라질 수 있습니다."
+
     public let account: AccountState
     public let probe: UsageWindowProbePresentationResult?
     public let isRunning: Bool
@@ -12,6 +15,7 @@ public struct UsageWindowProbeSection: View {
     public let lastExecutionAt: Date?
     public let isConfigured: Bool
     public let onRun: () -> Void
+    @State private var isInformationPresented = false
 
     /// 계정과 최신 Reset 결과를 받는 섹션 생성
     public init(
@@ -34,9 +38,32 @@ public struct UsageWindowProbeSection: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(Self.sectionTitle)
-                .font(.headline.weight(.semibold))
-                .fixedSize()
+            HStack(spacing: 6) {
+                Text(Self.sectionTitle)
+                    .font(.headline.weight(.semibold))
+                    .fixedSize()
+                Button { isInformationPresented.toggle() } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("초기화 시간 설정 작동 방식")
+                .accessibilityLabel("초기화 시간 설정 안내")
+                .popover(isPresented: $isInformationPresented, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("작동 방식")
+                            .font(.headline)
+                        Text(Self.informationText)
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(16)
+                    .frame(width: 290, alignment: .leading)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .center, spacing: 12) {
