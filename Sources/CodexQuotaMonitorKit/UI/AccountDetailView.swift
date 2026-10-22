@@ -146,6 +146,14 @@ public struct AccountDetailView: View {
                     if let serviceStatus {
                         OpenAIServiceStatusBadge(store: serviceStatus)
                     }
+                    Button(action: onSettings) {
+                        Image(systemName: "gearshape")
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("설정 열기")
+                    .accessibilityLabel("설정 열기")
                 }
                 HStack(spacing: 7) {
                     Text(account.email ?? "—")
@@ -250,13 +258,6 @@ public struct AccountDetailView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Button(action: onSettings) {
-                Label("설정 열기", systemImage: "gearshape")
-            }
-            .buttonStyle(.bordered)
-            .help("설정 열기")
-            .accessibilityLabel("설정 열기")
-
             Spacer(minLength: 0)
 
             Button(action: onClose) {
