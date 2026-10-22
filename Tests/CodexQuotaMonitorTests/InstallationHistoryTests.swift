@@ -21,7 +21,7 @@ final class InstallationHistoryTests: XCTestCase {
             XCTAssertNil(first.firstAccountRegisteredAt)
             XCTAssertNil(next.firstAccountRegisteredAt)
             XCTAssertFalse(next.hasRegisteredAccounts)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: file.fileURL.path))
+            XCTAssertTrue(file.exists)
             let object = try bundleObject(defaults)
             XCTAssertEqual(object["hasRegisteredAccount"] as? Bool, false)
             XCTAssertNil(object["firstAccountRegisteredAt"])

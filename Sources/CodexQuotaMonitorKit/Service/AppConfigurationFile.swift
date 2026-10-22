@@ -1,5 +1,5 @@
-// 목적: 기존 config.json 설정·등록 이력의 이관용 읽기 경계
-// 이용처: 새 UserDefaults 설정 묶음이 없는 최초 이관
+// 목적: config.json의 최초 실행 표식·등록 이력 저장과 이전 설정 이관
+// 이용처: 앱 시작과 최초 계정 등록·기존 설정 이관
 // 사용방법: PreferencesStore에 이관 원본 경로 전달
 import Foundation
 
@@ -36,7 +36,7 @@ public struct AppConfigurationDocument: Codable, Equatable, Sendable {
     public var settings: AppPreferencesPayload?
 }
 
-/// 운영 중 설정 재로드 없이 이관 원본과 테스트 자료를 관리하는 파일 경계
+/// 최초 실행 표식·등록 이력과 이전 설정 이관의 파일 경계
 @MainActor
 public final class AppConfigurationFile {
     public let fileURL: URL
@@ -53,6 +53,9 @@ public final class AppConfigurationFile {
         self.fileURL = fileURL
     }
 
+    /// 신규 실행 판별용 config.json 자체의 존재 여부; 이전 파일과 구분
+    public var exists: Bool { FileManager.default.fileExists(atPath: fileURL.path) }
+
     /// 이전 파일명·버전 1 이력의 복원 및 알 수 없는 버전의 저장 차단
     public func read() throws -> AppConfigurationDocument? {
         let legacy = fileURL.deletingLastPathComponent().appendingPathComponent("installation.json")
@@ -62,10 +65,17 @@ public final class AppConfigurationFile {
         guard FileManager.default.fileExists(atPath: source.path) else { return nil }
         let data = try Data(contentsOf: source)
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let text = try decoder.singleValueContainer().decode(String.self)
+            guard let date = Self.registrationDate(from: text) else { throw CocoaError(.fileReadCorruptFile) }
+            return date
+        }
         let header = try decoder.decode(VersionHeader.self, from: data)
         if header.schemaVersion == 1 {
             let history = try decoder.decode(InstallationHistory.self, from: data)
+            guard history.schemaVersion == 1, history.hasRegisteredAccount || history.firstAccountRegisteredAt == nil else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
             return AppConfigurationDocument(installation: history)
         }
         guard header.schemaVersion == 2 else { throw CocoaError(.fileReadCorruptFile) }
@@ -84,9 +94,14 @@ public final class AppConfigurationFile {
         try write(document)
     }
 
-    /// 실행·등록 이력 변경 시 계정 경로와 다른 설정 보존
+    /// 등록 이력만 동기화하고 동일 값의 반복 기록·이전 설정의 유실 방지
     public func saveInstallation(_ history: InstallationHistory) throws {
+        guard history.schemaVersion == 1, history.hasRegisteredAccount || history.firstAccountRegisteredAt == nil,
+              history.firstAccountRegisteredAt.map({ $0.timeIntervalSince1970.isFinite }) ?? true else {
+            throw CocoaError(.coderInvalidValue)
+        }
         var document = try read() ?? AppConfigurationDocument()
+        if exists && document.installation == history { return }
         document.installation = history
         try write(document)
     }
@@ -98,10 +113,37 @@ public final class AppConfigurationFile {
             attributes: [.posixPermissions: 0o700]
         )
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(Self.registrationDateText(date))
+        }
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(document).write(to: fileURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+    }
+
+    /// UserDefaults의 Date 정밀도를 보존한 ISO 8601 UTC 문자열 구성
+    private static func registrationDateText(_ date: Date) -> String {
+        let reference = date.timeIntervalSinceReferenceDate
+        let integral = floor(reference)
+        let formatter = ISO8601DateFormatter()
+        let base = formatter.string(from: Date(timeIntervalSinceReferenceDate: integral))
+        let fraction = String(format: "%.9f", locale: Locale(identifier: "en_US_POSIX"), reference - integral).dropFirst()
+        return String(base.dropLast()) + fraction + "Z"
+    }
+
+    /// 기존 초 단위·새 소수 초 UTC 표현의 동일 Date 복원
+    private static func registrationDate(from text: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if text.hasSuffix("Z"), let dot = text.lastIndex(of: ".") {
+            let base = String(text[..<dot]) + "Z"
+            let digits = text[text.index(after: dot)..<text.index(before: text.endIndex)]
+            guard !digits.isEmpty, digits.allSatisfy({ $0.isASCII && $0.isNumber }),
+                  let fraction = Double("0." + digits),
+                  let integral = formatter.date(from: base) else { return nil }
+            return Date(timeIntervalSinceReferenceDate: integral.timeIntervalSinceReferenceDate + fraction)
+        }
+        return formatter.date(from: text)
     }
 
     /// 임의 필드 저장 없이 파일 형식 버전만 판별하는 읽기 경계

@@ -87,6 +87,10 @@ public final class PreferencesStore: ObservableObject {
     private let fileSystem: AccountPathFileSystem
     public private(set) var hasRegisteredAccount = false
     public private(set) var firstAccountRegisteredAt: Date?
+    /// 시작 시 config.json 부재와 기존 등록 이력 부재를 함께 확인한 최초 실행
+    public private(set) var isFirstLaunch = false
+    /// 앱 시작 시 기록한 파일 존재 여부; 시작 중 생성 이후에도 동일 값 유지
+    public private(set) var configurationFileWasPresentAtLaunch = false
     private var committedBundle: SettingsBundle?
     private var settingsLoadFailed = false
 
@@ -114,6 +118,7 @@ public final class PreferencesStore: ObservableObject {
     ) {
         self.userDefaults = userDefaults
         self.configurationFile = configurationFile
+        self.configurationFileWasPresentAtLaunch = configurationFile?.exists ?? true
         self.quotaStore = (quotaDatabaseURL ?? (userDefaults === UserDefaults.standard ? TokenUsageSnapshotCache.defaultDatabaseURL : nil))
             .map { SQLiteQuotaSnapshotStore(databaseURL: $0) }
         self.homeDirectory = homeDirectory.standardizedFileURL
@@ -155,6 +160,14 @@ public final class PreferencesStore: ObservableObject {
             }
             self.hasRegisteredAccount = bundle.hasRegisteredAccount
             self.firstAccountRegisteredAt = bundle.firstAccountRegisteredAt
+            // 파일 선행 저장 직후 중단된 경우에도 완료 이력의 false 회귀 방지
+            if let history = try? configurationFile?.read()?.installation,
+               history.hasRegisteredAccount {
+                self.hasRegisteredAccount = true
+                if self.firstAccountRegisteredAt == nil {
+                    self.firstAccountRegisteredAt = history.firstAccountRegisteredAt
+                }
+            }
         }
         if let savedSettings, savedSettings.accountPaths.count != Self.accountPathCount {
             loadError = "계정 경로 설정이 손상되었습니다. 원본을 보존했습니다."
@@ -228,31 +241,21 @@ public final class PreferencesStore: ObservableObject {
             }
         }
 
-        // Missing keys are allowed to remain absent. Invalid or non-canonical
-        // raw values are written back once so subsequent launches read the
-        // canonical representation directly.
-        let intervalNeedsPersistence = rawInterval != nil && persistedInterval != normalizedInterval
-        let pathsNeedPersistence = rawPaths != nil && persistedPaths != self.accountPaths
-        let enabledAccountIDsNeedPersistence = rawEnabledAccountIDs != nil
-            && persistedEnabledAccountIDs != enabledAccountIDs
-        let accountDisplayOrderNeedsPersistence = rawAccountDisplayOrder != nil
-            && persistedAccountDisplayOrder != accountDisplayOrder
-        let launchNeedsPersistence = rawLaunchAtLogin != nil && rawLaunchAtLogin as? Bool == nil
-        let showLabelsNeedPersistence = rawShowAccountLabels != nil && persistedShowAccountLabels == nil
-        let activityDurationNeedsPersistence = rawActivityDuration != nil
-            && persistedActivityDuration != activityNotificationDurationSeconds
-        let quotaSnapshotsNeedPersistence = rawQuotaSnapshots != nil
-            && Self.encodedQuotaSnapshots(quotaSnapshotsStorage) != rawQuotaSnapshots
-        if intervalNeedsPersistence || pathsNeedPersistence || enabledAccountIDsNeedPersistence
-            || accountDisplayOrderNeedsPersistence || launchNeedsPersistence
-            || showLabelsNeedPersistence || activityDurationNeedsPersistence || quotaSnapshotsNeedPersistence
-            || (bundle == nil && loadError == nil) {
-            persist()
-        }
+        isFirstLaunch = !configurationFileWasPresentAtLaunch && !hasRegisteredAccount && !hasRegisteredAccounts
+        // 설정 인코딩 후 등록 이력 파일을 먼저 반영하고 UserDefaults 갱신
+        if loadError == nil { persist() }
     }
 
     /// 계정 표시 활성화 여부와 독립적인 등록 경로 존재 여부
     public var hasRegisteredAccounts: Bool { accountPaths.contains { !$0.isEmpty } }
+
+    /// 첫 실행 또는 등록 미완료 상태의 연결 가이드 분기; 기존 등록 이력 우선
+    public var requiresAccountSetup: Bool {
+        guard !hasRegisteredAccount, !hasRegisteredAccounts else { return false }
+        if isFirstLaunch { return true }
+        // 파일은 존재하지만 등록을 마치지 않은 다음 실행의 가이드 유지
+        return configurationFileWasPresentAtLaunch || configurationFile == nil
+    }
 
     /// Compatibility alias for settings views that use the shorter name.
     public var intervalMinutes: Int { refreshIntervalMinutes }
@@ -511,16 +514,23 @@ public final class PreferencesStore: ObservableObject {
         guard !settingsLoadFailed else { return false }
         let candidate = SettingsBundle(settings: currentPayload,
             hasRegisteredAccount: hasRegisteredAccount, firstAccountRegisteredAt: firstAccountRegisteredAt)
-        if candidate == committedBundle { return true }
         do {
             let data = try JSONEncoder().encode(candidate)
-            userDefaults.set(data, forKey: Keys.settingsBundle)
+            try configurationFile?.saveInstallation(InstallationHistory(
+                hasRegisteredAccount: candidate.hasRegisteredAccount,
+                firstAccountRegisteredAt: candidate.firstAccountRegisteredAt
+            ))
+            if candidate != committedBundle { userDefaults.set(data, forKey: Keys.settingsBundle) }
             committedBundle = candidate
             persistenceError = nil
             cleanupQuotaSnapshots()
             return true
         } catch {
-            if let committedBundle { restore(committedBundle.settings) }
+            if let committedBundle {
+                restore(committedBundle.settings)
+                hasRegisteredAccount = committedBundle.hasRegisteredAccount
+                firstAccountRegisteredAt = committedBundle.firstAccountRegisteredAt
+            }
             persistenceError = "설정을 반영하지 못했습니다: \(error.localizedDescription)"
             return false
         }

@@ -9,8 +9,8 @@ import XCTest
 /// 인증정보를 제외한 이관 경계와 손상 원본 보존 검증
 @MainActor
 final class AppConfigurationFileTests: XCTestCase {
-    /// 이전 개별 설정의 허용 필드만 묶음으로 이관하고 JSON 생성 방지 검증
-    func testLegacyPreferencesMigrateToBundleWithoutAuthenticationFieldsOrJSONWrites() throws {
+    /// 이전 개별 설정의 허용 필드 이관과 등록 이력 전용 JSON 생성 검증
+    func testLegacyPreferencesMigrateToBundleAndRegistrationOnlyJSON() throws {
         try withFixture { file, defaults, root in
             defaults.set([root.path, "", "", ""], forKey: PreferencesStore.Keys.accountPaths)
             defaults.set(7, forKey: PreferencesStore.Keys.refreshIntervalMinutes)
@@ -29,7 +29,11 @@ final class AppConfigurationFileTests: XCTestCase {
             XCTAssertEqual(Set(object.keys), ["schemaVersion", "settings", "hasRegisteredAccount"])
             let settings = try XCTUnwrap(object["settings"] as? [String: Any])
             XCTAssertEqual(Set(settings.keys), allowedSettingFields)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: file.fileURL.path))
+            let document = try XCTUnwrap(file.read())
+            XCTAssertNil(document.settings)
+            XCTAssertEqual(document.installation?.hasRegisteredAccount, true)
+            XCTAssertNil(document.installation?.firstAccountRegisteredAt)
+            XCTAssertFalse(try String(contentsOf: file.fileURL, encoding: .utf8).contains("AUTH-FILE-SECRET"))
             let restored = PreferencesStore(userDefaults: defaults, configurationFile: file, quotaDatabaseURL: root.appendingPathComponent("quota.sqlite"))
             XCTAssertEqual(restored.accountPaths, store.accountPaths)
             XCTAssertEqual(restored.refreshIntervalMinutes, 7)
@@ -98,15 +102,16 @@ final class AppConfigurationFileTests: XCTestCase {
             let next = PreferencesStore(userDefaults: defaults, configurationFile: file, quotaDatabaseURL: database)
             XCTAssertEqual(next.accountPaths, ["", "", "", ""])
             XCTAssertEqual(next.refreshIntervalMinutes, 11)
-            XCTAssertNil(next.persistenceError)
+            XCTAssertNotNil(next.persistenceError)
             next.updateShowAccountLabels(true)
-            XCTAssertTrue(next.showAccountLabels)
+            XCTAssertFalse(next.showAccountLabels)
+            XCTAssertNotNil(next.persistenceError)
             XCTAssertEqual(try Data(contentsOf: file.fileURL), corrupt)
         }
     }
 
-    /// 버전 1 등록 이력의 이전 파일명 복원과 실행 이력 재기록 방지 검증
-    func testLegacyInstallationFilenameMigratesWithoutCreatingOrUpdatingJSON() throws {
+    /// 버전 1 등록 이력의 이전 파일명 복원과 새 실행 표식 생성 검증
+    func testLegacyInstallationFilenameCreatesMarkerWithoutUpdatingLegacyJSON() throws {
         try withFixture { file, defaults, root in
             let legacy = root.appendingPathComponent("installation.json")
             let original = Data(#"{"schemaVersion":1,"firstLaunchedAt":"2026-01-01T00:00:00Z","lastLaunchedAt":"2026-01-02T00:00:00Z","launchCount":4,"hasRegisteredAccount":true,"firstAccountRegisteredAt":"2026-01-01T01:00:00Z"}"#.utf8)
@@ -125,7 +130,8 @@ final class AppConfigurationFileTests: XCTestCase {
             XCTAssertTrue(restored.hasRegisteredAccount)
             XCTAssertEqual(restored.firstAccountRegisteredAt, date)
             XCTAssertEqual(try Data(contentsOf: legacy), original)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: file.fileURL.path))
+            XCTAssertTrue(file.exists)
+            XCTAssertEqual(try file.read()?.installation?.firstAccountRegisteredAt, date)
         }
     }
 
@@ -139,7 +145,7 @@ final class AppConfigurationFileTests: XCTestCase {
             XCTAssertNil(store.firstAccountRegisteredAt)
             XCTAssertTrue(store.registerAccountPaths([root.path, "", "", ""], now: Date()))
             XCTAssertNil(store.firstAccountRegisteredAt)
-            XCTAssertEqual(try Data(contentsOf: file.fileURL), original)
+            XCTAssertEqual(try file.read()?.installation?.hasRegisteredAccount, true)
             XCTAssertEqual(try file.read()?.schemaVersion, 2)
         }
     }
@@ -227,23 +233,101 @@ final class AppConfigurationFileTests: XCTestCase {
         }
     }
 
-    /// 이전 JSON 저장 경로가 파일에 막혀도 묶음 등록·복원 허용 검증
-    func testUnavailableLegacyWritePathDoesNotBlockBundleRegistration() throws {
+    /// 최초 실행 표식 저장 실패 시 등록·UserDefaults 갱신 차단과 재시도 검증
+    func testMarkerWriteFailureBlocksRegistrationAndCanRetry() throws {
         try withFixture { _, defaults, root in
             let parent = root.appendingPathComponent("blocked")
             let bytes = Data("parent is a file".utf8)
             try bytes.write(to: parent)
             let file = AppConfigurationFile(fileURL: parent.appendingPathComponent("config.json"))
-            XCTAssertThrowsError(try file.saveSettings(payload(paths: [root.path, "", "", ""])))
-            let database = root.appendingPathComponent("quota.sqlite")
-            let store = PreferencesStore(userDefaults: defaults, configurationFile: file, quotaDatabaseURL: database)
-            XCTAssertTrue(store.registerAccountPaths([root.path, "", "", ""]))
-            XCTAssertNil(store.persistenceError)
-            let next = PreferencesStore(userDefaults: defaults, configurationFile: file, quotaDatabaseURL: database)
-            XCTAssertEqual(next.accountPaths, [root.path, "", "", ""])
-            XCTAssertTrue(next.hasRegisteredAccount)
+            let store = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            XCTAssertNotNil(store.persistenceError)
+            XCTAssertFalse(store.registerAccountPaths([root.path, "", "", ""]))
+            XCTAssertFalse(store.hasRegisteredAccount)
+            XCTAssertNil(store.firstAccountRegisteredAt)
+            XCTAssertNil(defaults.data(forKey: PreferencesStore.Keys.settingsBundle))
             XCTAssertEqual(try Data(contentsOf: parent), bytes)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: file.fileURL.path))
+            try FileManager.default.removeItem(at: parent)
+            let date = Date(timeIntervalSince1970: 1_800_000_000)
+            XCTAssertTrue(store.registerAccountPaths([root.path, "", "", ""], now: date))
+            XCTAssertNil(store.persistenceError)
+            XCTAssertEqual(try file.read()?.installation?.hasRegisteredAccount, true)
+            XCTAssertEqual(try file.read()?.installation?.firstAccountRegisteredAt, date)
+            XCTAssertTrue(PreferencesStore(userDefaults: defaults, configurationFile: file).hasRegisteredAccount)
+        }
+    }
+
+    /// 파일 부재에서 시작 시 미등록 표식 생성과 다음 실행의 미완료 가이드 유지 검증
+    func testFirstLaunchCreatesUnregisteredMarkerAndRelaunchUsesExistence() throws {
+        try withFixture { file, defaults, _ in
+            XCTAssertFalse(file.exists)
+            let first = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            XCTAssertTrue(first.isFirstLaunch)
+            XCTAssertFalse(first.configurationFileWasPresentAtLaunch)
+            XCTAssertTrue(first.requiresAccountSetup)
+            XCTAssertTrue(file.exists)
+            XCTAssertFalse(try XCTUnwrap(file.read()?.installation).hasRegisteredAccount)
+            XCTAssertNil(try file.read()?.installation?.firstAccountRegisteredAt)
+            let original = try Data(contentsOf: file.fileURL)
+            let next = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            XCTAssertFalse(next.isFirstLaunch)
+            XCTAssertTrue(next.configurationFileWasPresentAtLaunch)
+            XCTAssertTrue(next.requiresAccountSetup)
+            XCTAssertEqual(try Data(contentsOf: file.fileURL), original)
+        }
+    }
+
+    /// 등록 완료 값의 동일 저장·전체 삭제 후 유지·파일 유실 시 복원 검증
+    func testRegistrationMirrorAndDeletedMarkerPreserveExistingHistory() throws {
+        try withFixture { file, defaults, root in
+            let store = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            let date = Date(timeIntervalSince1970: 1_800_000_000)
+            XCTAssertTrue(store.registerAccountPaths([root.path, "", "", ""], now: date))
+            XCTAssertEqual(try file.read()?.installation?.firstAccountRegisteredAt, date)
+            XCTAssertTrue(store.updateAccountPaths(["", "", "", ""]))
+            let original = try Data(contentsOf: file.fileURL)
+            store.updateRefreshInterval(minutes: 17)
+            store.updateQuotaSnapshot(for: root, snapshot: .init(usedPercent: 12, lastUpdated: Date()))
+            XCTAssertEqual(try Data(contentsOf: file.fileURL), original)
+            try FileManager.default.removeItem(at: file.fileURL)
+            let next = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            XCTAssertFalse(next.configurationFileWasPresentAtLaunch)
+            XCTAssertFalse(next.isFirstLaunch)
+            XCTAssertFalse(next.requiresAccountSetup)
+            XCTAssertTrue(next.hasRegisteredAccount)
+            XCTAssertEqual(next.firstAccountRegisteredAt, date)
+            XCTAssertEqual(try file.read()?.installation?.firstAccountRegisteredAt, date)
+        }
+    }
+
+    /// 소수 초를 포함한 최초 등록 날짜의 UserDefaults·JSON 간 정밀도 보존 검증
+    func testRegistrationDatePrecisionMatchesDefaultsAndJSON() throws {
+        try withFixture { file, defaults, root in
+            let store = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            let date = Date(timeIntervalSinceReferenceDate: 814_000_000.1234567)
+            XCTAssertTrue(store.registerAccountPaths([root.path, "", "", ""], now: date))
+            XCTAssertEqual(try file.read()?.installation?.firstAccountRegisteredAt, date)
+            XCTAssertEqual(PreferencesStore(userDefaults: defaults, configurationFile: file).firstAccountRegisteredAt, date)
+            let original = try Data(contentsOf: file.fileURL)
+            XCTAssertTrue(store.registerAccountPaths([root.path, "", "", ""], now: date.addingTimeInterval(100)))
+            XCTAssertEqual(try Data(contentsOf: file.fileURL), original)
+        }
+    }
+
+    /// JSON 선행 저장 직후 중단되어도 완료 이력을 미등록 값으로 덮어쓰지 않는지 검증
+    func testCompletedMarkerRecoversHistoryAfterInterruptedDefaultsUpdate() throws {
+        try withFixture { file, defaults, _ in
+            _ = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            let date = Date(timeIntervalSinceReferenceDate: 814_000_000.1234567)
+            try file.saveInstallation(InstallationHistory(hasRegisteredAccount: true, firstAccountRegisteredAt: date))
+            let recovered = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            XCTAssertTrue(recovered.hasRegisteredAccount)
+            XCTAssertEqual(recovered.firstAccountRegisteredAt, date)
+            XCTAssertFalse(recovered.requiresAccountSetup)
+            XCTAssertEqual(try file.read()?.installation?.firstAccountRegisteredAt, date)
+            let restored = PreferencesStore(userDefaults: defaults)
+            XCTAssertTrue(restored.hasRegisteredAccount)
+            XCTAssertEqual(restored.firstAccountRegisteredAt, date)
         }
     }
 

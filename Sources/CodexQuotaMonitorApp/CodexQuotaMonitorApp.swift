@@ -425,7 +425,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
     /// 초기 등록 전 연결 가이드 또는 등록 완료 후 계정 상태 안내 표시
     @objc private func openEmptyAccountsInfo() {
-        if !preferences.hasRegisteredAccount && !preferences.hasRegisteredAccounts {
+        if preferences.requiresAccountSetup {
             openAccountSetupIfNeeded()
             return
         }
