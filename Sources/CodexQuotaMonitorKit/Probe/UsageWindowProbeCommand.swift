@@ -40,7 +40,8 @@ public struct UsageWindowProbeCommandBuilder: Sendable {
     public static let executableName = "codex"
     public static let modelIdentifier = "gpt-5.6-luna"
     public static let displayName = "Luna Light"
-    public static let minimalPrompt = "print 1"
+    public static let minimalPrompt = "."
+    public static let minimalInstructions = "Silence"
 
     public let metadata: UsageWindowProbeCommandMetadata
 
@@ -141,7 +142,16 @@ public struct UsageWindowProbeCommandBuilder: Sendable {
         "--model",
         modelIdentifier,
         "-c",
-        "model_reasoning_effort=\"low\"",
+        "model_reasoning_effort=\"none\"",
+        "-c", "skills.include_instructions=false",
+        "-c", "skills.bundled.enabled=false",
+        "-c", "tools.update_plan.enabled=false",
+        "-c", "tools.experimental_request_user_input.enabled=false",
+        "--disable", "view_image",
+        "--disable", "goals",
+        "--disable", "workspace_dependencies",
+        "--disable", "default_mode_request_user_input",
+        "--disable", "tool_suggest",
         "--json",
         minimalPrompt,
     ]
