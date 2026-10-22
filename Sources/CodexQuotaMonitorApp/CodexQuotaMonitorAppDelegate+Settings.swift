@@ -136,11 +136,18 @@ extension CodexQuotaMonitorAppDelegate {
     }
 
     func applyAccountPaths(_ paths: [String]) {
-        preferences.updateAccountPaths(paths)
+        let accepted = paths.contains(where: { !$0.isEmpty })
+            ? preferences.registerAccountPaths(paths) : preferences.updateAccountPaths(paths)
+        guard accepted else {
+            let alert = NSAlert()
+            alert.messageText = "설정을 반영하지 못했습니다"
+            alert.informativeText = preferences.persistenceError ?? "계정 경로를 확인한 뒤 다시 시도해 주세요."
+            alert.runModal()
+            return
+        }
         if preferences.hasRegisteredAccounts {
-            installationHistory.markAccountRegistered()
             accountSetupWindow?.close()
-        } else if installationHistory.requiresAccountSetup {
+        } else if !preferences.hasRegisteredAccount {
             openAccountSetupIfNeeded()
         }
         Task { @MainActor [weak self] in

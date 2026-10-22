@@ -66,12 +66,11 @@ public final class AppConfigurationFile {
         let header = try decoder.decode(VersionHeader.self, from: data)
         if header.schemaVersion == 1 {
             let history = try decoder.decode(InstallationHistory.self, from: data)
-            guard history.launchCount >= 0 else { throw CocoaError(.fileReadCorruptFile) }
             return AppConfigurationDocument(installation: history)
         }
         guard header.schemaVersion == 2 else { throw CocoaError(.fileReadCorruptFile) }
         let document = try decoder.decode(AppConfigurationDocument.self, from: data)
-        if let history = document.installation, history.schemaVersion != 1 || history.launchCount < 0 {
+        if let history = document.installation, history.schemaVersion != 1 || (!history.hasRegisteredAccount && history.firstAccountRegisteredAt != nil) {
             throw CocoaError(.fileReadCorruptFile)
         }
         return document

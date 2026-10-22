@@ -26,7 +26,6 @@ struct CodexQuotaMonitorApp: App {
 @MainActor
 final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let preferences: PreferencesStore
-    let installationHistory: InstallationHistoryStore
     let accountStore: AccountStore
     /// 할당량 조회에 동반하여 갱신하는 네 계정 공용 서비스 상태
     let serviceStatus: OpenAIServiceStatusStore
@@ -71,10 +70,6 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     /// 설정과 계정 서비스 초기화 및 표시·갱신 콜백 연결
     override init() {
         let preferences = PreferencesStore(configurationFile: AppConfigurationFile(fileURL: AppConfigurationFile.defaultFileURL))
-        let installationHistory = InstallationHistoryStore(
-            fileURL: InstallationHistoryStore.defaultFileURL,
-            hasExistingAccount: preferences.hasRegisteredAccounts
-        )
         let serviceStatus = OpenAIServiceStatusStore()
         let accountStore = AccountStore(
             configs: Self.configs(for: preferences.accountPaths),
@@ -138,7 +133,6 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         let notchLayoutManager = NotchLayoutManager(serviceStatus: serviceStatus)
 
         self.preferences = preferences
-        self.installationHistory = installationHistory
         self.accountStore = accountStore
         self.serviceStatus = serviceStatus
         self.quotaResetNotifications = quotaResetNotifications
@@ -429,7 +423,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
     /// 초기 등록 전 연결 가이드 또는 등록 완료 후 계정 상태 안내 표시
     @objc private func openEmptyAccountsInfo() {
-        if installationHistory.requiresAccountSetup && !preferences.hasRegisteredAccounts {
+        if !preferences.hasRegisteredAccount && !preferences.hasRegisteredAccounts {
             openAccountSetupIfNeeded()
             return
         }

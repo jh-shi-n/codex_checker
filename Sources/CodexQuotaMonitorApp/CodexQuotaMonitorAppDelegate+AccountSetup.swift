@@ -6,7 +6,7 @@ import CodexQuotaMonitorKit
 extension CodexQuotaMonitorAppDelegate: NSWindowDelegate {
     /// 최초 계정 등록 완료 전의 실행에서만 연결 가이드 표시
     func openAccountSetupIfNeeded() {
-        guard installationHistory.requiresAccountSetup, !preferences.hasRegisteredAccounts else { return }
+        guard !preferences.hasRegisteredAccount, !preferences.hasRegisteredAccounts else { return }
         if let accountSetupWindow {
             accountSetupWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -34,14 +34,17 @@ extension CodexQuotaMonitorAppDelegate: NSWindowDelegate {
 
     /// 확인된 한 계정 경로 저장과 해당 슬롯 표시 활성화
     private func registerInitialAccount(path: String) {
-        guard installationHistory.requiresAccountSetup, !preferences.hasRegisteredAccounts,
+        guard !preferences.hasRegisteredAccount, !preferences.hasRegisteredAccounts,
               let index = preferences.accountPaths.firstIndex(of: "") else { return }
         var paths = preferences.accountPaths
         paths[index] = path
         var enabled = preferences.enabledAccountIDs
         let id = "C\(index + 1)"
         if !enabled.contains(id) { enabled.append(id) }
-        preferences.updateEnabledAccountIDs(enabled)
+        guard preferences.registerAccountPaths(paths, enabledIDs: enabled) else {
+            accountSetupModel?.reportRegistrationFailure(preferences.persistenceError ?? "설정을 반영하지 못했습니다. 다시 시도해 주세요.")
+            return
+        }
         applyAccountPaths(paths)
     }
 
