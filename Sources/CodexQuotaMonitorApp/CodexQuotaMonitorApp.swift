@@ -265,6 +265,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         notchLayoutManager.setDashboardCallbacks(
             loadCachedTokenUsage: loadCachedTokenUsage,
             refreshTokenUsage: refreshTokenUsage,
+            consumeResetCredit: { [weak self] account, creditID, attempt in
+                guard let self else { return .failure(.cancelled) }
+                return await self.consumeResetCredit(account, creditID: creditID, attempt: attempt)
+            },
             runUsageWindowProbe: runUsageWindowProbe,
         )
 
@@ -348,6 +352,24 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             return AccountDashboardDefaults.unavailableTokenUsageSnapshot()
         }
         return snapshot
+    }
+
+    /// 확인한 계정 설정으로 리셋권 사용 후 서버 한도·잔여 개수 재조회
+    private func consumeResetCredit(
+        _ account: AccountState, creditID: String, attempt: String
+    ) async -> Result<ResetCreditOutcome, CodexQuotaServiceError> {
+        guard let config = accountStore.configs.first(where: { $0.id == account.id }),
+              config.isConfigured,
+              accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
+        else { return .failure(.notConfigured) }
+        let result = await CodexQuotaService().consumeResetCredit(
+            for: config, creditID: creditID, idempotencyKey: attempt
+        )
+        if accountStore.configs.first(where: { $0.id == account.id }) == config,
+           accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration {
+            _ = await accountStore.refreshOutcome(accountID: account.id, forceFresh: true)
+        }
+        return result
     }
 
     /// 선택 계정의 Ping 실행 후 새 한도 조회 및 Reset 변화 반환

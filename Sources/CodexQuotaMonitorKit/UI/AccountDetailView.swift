@@ -12,6 +12,7 @@ public struct AccountDetailView: View {
     public let loadSessionActivity: SessionActivityLoader
     public let loadCachedTokenUsage: TokenUsageSnapshotLookup
     public let refreshTokenUsage: TokenUsageSnapshotRefresh
+    public let consumeResetCredit: ResetCreditRunner
     public let runUsageWindowProbe: UsageWindowProbeRunner
     public let onClose: () -> Void
     public let serviceStatus: OpenAIServiceStatusStore?
@@ -34,6 +35,7 @@ public struct AccountDetailView: View {
         },
         loadCachedTokenUsage: @escaping TokenUsageSnapshotLookup = AccountDashboardDefaults.emptyTokenUsageLookup,
         refreshTokenUsage: @escaping TokenUsageSnapshotRefresh = AccountDashboardDefaults.unavailableTokenUsageRefresh,
+        consumeResetCredit: @escaping ResetCreditRunner = ResetCreditDefaults.unavailable,
         runUsageWindowProbe: @escaping UsageWindowProbeRunner = AccountDetailView.defaultProbeRunner,
         onClose: @escaping () -> Void = {},
         serviceStatus: OpenAIServiceStatusStore? = nil
@@ -44,6 +46,7 @@ public struct AccountDetailView: View {
         self.loadSessionActivity = loadSessionActivity
         self.loadCachedTokenUsage = loadCachedTokenUsage
         self.refreshTokenUsage = refreshTokenUsage
+        self.consumeResetCredit = consumeResetCredit
         self.runUsageWindowProbe = runUsageWindowProbe
         self.onClose = onClose
         self.serviceStatus = serviceStatus
@@ -166,7 +169,7 @@ public struct AccountDetailView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    ResetCreditsBadge(credits: displayedAccount.resetCredits)
+                    ResetCreditsBadge(account: displayedAccount, consume: consumeResetCredit)
                         .fixedSize()
                 }
             }

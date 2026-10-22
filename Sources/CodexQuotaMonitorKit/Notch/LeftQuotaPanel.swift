@@ -129,6 +129,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
     public var loadSessionActivity: SessionActivityLoader
     public var loadCachedTokenUsage: TokenUsageSnapshotLookup
     public var refreshTokenUsage: TokenUsageSnapshotRefresh
+    public var consumeResetCredit: ResetCreditRunner
     public var runUsageWindowProbe: UsageWindowProbeRunner
     public var onClose: () -> Void
 
@@ -144,6 +145,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
         },
         loadCachedTokenUsage: @escaping TokenUsageSnapshotLookup = AccountDashboardDefaults.emptyTokenUsageLookup,
         refreshTokenUsage: @escaping TokenUsageSnapshotRefresh = AccountDashboardDefaults.unavailableTokenUsageRefresh,
+        consumeResetCredit: @escaping ResetCreditRunner = ResetCreditDefaults.unavailable,
         runUsageWindowProbe: @escaping UsageWindowProbeRunner = { account in
             AccountDashboardDefaults.unavailableProbe(accountID: account.id)
         },
@@ -167,6 +169,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
         self.loadSessionActivity = loadSessionActivity
         self.loadCachedTokenUsage = loadCachedTokenUsage
         self.refreshTokenUsage = refreshTokenUsage
+        self.consumeResetCredit = consumeResetCredit
         self.runUsageWindowProbe = runUsageWindowProbe
         self.onClose = onClose
         super.init(
@@ -185,6 +188,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
             loadSessionActivity: loadSessionActivity,
             loadCachedTokenUsage: loadCachedTokenUsage,
             refreshTokenUsage: refreshTokenUsage,
+            consumeResetCredit: consumeResetCredit,
             runUsageWindowProbe: runUsageWindowProbe,
             onClose: onClose
         )
@@ -202,6 +206,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
         loadSessionActivity: SessionActivityLoader? = nil,
         loadCachedTokenUsage: TokenUsageSnapshotLookup? = nil,
         refreshTokenUsage: TokenUsageSnapshotRefresh? = nil,
+        consumeResetCredit: ResetCreditRunner? = nil,
         runUsageWindowProbe: UsageWindowProbeRunner? = nil,
         onClose: (() -> Void)? = nil
     ) {
@@ -215,6 +220,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
         if let loadSessionActivity { self.loadSessionActivity = loadSessionActivity }
         if let loadCachedTokenUsage { self.loadCachedTokenUsage = loadCachedTokenUsage }
         if let refreshTokenUsage { self.refreshTokenUsage = refreshTokenUsage }
+        if let consumeResetCredit { self.consumeResetCredit = consumeResetCredit }
         if let runUsageWindowProbe { self.runUsageWindowProbe = runUsageWindowProbe }
         if let onClose { self.onClose = onClose }
         installCluster()
@@ -249,11 +255,13 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
     public func setDashboardCallbacks(
         loadCachedTokenUsage: @escaping TokenUsageSnapshotLookup,
         refreshTokenUsage: @escaping TokenUsageSnapshotRefresh,
+        consumeResetCredit: @escaping ResetCreditRunner = ResetCreditDefaults.unavailable,
         runUsageWindowProbe: @escaping UsageWindowProbeRunner,
         onClose: @escaping () -> Void = {}
     ) {
         self.loadCachedTokenUsage = loadCachedTokenUsage
         self.refreshTokenUsage = refreshTokenUsage
+        self.consumeResetCredit = consumeResetCredit
         self.runUsageWindowProbe = runUsageWindowProbe
         self.onClose = onClose
         installCluster()
@@ -271,6 +279,7 @@ public final class LeftQuotaPanel: NotchQuotaPanel {
             loadSessionActivity: loadSessionActivity,
             loadCachedTokenUsage: loadCachedTokenUsage,
             refreshTokenUsage: refreshTokenUsage,
+            consumeResetCredit: consumeResetCredit,
             runUsageWindowProbe: runUsageWindowProbe,
             onClose: onClose,
             activityPresentation: activityPresentation,
