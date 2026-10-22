@@ -460,7 +460,7 @@ internal struct UsageWindowProbeExecutionIsolation: Sendable {
                 attributes: privateDirectoryAttributes
             )
 
-            try Data(UsageWindowProbeCommandBuilder.minimalPrompt.utf8).write(
+            try Data(UsageWindowProbeCommandBuilder.minimalInstructions.utf8).write(
                 to: modelInstructionsURL,
                 options: .atomic
             )
@@ -550,6 +550,74 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         })
     }
 
+    /// 설치 CLI의 번들 카탈로그를 제한 시간·출력 상한·취소 조건으로 조회
+    private func prepareCatalog(command: UsageWindowProbeCommand,
+                                isolation: UsageWindowProbeExecutionIsolation,
+                                cancellation: ProcessCancellation,
+                                timeout: TimeInterval) throws -> URL {
+        let process = Process()
+        let output = Pipe()
+        let errors = Pipe()
+        let collector = BoundedDataCollector(limit: 4 * 1_024 * 1_024)
+        let errorCollector = BoundedDataCollector(limit: 16 * 1_024)
+        let ended = DispatchSemaphore(value: 0)
+        process.executableURL = command.executableURL
+        process.arguments = ["debug", "models", "--bundled"]
+        var environment = inheritedEnvironment
+        environment["CODEX_HOME"] = isolation.codexHomeURL.path
+        environment["PWD"] = isolation.workingDirectoryURL.path
+        process.environment = environment
+        process.currentDirectoryURL = isolation.workingDirectoryURL
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = output
+        process.standardError = errors
+        output.fileHandleForReading.readabilityHandler = { handle in collector.append(handle.availableData) }
+        errors.fileHandleForReading.readabilityHandler = { handle in errorCollector.append(handle.availableData) }
+        process.terminationHandler = { _ in ended.signal() }
+        defer {
+            output.fileHandleForReading.readabilityHandler = nil
+            errors.fileHandleForReading.readabilityHandler = nil
+            close(pipe: output)
+            close(pipe: errors)
+        }
+        guard !cancellation.isCancelled else { throw UsageWindowProbeProcessError.cancelled }
+        do { try process.run() }
+        catch { throw UsageWindowProbeProcessError.configurationFailure }
+        try? output.fileHandleForWriting.close()
+        try? errors.fileHandleForWriting.close()
+        let deadline = ProcessInfo.processInfo.systemUptime + min(10, timeout)
+        while ended.wait(timeout: .now() + 0.05) == .timedOut {
+            if cancellation.isCancelled || ProcessInfo.processInfo.systemUptime >= deadline || collector.exceededLimit {
+                terminate(process, exitSignal: ended)
+                if cancellation.isCancelled { throw UsageWindowProbeProcessError.cancelled }
+                if collector.exceededLimit { throw UsageWindowProbeProcessError.configurationFailure }
+                throw UsageWindowProbeProcessError.timeout
+            }
+        }
+        output.fileHandleForReading.readabilityHandler = nil
+        errors.fileHandleForReading.readabilityHandler = nil
+        drain(output.fileHandleForReading, into: collector)
+        drain(errors.fileHandleForReading, into: errorCollector)
+        guard !cancellation.isCancelled else { throw UsageWindowProbeProcessError.cancelled }
+        guard process.terminationStatus == 0, !collector.exceededLimit,
+              var catalog = try? JSONSerialization.jsonObject(with: collector.value) as? [String: Any],
+              let models = catalog["models"] as? [[String: Any]],
+              var model = models.first(where: { $0["slug"] as? String == command.modelIdentifier }),
+              model["tool_mode"] != nil, model["apply_patch_tool_type"] != nil,
+              model["use_responses_lite"] != nil
+        else { throw UsageWindowProbeProcessError.configurationFailure }
+        model["tool_mode"] = "direct"
+        model["apply_patch_tool_type"] = NSNull()
+        model["use_responses_lite"] = false
+        catalog["models"] = [model]
+        let url = isolation.rootURL.appendingPathComponent("catalog.json")
+        do {
+            try JSONSerialization.data(withJSONObject: catalog).write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch { throw UsageWindowProbeProcessError.configurationFailure }
+        return url
+    }
+
     private func runSynchronously(
         command: UsageWindowProbeCommand,
         timeout: TimeInterval,
@@ -570,6 +638,10 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
             try? isolation.cleanup(fileManager: .default)
         }
 
+        let started = ProcessInfo.processInfo.systemUptime
+        let catalogURL = try prepareCatalog(command: command, isolation: isolation, cancellation: cancellation, timeout: timeout)
+        let remainingTimeout = timeout - (ProcessInfo.processInfo.systemUptime - started)
+        guard remainingTimeout > 0 else { throw UsageWindowProbeProcessError.timeout }
         let process = Process()
         let inputPipe = Pipe()
         let outputPipe = Pipe()
@@ -586,6 +658,8 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
             "-c",
             "model_instructions_file=\"\(modelInstructionsPath)\"",
         ])
+        let catalogPath = catalogURL.path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        processArguments.append(contentsOf: ["-c", "model_catalog_json=\"\(catalogPath)\""])
         processArguments.append(prompt)
         process.arguments = processArguments
         var environment = inheritedEnvironment
@@ -650,7 +724,7 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         // them open would make the post-exit drain wait forever for EOF.
         closeParentWritingHandles(inputPipe: inputPipe, outputPipe: outputPipe, errorPipe: errorPipe)
 
-        let boundedTimeout = max(0.001, timeout)
+        let boundedTimeout = max(0.001, remainingTimeout)
         var didTimeout = false
         let waitResult = wakeSignal.wait(timeout: .now() + boundedTimeout)
         if cancellation.isCancelled {
@@ -756,6 +830,7 @@ private final class BoundedDataCollector: @unchecked Sendable {
     private let limit: Int
     private let lock = NSLock()
     private var data = Data()
+    private var overflow = false
 
     init(limit: Int) {
         self.limit = max(0, limit)
@@ -766,8 +841,15 @@ private final class BoundedDataCollector: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let remaining = limit - data.count
+        if chunk.count > remaining { overflow = true }
         guard remaining > 0 else { return }
         data.append(chunk.prefix(remaining))
+    }
+
+    var exceededLimit: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return overflow
     }
 
     var value: Data {
@@ -948,7 +1030,7 @@ public actor UsageWindowProbeService {
                     metadata: command.metadata
                 )
             }
-            guard parsed.sawCompletion, parsed.sawExpectedAssistantOutput else {
+            guard parsed.sawCompletion else {
                 return failure(
                     accountID: config.id,
                     startedAt: startedAt,
@@ -975,6 +1057,8 @@ public actor UsageWindowProbeService {
                 return cancelled(accountID: config.id, startedAt: startedAt, metadata: command.metadata)
             case .timeout:
                 category = .timeout
+            case .configurationFailure:
+                category = .configurationFailure
             case .launchFailure:
                 category = .launchFailure
             case .processFailure:
