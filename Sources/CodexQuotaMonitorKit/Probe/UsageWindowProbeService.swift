@@ -564,6 +564,8 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         process.executableURL = command.executableURL
         process.arguments = ["debug", "models", "--bundled"]
         var environment = inheritedEnvironment
+        for (key, value) in command.environmentOverrides { environment[key] = value }
+        environment["PATH"] = CodexProcess.childPath(inheritedPath: environment["PATH"], executable: command.executableURL)
         environment["CODEX_HOME"] = isolation.codexHomeURL.path
         environment["PWD"] = isolation.workingDirectoryURL.path
         process.environment = environment
