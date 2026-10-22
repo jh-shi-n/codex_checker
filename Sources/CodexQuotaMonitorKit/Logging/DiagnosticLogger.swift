@@ -124,7 +124,6 @@ public final class DiagnosticLogger: @unchecked Sendable {
             }
             self.withStorageLock { directoryFD in
                 let maintenance = self.maintainLocked(directoryFD: directoryFD, at: self.now())
-                guard maintenance.migrationSucceeded else { return }
                 var files = self.enforceCapacity(files: maintenance.files, directoryFD: directoryFD)
                 guard timestamp >= self.now().addingTimeInterval(-self.maxAge) else { return }
                 guard let appended = self.append(line, timestamp: timestamp, files: files, directoryFD: directoryFD) else {
@@ -144,10 +143,16 @@ public final class DiagnosticLogger: @unchecked Sendable {
         }
     }
 
-    /// - 목적: 대기 중인 기록·정리 작업의 동기 배출
-    public func flush() {
-        guard DispatchQueue.getSpecific(key: queueKey) == nil else { return }
-        storageQueue.sync {}
+    /// - 목적: 대기 중인 기록·정리 작업을 제한 시간 내 배출
+    /// - 매개변수: timeout — 대기 초, 기본 2초·허용 범위 0–60초
+    /// - 반환: 완료 여부, 시간 초과 후에도 기존 큐 작업 지속
+    @discardableResult
+    public func flush(timeout: TimeInterval = 2) -> Bool {
+        guard DispatchQueue.getSpecific(key: queueKey) == nil else { return true }
+        let completion = DispatchSemaphore(value: 0)
+        storageQueue.async { completion.signal() }
+        let seconds = timeout.isFinite ? min(60, max(0, timeout)) : 2
+        return completion.wait(timeout: .now() + seconds) == .success
     }
 
     /// - 목적: 로거 해제 시 주기 타이머 종료
@@ -160,7 +165,6 @@ public final class DiagnosticLogger: @unchecked Sendable {
         withStorageLock { directoryFD in
             let date = now()
             let maintenance = maintainLocked(directoryFD: directoryFD, at: date)
-            guard maintenance.migrationSucceeded else { return }
             _ = enforceCapacity(files: maintenance.files, directoryFD: directoryFD)
         }
     }
@@ -185,12 +189,24 @@ public final class DiagnosticLogger: @unchecked Sendable {
         guard fstat(lockFD, &lockInfo) == 0,
               Self.isOwnedRegularFile(lockInfo),
               fchmod(lockFD, Self.fileMode) == 0,
-              flock(lockFD, LOCK_EX) == 0 else {
+              acquireStorageLock(lockFD) else {
             reportStorageFailure()
             return
         }
         defer { _ = flock(lockFD, LOCK_UN) }
         body(directoryFD)
+    }
+
+    /// - 목적: 비차단 재시도와 단조 시계로 프로세스 간 잠금 대기를 250ms 이내 제한
+    private func acquireStorageLock(_ fileDescriptor: Int32) -> Bool {
+        let deadline = DispatchTime.now() + .milliseconds(250)
+        repeat {
+            if flock(fileDescriptor, LOCK_EX | LOCK_NB) == 0 { return true }
+            guard errno == EWOULDBLOCK || errno == EINTR else { return false }
+            guard DispatchTime.now() < deadline else { return false }
+            usleep(10_000)
+        } while DispatchTime.now() < deadline
+        return false
     }
 
     /// - 목적: 디렉터리 생성·소유권·형식·권한 검증
@@ -274,7 +290,9 @@ public final class DiagnosticLogger: @unchecked Sendable {
         for name in legacyNames {
             guard let sourceInfo = fileInfo(name: name, directoryFD: directoryFD) else { continue }
             guard let source = readOwnedRows(name: name, expectedInfo: sourceInfo, directoryFD: directoryFD) else {
-                return false
+                quarantineLegacyFile(name, expectedInfo: sourceInfo, directoryFD: directoryFD)
+                reportStorageFailure()
+                continue
             }
             sources.append((name, source.info))
             for row in source.rows where row.timestamp >= cutoff {
@@ -309,6 +327,18 @@ public final class DiagnosticLogger: @unchecked Sendable {
             guard removeLegacyFile(source.name, expectedInfo: source.info, directoryFD: directoryFD) else { return false }
         }
         return true
+    }
+
+    /// - 목적: 읽기 실패 원본을 삭제 없이 격리하여 정상 파일의 이관 지속
+    /// - 보관: 격리 파일은 자동 정리 대상에서 제외하여 수동 복구용 원본 보존
+    private func quarantineLegacyFile(_ name: String, expectedInfo: stat, directoryFD: Int32) {
+        guard Self.isLegacyFileName(name),
+              let info = fileInfo(name: name, directoryFD: directoryFD),
+              Self.sameFile(expectedInfo, info) else { return }
+        let quarantineName = ".diagnostic-quarantine-\(UUID().uuidString.lowercased())"
+        if renameatx_np(directoryFD, name, directoryFD, quarantineName, UInt32(RENAME_EXCL)) != 0 {
+            reportStorageFailure()
+        }
     }
 
     /// - 목적: 현지 날짜 파일에서 검증된 완전 행 로드
@@ -465,7 +495,8 @@ public final class DiagnosticLogger: @unchecked Sendable {
         return true
     }
 
-    /// - 목적: 오래된 행부터 제거해 전체 용량 상한 적용
+    /// - 목적: 상한 초과 시 오래된 행을 묶어 제거하여 반복 정렬·파일 교체 억제
+    /// - 정책: 총 용량의 10% 여유 확보, 상한 내 단일 최신 행 보존
     private func enforceCapacity(files input: [DailyFile], directoryFD: Int32) -> [DailyFile] {
         let totalBytes = input.reduce(0) { $0 + $1.byteCount }
         guard totalBytes > maxBytes else { return input }
@@ -481,9 +512,12 @@ public final class DiagnosticLogger: @unchecked Sendable {
             return $0.index < $1.index
         }
 
+        let newestRowBytes = candidates.last?.byteCount ?? 0
+        let targetBytes = max(maxBytes - max(1, maxBytes / 10), min(maxBytes, newestRowBytes))
         var total = totalBytes
         var removedRows: [String: Set<Int>] = [:]
-        for candidate in candidates where total > maxBytes {
+        for candidate in candidates {
+            guard total > targetBytes else { break }
             removedRows[candidate.name, default: []].insert(candidate.index)
             total -= candidate.byteCount
         }

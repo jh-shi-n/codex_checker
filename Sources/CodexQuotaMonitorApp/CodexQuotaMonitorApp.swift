@@ -377,7 +377,8 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         _ account: AccountState
     ) async -> UsageWindowProbePresentationResult {
         guard let config = accountStore.configs.first(where: { $0.id == account.id }),
-              config.isConfigured
+              config.isConfigured,
+              accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
         else {
             return AccountDashboardDefaults.unavailableProbe(
                 accountID: account.id,
@@ -386,7 +387,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Ping 이전 조회 재사용을 막고 완료 이후 한도 조회 보장
-        let generation = accountStore.state(for: account.id)?.configurationGeneration
+        let generation = account.configurationGeneration
         let before = accountStore.state(for: account.id) ?? account
         let result = await usageWindowProbeService.probe(config)
         let isCurrent = generation == accountStore.state(for: account.id)?.configurationGeneration
