@@ -19,6 +19,7 @@ public final class AccountSetupModel: ObservableObject {
     }
     @Published public private(set) var phase: Phase = .idle
     @Published public private(set) var message: String?
+    @Published public private(set) var registrationError: String?
     @Published public private(set) var connectedAccount: AccountState?
 
     public var canCheck: Bool { !validator.normalizedPath(path).isEmpty && phase != .checking }
@@ -83,7 +84,7 @@ public final class AccountSetupModel: ObservableObject {
 
     /// 저장 실패 안내와 검증된 경로·재시도 가능 초안 유지
     public func reportRegistrationFailure(_ message: String) {
-        self.message = message
+        self.registrationError = message
     }
 
     /// 입력 변경·창 닫기 시 실행 취소와 성공 상태 폐기
@@ -94,6 +95,7 @@ public final class AccountSetupModel: ObservableObject {
         verifiedPath = nil
         connectedAccount = nil
         message = nil
+        registrationError = nil
         phase = .idle
     }
 

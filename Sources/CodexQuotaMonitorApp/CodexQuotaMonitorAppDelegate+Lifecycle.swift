@@ -11,7 +11,8 @@ extension CodexQuotaMonitorAppDelegate {
         quotaResetNotifications.start()
         quotaResetScheduler.start()
         lifecycleCoordinator.launch()
-        openAccountSetupIfNeeded()
+        if preferences.persistenceError != nil { openSettings() }
+        else { openAccountSetupIfNeeded() }
         Task { await sessionActivityMonitor.start() }
         tokenCleanupTask = Task { [tokenUsageCache, preferences] in
             while !Task.isCancelled {

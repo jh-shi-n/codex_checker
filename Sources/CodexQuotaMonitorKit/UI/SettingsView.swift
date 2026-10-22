@@ -68,12 +68,14 @@ public struct SettingsView: View {
     /// 적용 전까지 계정 설정과 캐시를 변경하지 않는 경로 초안
     public struct AccountPathsDraft {
         public private(set) var paths: [String]
+        private let originalPaths: [String]
         public private(set) var validationErrors: [Int: AccountPathValidation] = [:]
 
         /// 현재 설정의 네 계정 경로 복사
         public init(paths: [String]) {
             let prefix = Array(paths.prefix(SettingsView.accountPathCount))
             self.paths = prefix + Array(repeating: "", count: max(0, SettingsView.accountPathCount - prefix.count))
+            self.originalPaths = self.paths
         }
 
         /// 저장된 설정에 영향을 주지 않는 입력 교체
@@ -88,6 +90,7 @@ public struct SettingsView: View {
             validationErrors = [:]
             let normalized = paths.map(validator.normalizedPath)
             for (index, path) in normalized.enumerated() {
+                guard path != validator.normalizedPath(originalPaths[index]) else { continue }
                 let validation = validator.validate(path)
                 if !validation.isAcceptable { validationErrors[index] = validation }
             }
