@@ -34,8 +34,107 @@ final class DiagnosticLoggerTests: XCTestCase {
         XCTAssertEqual(reasons, ["boundary"])
     }
 
+    /// - 목적: 시각 역전과 재시작에도 같은 현지 날짜 파일 재사용 확인
+    func testSameLocalDayReusesOneFileForOutOfOrderTimestampsAndRestart() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let times = [
+            try date("2027-04-01T18:00:00Z"),
+            try date("2027-04-01T09:00:00Z"),
+            try date("2027-04-01T22:00:00Z")
+        ]
+        let clock = LockedClock(times[0])
+        let first = DiagnosticLogger(directory: directory, now: { clock.read() }, timeZone: timeZone, osLogEnabled: false, timerEnabled: false)
+        for (index, timestamp) in times.enumerated() {
+            clock.set(timestamp)
+            first.record(.probeFinished, fields: [.reason: .identifier("event-\(index)")])
+        }
+        first.flush()
+
+        let restarted = DiagnosticLogger(directory: directory, now: { clock.read() }, timeZone: timeZone, osLogEnabled: false, timerEnabled: false)
+        clock.set(try date("2027-04-01T02:00:00Z"))
+        restarted.record(.probeFinished, fields: [.reason: .identifier("after-restart")])
+        restarted.flush()
+
+        let files = try managedFiles(in: directory)
+        XCTAssertEqual(files.map(\.lastPathComponent), ["diagnostic-2027-04-01.jsonl"])
+        XCTAssertEqual(try jsonLines(in: directory).count, 4)
+    }
+
+    /// - 목적: 현지 자정 파일명과 UTC 이벤트 시각의 독립성 확인
+    func testLocalMidnightSelectsLocalDateAndLeavesTimestampInUTC() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 10 * 60 * 60))
+        let timestamp = try date("2027-04-01T16:05:00Z")
+        let logger = DiagnosticLogger(directory: directory, now: { timestamp }, timeZone: timeZone, osLogEnabled: false, timerEnabled: false)
+
+        logger.record(.appStarted)
+        logger.flush()
+
+        let files = try managedFiles(in: directory)
+        XCTAssertEqual(files.map(\.lastPathComponent), ["diagnostic-2027-04-02.jsonl"])
+        let row = try XCTUnwrap(try jsonLines(in: directory).first)
+        let eventTimestamp = try XCTUnwrap(row["timestamp"] as? String)
+        XCTAssertTrue(eventTimestamp.hasPrefix("2027-04-01T16:05:00"))
+        XCTAssertTrue(eventTimestamp.hasSuffix("Z"))
+    }
+
+    /// - 목적: 혼합 날짜 레거시 이관의 중복 제거·실패 재시도·식별자 보존 확인
+    func testLegacyMigrationDeduplicatesMixedDaysAndRetriesAfterBlockedTarget() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let firstTime = try date("2027-04-01T12:00:00Z")
+        let secondTime = try date("2027-04-02T12:00:00Z")
+        let now = secondTime.addingTimeInterval(3_600)
+        let firstRow = try seedRow(timestamp: firstTime, reason: "first", operationID: "operation-first")
+        let existingRow = try seedRow(timestamp: firstTime.addingTimeInterval(60), reason: "existing", operationID: "operation-existing")
+        let secondRow = try seedRow(timestamp: secondTime, reason: "second", operationID: "operation-second")
+        let firstTarget = directory.appendingPathComponent(dailyFileName(for: firstTime, timeZone: timeZone))
+        let blockedTarget = directory.appendingPathComponent(dailyFileName(for: secondTime, timeZone: timeZone))
+        let external = directory.deletingLastPathComponent().appendingPathComponent("daily-migration-target-\(UUID().uuidString)")
+        let firstLegacy = directory.appendingPathComponent(legacyFileName(for: firstTime))
+        let secondLegacy = directory.appendingPathComponent(legacyFileName(for: secondTime))
+        try writeRows([firstRow, existingRow], to: firstTarget)
+        try writeRows([firstRow], to: firstLegacy)
+        try writeRows([secondRow], to: secondLegacy)
+        XCTAssertTrue(FileManager.default.createFile(atPath: external.path, contents: Data("protected".utf8)))
+        defer { try? FileManager.default.removeItem(at: external) }
+        try FileManager.default.createSymbolicLink(at: blockedTarget, withDestinationURL: external)
+
+        let firstLogger = DiagnosticLogger(directory: directory, now: { now }, timeZone: timeZone, osLogEnabled: false, timerEnabled: false)
+        firstLogger.maintain()
+        firstLogger.flush()
+
+        XCTAssertEqual(try legacyFiles(in: directory).count, 2)
+        XCTAssertEqual(try Data(contentsOf: external), Data("protected".utf8))
+        try FileManager.default.removeItem(at: blockedTarget)
+
+        let restarted = DiagnosticLogger(directory: directory, now: { now }, timeZone: timeZone, osLogEnabled: false, timerEnabled: false)
+        restarted.flush()
+
+        XCTAssertTrue(try legacyFiles(in: directory).isEmpty)
+        let files = try managedFiles(in: directory)
+        XCTAssertEqual(Set(files.map(\.lastPathComponent)), Set([
+            dailyFileName(for: firstTime, timeZone: timeZone),
+            dailyFileName(for: secondTime, timeZone: timeZone)
+        ]))
+        let rows = try jsonLines(in: directory)
+        XCTAssertEqual(rows.count, 3)
+        let reasons = rows.compactMap { row -> String? in
+            guard let fields = row["fields"] as? [String: Any],
+                  let reason = fields["reason"] as? [String: Any] else { return nil }
+            return reason["value"] as? String
+        }
+        XCTAssertEqual(Set(reasons), Set(["first", "existing", "second"]))
+        XCTAssertTrue(rows.contains { $0["operationID"] as? String == "operation-second" })
+        XCTAssertTrue(rows.allSatisfy { $0["sessionID"] as? String == "migration-session" })
+    }
+
     /// - 목적: 용량 상한 적용과 최신 행 보존 확인
-    func testCapacityEvictsOldestRowsAndPreservesNewest() throws {
+    func testSameDayCapacityEvictsOldestRowsAndPreservesNewest() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let clock = LockedClock(Date(timeIntervalSince1970: 1_800_000_000))
@@ -54,24 +153,28 @@ final class DiagnosticLoggerTests: XCTestCase {
         let reasons = try jsonLines(in: directory).compactMap { ($0["fields"] as? [String: Any])?["reason"] as? [String: Any] }
             .compactMap { $0["value"] as? String }
         XCTAssertLessThanOrEqual(totalBytes, 900)
+        XCTAssertEqual(files.count, 1)
         XCTAssertFalse(reasons.contains("record-0"))
         XCTAssertTrue(reasons.contains("record-29"))
         XCTAssertLessThan(reasons.count, 30)
-        for file in files {
-            XCTAssertLessThanOrEqual(try Data(contentsOf: file).count, 256 * 1024)
-        }
     }
 
-    /// - 목적: 다중 조각 총량 제한과 가장 최신 행 보존 확인
-    func testCapacityEvictsOldestSegmentAndKeepsNewestSegment() throws {
+    /// - 목적: 용량 초과 시 같은 날짜 파일 안에서 오래된 행만 제거 확인
+    func testCapacityTrimsOldRowsWithinSingleDailyFile() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let base = Date(timeIntervalSince1970: 1_800_000_000)
-        let oldFile = directory.appendingPathComponent("diagnostic-1800000000000-old.jsonl")
-        let newFile = directory.appendingPathComponent("diagnostic-1800001000000-new.jsonl")
-        try writeSeedSegment(to: oldFile, start: base, count: 900, prefix: "old")
-        try writeSeedSegment(to: newFile, start: base.addingTimeInterval(1_000), count: 900, prefix: "new")
-        let logger = DiagnosticLogger(directory: directory, maxBytes: 250_000, maxAge: 10_000, osLogEnabled: false, timerEnabled: false)
+        let file = directory.appendingPathComponent(dailyFileName(for: base, timeZone: TimeZone(secondsFromGMT: 0)!))
+        try writeSeedDailyFile(to: file, start: base, count: 900, prefix: "row")
+        let logger = DiagnosticLogger(
+            directory: directory,
+            now: { base.addingTimeInterval(900) },
+            maxBytes: 80_000,
+            maxAge: 10_000,
+            timeZone: TimeZone(secondsFromGMT: 0)!,
+            osLogEnabled: false,
+            timerEnabled: false
+        )
 
         logger.flush()
 
@@ -79,10 +182,12 @@ final class DiagnosticLoggerTests: XCTestCase {
         let totalBytes = try files.reduce(0) { $0 + (try Data(contentsOf: $1)).count }
         let reasons = try jsonLines(in: directory).compactMap { ($0["fields"] as? [String: Any])?["reason"] as? [String: Any] }
             .compactMap { $0["value"] as? String }
-        XCTAssertLessThanOrEqual(totalBytes, 250_000)
-        XCTAssertFalse(reasons.contains(where: { $0.hasPrefix("old-") }))
+        XCTAssertLessThanOrEqual(totalBytes, 80_000)
+        XCTAssertEqual(files.count, 1)
+        XCTAssertFalse(reasons.contains("row-0"))
         XCTAssertTrue(reasons.contains("newest"))
-        XCTAssertTrue(try files.allSatisfy { (try Data(contentsOf: $0)).count <= 256 * 1024 })
+        XCTAssertGreaterThan(reasons.count, 0)
+        XCTAssertLessThan(reasons.count, 900)
     }
 
     /// - 목적: 재시작 시 만료·잘못된·미완성 행 정리 확인
@@ -136,6 +241,7 @@ final class DiagnosticLoggerTests: XCTestCase {
             .compactMap { $0["value"] as? Int }
         XCTAssertEqual(rows.count, count)
         XCTAssertEqual(Set(generations).count, count)
+        XCTAssertEqual(try managedFiles(in: directory).count, 1)
     }
 
     /// - 목적: 제어 식별자 검증과 민감 문자열 제외 확인
@@ -210,19 +316,22 @@ final class DiagnosticLoggerTests: XCTestCase {
             .compactMap { $0["value"] as? String }
         XCTAssertEqual(reasons.count, perLogger * 2)
         XCTAssertEqual(Set(reasons).count, perLogger * 2)
+        XCTAssertEqual(try managedFiles(in: directory).count, 1)
     }
 
     /// - 목적: 심볼릭 링크 대상 파일의 외부 변경 방지 확인
-    func testSymlinkSegmentIsIgnoredWithoutChangingItsTarget() throws {
+    func testSymlinkDailyFileIsIgnoredWithoutChangingItsTarget() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let external = directory.deletingLastPathComponent().appendingPathComponent("diagnostic-external-\(UUID().uuidString).jsonl")
         defer { try? FileManager.default.removeItem(at: external) }
         let original = Data("external-data".utf8)
         XCTAssertTrue(FileManager.default.createFile(atPath: external.path, contents: original))
-        let symlink = directory.appendingPathComponent("diagnostic-1800000000000-link.jsonl")
+        let timestamp = try date("2027-01-15T12:00:00Z")
+        let timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let symlink = directory.appendingPathComponent(dailyFileName(for: timestamp, timeZone: timeZone))
         try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: external)
-        let logger = DiagnosticLogger(directory: directory, osLogEnabled: false, timerEnabled: false)
+        let logger = DiagnosticLogger(directory: directory, now: { timestamp }, timeZone: timeZone, osLogEnabled: false, timerEnabled: false)
 
         logger.record(.appStarted)
         logger.flush()
@@ -300,35 +409,99 @@ final class DiagnosticLoggerTests: XCTestCase {
         return url
     }
 
-    /// - 목적: 디렉터리의 JSONL 조각 경로 목록 반환
+    /// - 목적: 디렉터리의 현지 날짜 JSONL 파일 경로 목록 반환
     private func managedFiles(in directory: URL) throws -> [URL] {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix("diagnostic-") && $0.pathExtension == "jsonl" }
+            .filter { Self.isDailyFileName($0.lastPathComponent) }
     }
 
-    /// - 목적: 검증 가능한 JSONL 행으로 테스트 조각 생성
-    private func writeSeedSegment(to url: URL, start: Date, count: Int, prefix: String) throws {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let sessionID = UUID().uuidString.lowercased()
+    /// - 목적: 디렉터리의 이전 UUID JSONL 파일 경로 목록 반환
+    private func legacyFiles(in directory: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { Self.isLegacyFileName($0.lastPathComponent) }
+    }
+
+    /// - 목적: 테스트 시각의 현지 날짜 파일명 생성
+    private func dailyFileName(for date: Date, timeZone: TimeZone) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return "diagnostic-\(formatter.string(from: date)).jsonl"
+    }
+
+    /// - 목적: 테스트용 ISO 8601 시각 변환
+    private func date(_ value: String) throws -> Date {
+        try XCTUnwrap(ISO8601DateFormatter().date(from: value))
+    }
+
+    /// - 목적: 테스트용 이전 UUID 파일명 생성
+    private func legacyFileName(for date: Date) -> String {
+        let milliseconds = Int64(date.timeIntervalSince1970 * 1_000)
+        return String(format: "diagnostic-%013lld-%@.jsonl", milliseconds, UUID().uuidString.lowercased())
+    }
+
+    /// - 목적: 유효한 날짜 파일명 확인
+    private static func isDailyFileName(_ name: String) -> Bool {
+        name.hasPrefix("diagnostic-") && name.hasSuffix(".jsonl") &&
+            name.count == "diagnostic-".count + 10 + ".jsonl".count
+    }
+
+    /// - 목적: 기존 UUID 파일명 확인
+    private static func isLegacyFileName(_ name: String) -> Bool {
+        guard name.hasPrefix("diagnostic-"), name.hasSuffix(".jsonl"), !isDailyFileName(name) else { return false }
+        let body = String(name.dropFirst("diagnostic-".count).dropLast(".jsonl".count))
+        guard body.count > 37 else { return false }
+        let uuidStart = body.index(body.endIndex, offsetBy: -36)
+        let separator = body.index(before: uuidStart)
+        let uuid = String(body[uuidStart...])
+        return body[separator] == "-" && Int64(String(body[..<separator])) != nil && UUID(uuidString: uuid) != nil
+    }
+
+    /// - 목적: 검증 가능한 JSONL 행으로 일별 테스트 파일 생성
+    private func writeSeedDailyFile(to url: URL, start: Date, count: Int, prefix: String) throws {
         var data = Data()
         for index in 0..<count {
-            let reason = prefix == "new" && index == count - 1 ? "newest" : "\(prefix)-\(index)"
-            let row: [String: Any] = [
-                "timestamp": formatter.string(from: start.addingTimeInterval(TimeInterval(index))),
-                "sessionID": sessionID,
-                "event": DiagnosticEvent.probeFinished.rawValue,
-                "level": DiagnosticLevel.notice.rawValue,
-                "fields": ["reason": ["type": "identifier", "value": reason]]
-            ]
-            data.append(try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]))
+            let reason = index == count - 1 ? "newest" : "\(prefix)-\(index)"
+            data.append(try seedRow(timestamp: start.addingTimeInterval(TimeInterval(index)), reason: reason))
             data.append(0x0A)
         }
+        try writeBytes(data, to: url)
+    }
+
+    /// - 목적: 검증 가능한 JSONL 행 생성
+    private func seedRow(timestamp: Date, reason: String, operationID: String? = nil) throws -> Data {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var row: [String: Any] = [
+            "timestamp": formatter.string(from: timestamp),
+            "sessionID": "migration-session",
+            "event": DiagnosticEvent.probeFinished.rawValue,
+            "level": DiagnosticLevel.notice.rawValue,
+            "fields": ["reason": ["type": "identifier", "value": reason]]
+        ]
+        if let operationID { row["operationID"] = operationID }
+        return try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])
+    }
+
+    /// - 목적: JSONL 행을 줄바꿈과 전용 권한으로 파일에 기록
+    private func writeRows(_ rows: [Data], to url: URL) throws {
+        var data = Data()
+        for row in rows {
+            data.append(row)
+            data.append(0x0A)
+        }
+        try writeBytes(data, to: url)
+    }
+
+    /// - 목적: 파일 생성 후 전용 권한 적용
+    private func writeBytes(_ data: Data, to url: URL) throws {
         XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: data))
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
-    /// - 목적: 조각별 완전 JSON 행 디코딩
+    /// - 목적: 날짜별 완전 JSON 행 디코딩
     private func jsonLines(in directory: URL) throws -> [[String: Any]] {
         try managedFiles(in: directory).flatMap { file in
             let data = try Data(contentsOf: file)

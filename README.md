@@ -92,6 +92,7 @@ open "$PWD/codex/CodexQuotaChecker.app"
 - 인증은 등록한 계정 폴더의 Codex CLI 로그인 정보 이용
 - 계정 인증 파일·API 키·OAuth 토큰의 설정·캐시 복사 제외
 - 진단 로그: `~/Library/Logs/CodexQuotaMonitor/`에 핵심 동작·오류의 JSONL 저장
+- 로그 파일: 현지 날짜별 `diagnostic-YYYY-MM-DD.jsonl` 1개, 같은 날 재실행·동시 기록 시 기존 파일 재사용
 - 로그 보관: 최근 7일·전체 10MB 한도, 기간·용량 초과 시 오래된 기록부터 자동 삭제
 - 로그 내용: 계정 슬롯·작업 ID·처리 단계·리셋권 사용 결과·오류 분류·초기화 시각, 인증정보·이메일·리셋권 ID·CLI 원문 제외
 - 사용자 설정과 최초 등록 이력은 로컬에 저장

@@ -9,7 +9,7 @@ import Foundation
 import OSLog
 
 /// - 목적: 진단 이벤트 기록·정리·동기화
-/// - 보관: 사용자 로그 폴더의 7일·10MB 제한 JSONL 저장
+/// - 보관: 사용자 로그 폴더의 현지 날짜별 7일·10MB 제한 JSONL 저장
 public final class DiagnosticLogger: @unchecked Sendable {
     /// - 목적: 앱 운영용 로거, XCTest에서는 임시 저장소·비활성 운영 기능 사용
     public static let shared = makeShared()
@@ -18,22 +18,25 @@ public final class DiagnosticLogger: @unchecked Sendable {
     /// - 목적: 진단 기록의 기본 보존 기간(초)
     public static let defaultMaximumAge: TimeInterval = 604_800
 
-    private static let maximumSegmentBytes = 256 * 1024
     private static let directoryMode: mode_t = 0o700
     private static let fileMode: mode_t = 0o600
     private static let lockFileName = ".diagnostic.lock"
     private static let timerInterval: TimeInterval = 60
+    /// - 목적: 용량 정리 전 중단된 단일 행 추가의 여유 크기 포함
+    private static let maximumReadableFileBytes = defaultMaximumBytes + 1_048_576
 
     private let directory: URL
     private let now: @Sendable () -> Date
     private let maxBytes: Int
     private let maxAge: TimeInterval
+    /// - 목적: 날짜별 파일명 산정에 사용하는 현지 시간대
+    private let timeZone: TimeZone
     private let sessionID = UUID().uuidString.lowercased()
     private let storageQueue: DispatchQueue
     private let queueKey = DispatchSpecificKey<UInt8>()
     private let osLogEnabled: Bool
     private let osLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "CodexQuotaMonitor", category: "DiagnosticLogger")
-    private var segmentCache: [String: CachedSegment] = [:]
+    private var dailyFileCache: [String: CachedDailyFile] = [:]
     private var timer: DispatchSourceTimer?
 
     /// - 목적: 테스트 프로세스의 실사용 로그 저장·OSLog·타이머 격리
@@ -49,14 +52,15 @@ public final class DiagnosticLogger: @unchecked Sendable {
         return DiagnosticLogger(directory: testDirectory, osLogEnabled: false, timerEnabled: false)
     }
 
-    /// - 목적: 저장 경로·시계·보관 한도·운영 기능 주입
-    /// - 매개변수: directory — 기본 로그 디렉터리, now — 주입 시계, maxBytes/maxAge — 보관 상한
-    /// - 매개변수: osLogEnabled/timerEnabled — OSLog·주기 정리 전환
+    /// - 목적: 저장 경로·시계·시간대·보관 한도·운영 기능 주입
+    /// - 매개변수: directory — 기본 로그 디렉터리, now — 주입 시계, timeZone — 일별 파일 기준 시간대
+    /// - 매개변수: maxBytes/maxAge — 보관 상한, osLogEnabled/timerEnabled — 운영 기능 전환
     public init(
         directory: URL? = nil,
         now: @escaping @Sendable () -> Date = Date.init,
         maxBytes: Int = DiagnosticLogger.defaultMaximumBytes,
         maxAge: TimeInterval = DiagnosticLogger.defaultMaximumAge,
+        timeZone: TimeZone = .autoupdatingCurrent,
         osLogEnabled: Bool = true,
         timerEnabled: Bool = true
     ) {
@@ -67,6 +71,7 @@ public final class DiagnosticLogger: @unchecked Sendable {
         self.maxAge = maxAge.isFinite
             ? min(Self.defaultMaximumAge, max(0, maxAge))
             : Self.defaultMaximumAge
+        self.timeZone = timeZone
         self.osLogEnabled = osLogEnabled
         storageQueue = DispatchQueue(label: "CodexQuotaMonitor.DiagnosticLogger.storage", qos: .utility)
         storageQueue.setSpecific(key: queueKey, value: 1)
@@ -118,15 +123,16 @@ public final class DiagnosticLogger: @unchecked Sendable {
                 return
             }
             self.withStorageLock { directoryFD in
-                var segments = self.maintainLocked(directoryFD: directoryFD, at: self.now())
-                segments = self.enforceCapacity(segments: segments, directoryFD: directoryFD)
+                let maintenance = self.maintainLocked(directoryFD: directoryFD, at: self.now())
+                guard maintenance.migrationSucceeded else { return }
+                var files = self.enforceCapacity(files: maintenance.files, directoryFD: directoryFD)
                 guard timestamp >= self.now().addingTimeInterval(-self.maxAge) else { return }
-                guard let appended = self.append(line, timestamp: timestamp, segments: segments, directoryFD: directoryFD) else {
+                guard let appended = self.append(line, timestamp: timestamp, files: files, directoryFD: directoryFD) else {
                     self.reportStorageFailure()
                     return
                 }
-                segments = appended
-                _ = self.enforceCapacity(segments: segments, directoryFD: directoryFD)
+                files = appended
+                _ = self.enforceCapacity(files: files, directoryFD: directoryFD)
             }
         }
     }
@@ -153,8 +159,9 @@ public final class DiagnosticLogger: @unchecked Sendable {
     private func maintainStorage() {
         withStorageLock { directoryFD in
             let date = now()
-            let segments = maintainLocked(directoryFD: directoryFD, at: date)
-            _ = enforceCapacity(segments: segments, directoryFD: directoryFD)
+            let maintenance = maintainLocked(directoryFD: directoryFD, at: date)
+            guard maintenance.migrationSucceeded else { return }
+            _ = enforceCapacity(files: maintenance.files, directoryFD: directoryFD)
         }
     }
 
@@ -214,26 +221,26 @@ public final class DiagnosticLogger: @unchecked Sendable {
         return directoryFD
     }
 
-    /// - 목적: 만료 행·잘못된 행 제거와 조각 크기 제한 적용
-    private func maintainLocked(directoryFD: Int32, at date: Date) -> [Segment] {
+    /// - 목적: 레거시 이관·만료 행 정리·임시 파일 정리 적용
+    private func maintainLocked(directoryFD: Int32, at date: Date) -> (files: [DailyFile], migrationSucceeded: Bool) {
         removeOrphanTemporaryFiles(directoryFD: directoryFD)
+        let migrationSucceeded = migrateLegacyFiles(directoryFD: directoryFD, at: date)
+        if !migrationSucceeded { reportStorageFailure() }
+
         let cutoff = date.addingTimeInterval(-maxAge)
-        var normalized: [Segment] = []
-        for segment in readSegments(directoryFD: directoryFD) {
-            let retained = segment.rows.filter { $0.timestamp >= cutoff }
+        var normalized: [DailyFile] = []
+        for file in readDailyFiles(directoryFD: directoryFD) {
+            let retained = file.rows.filter { $0.timestamp >= cutoff }
             let retainedBytes = retained.reduce(0) { $0 + $1.data.count + 1 }
-            guard retainedBytes != segment.originalByteCount || segment.originalByteCount > Self.maximumSegmentBytes else {
-                normalized.append(segment)
+            guard retainedBytes != file.originalByteCount else {
+                normalized.append(file)
                 continue
             }
-            guard let rewritten = rewrite(segment: segment, rows: retained, directoryFD: directoryFD) else {
-                reportStorageFailure()
-                normalized.append(segment)
-                continue
+            if let rewritten = rewrite(file: file, rows: retained, directoryFD: directoryFD) {
+                normalized.append(rewritten)
             }
-            normalized.append(contentsOf: rewritten)
         }
-        return normalized
+        return (normalized, migrationSucceeded)
     }
 
     /// - 목적: 중단된 원자 교체의 소유 임시 파일 정리
@@ -250,134 +257,158 @@ public final class DiagnosticLogger: @unchecked Sendable {
             var currentInfo = stat()
             guard fstatat(directoryFD, name, &currentInfo, AT_SYMLINK_NOFOLLOW) == 0,
                   Self.isOwnedRegularFile(currentInfo), Self.sameFile(info, currentInfo) else { continue }
-            if unlinkat(directoryFD, name, 0) != 0 {
-                reportStorageFailure()
-            }
+            if unlinkat(directoryFD, name, 0) != 0 { reportStorageFailure() }
         }
     }
 
-    /// - 목적: 관리 대상 JSONL 조각의 유효 행 로드
-    /// - 반환: 소유·일반 파일에서 검증된 완전 행만 포함한 조각 목록
-    private func readSegments(directoryFD: Int32) -> [Segment] {
+    /// - 목적: 기존 UUID 파일의 유효·미만료 행을 현지 날짜 파일로 통합
+    /// - 반환: 모든 대상 기록 완료 후 원본 삭제 성공 여부
+    private func migrateLegacyFiles(directoryFD: Int32, at date: Date) -> Bool {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return false }
+        let legacyNames = names.filter(Self.isLegacyFileName)
+        guard !legacyNames.isEmpty else { return true }
+
+        let cutoff = date.addingTimeInterval(-maxAge)
+        var sources: [(name: String, info: stat)] = []
+        var rowsByTarget: [String: [ParsedRow]] = [:]
+        for name in legacyNames {
+            guard let sourceInfo = fileInfo(name: name, directoryFD: directoryFD) else { continue }
+            guard let source = readOwnedRows(name: name, expectedInfo: sourceInfo, directoryFD: directoryFD) else {
+                return false
+            }
+            sources.append((name, source.info))
+            for row in source.rows where row.timestamp >= cutoff {
+                let target = Self.dailyFileName(timestamp: row.timestamp, timeZone: timeZone)
+                rowsByTarget[target, default: []].append(row)
+            }
+        }
+
+        for (name, legacyRows) in rowsByTarget {
+            var mergedRows: [ParsedRow] = []
+            var seenRows = Set<Data>()
+            var targetInfo = stat()
+            if fstatat(directoryFD, name, &targetInfo, AT_SYMLINK_NOFOLLOW) == 0 {
+                guard let ownedInfo = fileInfo(name: name, directoryFD: directoryFD),
+                      let target = readOwnedRows(name: name, expectedInfo: ownedInfo, directoryFD: directoryFD) else {
+                    return false
+                }
+                for row in target.rows where row.timestamp >= cutoff && seenRows.insert(row.data).inserted {
+                    mergedRows.append(row)
+                }
+            } else if errno != ENOENT {
+                return false
+            }
+            for row in legacyRows where seenRows.insert(row.data).inserted {
+                mergedRows.append(row)
+            }
+            mergedRows = Self.stableChronologicalOrder(mergedRows)
+            guard atomicWrite(name: name, rows: mergedRows, directoryFD: directoryFD) else { return false }
+        }
+
+        for source in sources {
+            guard removeLegacyFile(source.name, expectedInfo: source.info, directoryFD: directoryFD) else { return false }
+        }
+        return true
+    }
+
+    /// - 목적: 현지 날짜 파일에서 검증된 완전 행 로드
+    private func readDailyFiles(directoryFD: Int32) -> [DailyFile] {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return [] }
         var validNames = Set<String>()
-        let segments = names.compactMap { name -> Segment? in
-            guard Self.isManagedFileName(name) else { return nil }
+        let files = names.compactMap { name -> DailyFile? in
+            guard Self.isDailyFileName(name) else { return nil }
             guard let info = fileInfo(name: name, directoryFD: directoryFD) else {
-                segmentCache.removeValue(forKey: name)
-                return nil
-            }
-            guard info.st_size <= 10_000_000 else {
-                _ = removeManagedFile(name, directoryFD: directoryFD)
+                dailyFileCache.removeValue(forKey: name)
                 return nil
             }
             validNames.insert(name)
-            if let cached = segmentCache[name], cached.matches(info) {
-                return cached.segment
+            if let cached = dailyFileCache[name], cached.matches(info) { return cached.file }
+            guard let contents = readOwnedRows(name: name, expectedInfo: info, directoryFD: directoryFD) else {
+                reportStorageFailure()
+                return nil
             }
-            segmentCache.removeValue(forKey: name)
-            let fileFD = openat(directoryFD, name, O_RDONLY | O_NOFOLLOW)
-            guard fileFD >= 0 else { return nil }
-            defer { _ = close(fileFD) }
-            var openedInfo = stat()
-            guard fstat(fileFD, &openedInfo) == 0, Self.isOwnedRegularFile(openedInfo),
-                  Self.sameFile(info, openedInfo), fchmod(fileFD, Self.fileMode) == 0,
-                  fstat(fileFD, &openedInfo) == 0,
-                  let data = Self.readAll(fileFD, maximumBytes: 10_000_000) else { return nil }
-            let rows = Self.parseRows(data)
-            let validRows = rows.compactMap { rawRow -> ParsedRow? in
-                guard let parsed = Self.parseRow(rawRow) else { return nil }
-                return ParsedRow(data: rawRow, timestamp: parsed)
-            }
-            let segment = Segment(
-                name: name,
-                rows: validRows,
-                byteCount: Int(openedInfo.st_size),
-                originalByteCount: Int(openedInfo.st_size),
-                oldestTimestamp: validRows.map(\.timestamp).min() ?? .distantFuture,
-                newestTimestamp: validRows.map(\.timestamp).max(),
-                modificationTime: Self.modificationDate(openedInfo)
-            )
-            segmentCache[name] = CachedSegment(segment: segment, info: openedInfo)
-            return segment
+            let file = Self.makeDailyFile(name: name, rows: contents.rows, byteCount: Int(contents.info.st_size))
+            dailyFileCache[name] = CachedDailyFile(file: file, info: contents.info)
+            return file
         }
-        segmentCache = segmentCache.filter { validNames.contains($0.key) }
-        return segments
+        dailyFileCache = dailyFileCache.filter { validNames.contains($0.key) }
+        return files
     }
 
-    /// - 목적: 만료·손상 제거 후 행 단위 조각 재작성
-    /// - 반환: 원본 보존 또는 교체 성공 여부
-    private func rewrite(segment: Segment, rows: [ParsedRow], directoryFD: Int32) -> [Segment]? {
-        let chunks = Self.rowChunks(rows, maximumBytes: Self.maximumSegmentBytes)
-        if chunks.count <= 1 {
-            let data = chunks.first.map { Self.data(for: $0) } ?? Data()
-            if data.isEmpty { return removeManagedFile(segment.name, directoryFD: directoryFD) ? [] : nil }
-            guard atomicReplace(name: segment.name, data: data, directoryFD: directoryFD),
-                  let info = fileInfo(name: segment.name, directoryFD: directoryFD) else { return nil }
-            let segment = Self.makeSegment(name: segment.name, rows: chunks[0], byteCount: data.count, info: info)
-            segmentCache[segment.name] = CachedSegment(segment: segment, info: info)
-            return [segment]
+    /// - 목적: 안전한 소유 파일에서 검증된 JSON 행 로드
+    private func readOwnedRows(name: String, expectedInfo: stat, directoryFD: Int32) -> (rows: [ParsedRow], info: stat)? {
+        guard expectedInfo.st_size <= off_t(Self.maximumReadableFileBytes) else { return nil }
+        let fileFD = openat(directoryFD, name, O_RDONLY | O_NOFOLLOW)
+        guard fileFD >= 0 else { return nil }
+        defer { _ = close(fileFD) }
+        var openedInfo = stat()
+        guard fstat(fileFD, &openedInfo) == 0, Self.isOwnedRegularFile(openedInfo),
+              Self.sameFile(expectedInfo, openedInfo), fchmod(fileFD, Self.fileMode) == 0,
+              fstat(fileFD, &openedInfo) == 0,
+              let data = Self.readAll(fileFD, maximumBytes: Self.maximumReadableFileBytes) else { return nil }
+        let rows = Self.parseRows(data).compactMap { rawRow -> ParsedRow? in
+            guard let timestamp = Self.parseRow(rawRow) else { return nil }
+            return ParsedRow(data: rawRow, timestamp: timestamp)
         }
+        return (rows, openedInfo)
+    }
 
-        var created: [String] = []
-        var rewritten: [Segment] = []
-        for chunk in chunks {
-            guard let first = chunk.first,
-                  let name = createSegment(chunk, timestamp: first.timestamp, directoryFD: directoryFD) else {
-                created.forEach { _ = removeManagedFile($0, directoryFD: directoryFD) }
-                return nil
+    /// - 목적: 날짜 파일 교체 또는 빈 날짜 파일 제거
+    private func rewrite(file: DailyFile, rows: [ParsedRow], directoryFD: Int32) -> DailyFile? {
+        if rows.isEmpty {
+            guard removeDailyFile(file.name, directoryFD: directoryFD) else {
+                reportStorageFailure()
+                return file
             }
-            created.append(name)
-            guard let info = fileInfo(name: name, directoryFD: directoryFD) else {
-                created.forEach { _ = removeManagedFile($0, directoryFD: directoryFD) }
-                return nil
-            }
-            let segment = Self.makeSegment(name: name, rows: chunk, byteCount: Self.data(for: chunk).count, info: info)
-            segmentCache[name] = CachedSegment(segment: segment, info: info)
-            rewritten.append(segment)
-        }
-        guard removeManagedFile(segment.name, directoryFD: directoryFD) else {
-            created.forEach { _ = removeManagedFile($0, directoryFD: directoryFD) }
             return nil
         }
-        return rewritten
+        guard atomicWrite(name: file.name, rows: rows, directoryFD: directoryFD),
+              let info = fileInfo(name: file.name, directoryFD: directoryFD) else {
+            reportStorageFailure()
+            return file
+        }
+        let updated = Self.makeDailyFile(name: file.name, rows: rows, byteCount: Self.data(for: rows).count)
+        dailyFileCache[file.name] = CachedDailyFile(file: updated, info: info)
+        return updated
     }
 
-    /// - 목적: 기록 시점 만료·손상 정리 후 새 행 추가
-    /// - 반환: 조각 추가 성공 여부
-    private func append(_ line: Data, timestamp: Date, segments: [Segment], directoryFD: Int32) -> [Segment]? {
-        let ordered = segments.sorted {
-            if $0.modificationTime == $1.modificationTime { return $0.name < $1.name }
-            return $0.modificationTime < $1.modificationTime
-        }
-        let newestTimestamp = ordered.compactMap(\.newestTimestamp).max()
-        if let active = ordered.last,
-           let activeNewestTimestamp = active.newestTimestamp,
-           activeNewestTimestamp == newestTimestamp,
-           timestamp >= activeNewestTimestamp,
-           active.originalByteCount + line.count + 1 <= Self.maximumSegmentBytes,
-           append(line, to: active.name, directoryFD: directoryFD) {
-            guard let info = fileInfo(name: active.name, directoryFD: directoryFD) else { return nil }
-            let row = ParsedRow(data: line, timestamp: timestamp)
-            let updated = Self.makeSegment(
-                name: active.name,
-                rows: active.rows + [row],
-                byteCount: active.byteCount + line.count + 1,
-                info: info
-            )
-            segmentCache[active.name] = CachedSegment(segment: updated, info: info)
-            return Array(ordered.dropLast()) + [updated]
-        }
+    /// - 목적: 시각 역전과 무관하게 해당 현지 날짜 파일에 행 추가
+    private func append(_ line: Data, timestamp: Date, files: [DailyFile], directoryFD: Int32) -> [DailyFile]? {
+        let name = Self.dailyFileName(timestamp: timestamp, timeZone: timeZone)
         let row = ParsedRow(data: line, timestamp: timestamp)
-        guard let name = createSegment([row], timestamp: timestamp, directoryFD: directoryFD),
-              let info = fileInfo(name: name, directoryFD: directoryFD) else { return nil }
-        let segment = Self.makeSegment(name: name, rows: [row], byteCount: line.count + 1, info: info)
-        segmentCache[name] = CachedSegment(segment: segment, info: info)
-        return ordered + [segment]
+        if let index = files.firstIndex(where: { $0.name == name }) {
+            let file = files[index]
+            guard append(line, to: name, directoryFD: directoryFD),
+                  let info = fileInfo(name: name, directoryFD: directoryFD) else { return nil }
+            let updated = Self.makeDailyFile(
+                name: name,
+                rows: file.rows + [row],
+                byteCount: file.byteCount + line.count + 1
+            )
+            dailyFileCache[name] = CachedDailyFile(file: updated, info: info)
+            var result = files
+            result[index] = updated
+            return result
+        }
+
+        let fileFD = openat(directoryFD, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, Self.fileMode)
+        guard fileFD >= 0 else { return nil }
+        var info = stat()
+        let valid = fstat(fileFD, &info) == 0 && Self.isOwnedRegularFile(info) && fchmod(fileFD, Self.fileMode) == 0
+        var bytes = line
+        bytes.append(0x0A)
+        let succeeded = valid && Self.writeAll(bytes, to: fileFD)
+        _ = close(fileFD)
+        guard succeeded, let createdInfo = fileInfo(name: name, directoryFD: directoryFD) else {
+            _ = unlinkat(directoryFD, name, 0)
+            return nil
+        }
+        let created = Self.makeDailyFile(name: name, rows: [row], byteCount: bytes.count)
+        dailyFileCache[name] = CachedDailyFile(file: created, info: createdInfo)
+        return files + [created]
     }
 
-    /// - 목적: 활성 조각에 완전 행 단위 추가
-    /// - 반환: 파일 쓰기 성공 여부
+    /// - 목적: 날짜 파일에 줄바꿈 포함 행 추가
     private func append(_ line: Data, to name: String, directoryFD: Int32) -> Bool {
         guard let before = fileInfo(name: name, directoryFD: directoryFD) else { return false }
         let fileFD = openat(directoryFD, name, O_WRONLY | O_APPEND | O_NOFOLLOW)
@@ -391,28 +422,18 @@ public final class DiagnosticLogger: @unchecked Sendable {
         return Self.writeAll(bytes, to: fileFD)
     }
 
-    /// - 목적: 새 제한 크기 JSONL 조각 생성
-    /// - 반환: 조각 파일명 또는 저장 실패
-    private func createSegment(_ rows: [ParsedRow], timestamp: Date, directoryFD: Int32) -> String? {
-        guard !rows.isEmpty else { return nil }
-        let name = Self.segmentName(timestamp: timestamp)
-        let fileFD = openat(directoryFD, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, Self.fileMode)
-        guard fileFD >= 0 else { return nil }
-        var info = stat()
-        let valid = fstat(fileFD, &info) == 0 && Self.isOwnedRegularFile(info) && fchmod(fileFD, Self.fileMode) == 0
-        let succeeded = valid && Self.writeAll(Self.data(for: rows), to: fileFD)
-        _ = close(fileFD)
-        guard succeeded else {
-            _ = unlinkat(directoryFD, name, 0)
-            return nil
+    /// - 목적: 날짜 파일의 안전한 원자 교체
+    private func atomicWrite(name: String, rows: [ParsedRow], directoryFD: Int32) -> Bool {
+        guard Self.isDailyFileName(name) else { return false }
+        let data = Self.data(for: rows)
+        var originalInfo = stat()
+        let exists = fstatat(directoryFD, name, &originalInfo, AT_SYMLINK_NOFOLLOW) == 0
+        if exists {
+            guard Self.isOwnedRegularFile(originalInfo) else { return false }
+        } else if errno != ENOENT {
+            return false
         }
-        return name
-    }
 
-    /// - 목적: 임시 파일 작성 후 조각 원자 교체
-    /// - 반환: 교체 성공 여부
-    private func atomicReplace(name: String, data: Data, directoryFD: Int32) -> Bool {
-        guard let original = fileInfo(name: name, directoryFD: directoryFD) else { return false }
         let temporaryName = ".diagnostic-tmp-\(UUID().uuidString.lowercased())"
         let temporaryFD = openat(directoryFD, temporaryName, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, Self.fileMode)
         guard temporaryFD >= 0 else { return false }
@@ -425,58 +446,85 @@ public final class DiagnosticLogger: @unchecked Sendable {
             return false
         }
 
-        guard let latest = fileInfo(name: name, directoryFD: directoryFD), latest.st_ino == original.st_ino,
-              renameat(directoryFD, temporaryName, directoryFD, name) == 0 else {
+        var latestInfo = stat()
+        if exists {
+            guard fstatat(directoryFD, name, &latestInfo, AT_SYMLINK_NOFOLLOW) == 0,
+                  Self.isOwnedRegularFile(latestInfo), Self.sameFile(originalInfo, latestInfo) else {
+                _ = unlinkat(directoryFD, temporaryName, 0)
+                return false
+            }
+        } else if fstatat(directoryFD, name, &latestInfo, AT_SYMLINK_NOFOLLOW) == 0 || errno != ENOENT {
             _ = unlinkat(directoryFD, temporaryName, 0)
             return false
         }
+        guard renameat(directoryFD, temporaryName, directoryFD, name) == 0 else {
+            _ = unlinkat(directoryFD, temporaryName, 0)
+            return false
+        }
+        dailyFileCache.removeValue(forKey: name)
         return true
     }
 
-    /// - 목적: 유효 조각의 전체 바이트 합을 설정 한도 이하로 축소
-    private func enforceCapacity(segments input: [Segment], directoryFD: Int32) -> [Segment] {
-        var segments = input.sorted {
-            if $0.oldestTimestamp == $1.oldestTimestamp { return $0.name < $1.name }
-            return $0.oldestTimestamp < $1.oldestTimestamp
-        }
-        var total = segments.reduce(0) { $0 + $1.byteCount }
-        while total > maxBytes, segments.count > 1 {
-            let oldest = segments.removeFirst()
-            guard removeManagedFile(oldest.name, directoryFD: directoryFD) else {
-                reportStorageFailure()
-                return [oldest] + segments
+    /// - 목적: 오래된 행부터 제거해 전체 용량 상한 적용
+    private func enforceCapacity(files input: [DailyFile], directoryFD: Int32) -> [DailyFile] {
+        let totalBytes = input.reduce(0) { $0 + $1.byteCount }
+        guard totalBytes > maxBytes else { return input }
+        var candidates: [(name: String, index: Int, timestamp: Date, byteCount: Int)] = []
+        for file in input {
+            for (index, row) in file.rows.enumerated() {
+                candidates.append((file.name, index, row.timestamp, row.data.count + 1))
             }
-            total -= oldest.byteCount
         }
-        guard total > maxBytes, let newest = segments.first else { return segments }
+        candidates.sort {
+            if $0.timestamp != $1.timestamp { return $0.timestamp < $1.timestamp }
+            if $0.name != $1.name { return $0.name < $1.name }
+            return $0.index < $1.index
+        }
 
-        var remaining: [ParsedRow] = []
-        var retainedBytes = 0
-        for row in newest.rows.reversed() {
-            let rowBytes = row.data.count + 1
-            guard retainedBytes + rowBytes <= maxBytes else { break }
-            remaining.append(row)
-            retainedBytes += rowBytes
+        var total = totalBytes
+        var removedRows: [String: Set<Int>] = [:]
+        for candidate in candidates where total > maxBytes {
+            removedRows[candidate.name, default: []].insert(candidate.index)
+            total -= candidate.byteCount
         }
-        remaining.reverse()
-        guard let rewritten = rewrite(segment: newest, rows: remaining, directoryFD: directoryFD) else {
-            reportStorageFailure()
-            return segments
+
+        var retainedFiles: [DailyFile] = []
+        for file in input {
+            guard let removed = removedRows[file.name], !removed.isEmpty else {
+                retainedFiles.append(file)
+                continue
+            }
+            let rows = file.rows.enumerated().compactMap { removed.contains($0.offset) ? nil : $0.element }
+            if let updated = rewrite(file: file, rows: rows, directoryFD: directoryFD) {
+                retainedFiles.append(updated)
+            }
         }
-        return Array(segments.dropLast()) + rewritten
+        return retainedFiles
     }
 
-    /// - 목적: 소유한 관리 파일만 안전하게 제거
-    /// - 반환: 제거 성공 또는 대상 부재 여부
-    private func removeManagedFile(_ name: String, directoryFD: Int32) -> Bool {
-        guard Self.isManagedFileName(name) else { return false }
-        guard let info = fileInfo(name: name, directoryFD: directoryFD) else {
-            segmentCache.removeValue(forKey: name)
-            return true
+    /// - 목적: 소유한 일별 파일만 안전하게 제거
+    private func removeDailyFile(_ name: String, directoryFD: Int32) -> Bool {
+        guard Self.isDailyFileName(name) else { return false }
+        var info = stat()
+        guard fstatat(directoryFD, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
+            let absent = errno == ENOENT
+            if absent { dailyFileCache.removeValue(forKey: name) }
+            return absent
         }
-        let removed = unlinkat(directoryFD, name, 0) == 0 && info.st_uid == geteuid()
-        if removed { segmentCache.removeValue(forKey: name) }
-        return removed
+        guard Self.isOwnedRegularFile(info), unlinkat(directoryFD, name, 0) == 0 else { return false }
+        dailyFileCache.removeValue(forKey: name)
+        return true
+    }
+
+    /// - 목적: 동일 inode·형식이 유지된 레거시 원본 제거
+    private func removeLegacyFile(_ name: String, expectedInfo: stat, directoryFD: Int32) -> Bool {
+        guard Self.isLegacyFileName(name) else { return false }
+        guard let info = fileInfo(name: name, directoryFD: directoryFD) else {
+            var currentInfo = stat()
+            return fstatat(directoryFD, name, &currentInfo, AT_SYMLINK_NOFOLLOW) != 0 && errno == ENOENT
+        }
+        guard Self.sameFile(expectedInfo, info), unlinkat(directoryFD, name, 0) == 0 else { return false }
+        return true
     }
 
     /// - 목적: 파일 디스크립터 기준 파일 속성 확인
@@ -625,26 +673,6 @@ public final class DiagnosticLogger: @unchecked Sendable {
         return rows
     }
 
-    /// - 목적: 보관 행을 최대 조각 크기 이하의 연속 묶음으로 분할
-    private static func rowChunks(_ rows: [ParsedRow], maximumBytes: Int) -> [[ParsedRow]] {
-        var chunks: [[ParsedRow]] = []
-        var current: [ParsedRow] = []
-        var currentBytes = 0
-        for row in rows {
-            let size = row.data.count + 1
-            if !current.isEmpty && currentBytes + size > maximumBytes {
-                chunks.append(current)
-                current = []
-                currentBytes = 0
-            }
-            guard size <= maximumBytes else { continue }
-            current.append(row)
-            currentBytes += size
-        }
-        if !current.isEmpty { chunks.append(current) }
-        return chunks
-    }
-
     /// - 목적: JSONL 행 묶음의 줄바꿈 포함 데이터 생성
     private static func data(for rows: [ParsedRow]) -> Data {
         var data = Data()
@@ -655,15 +683,56 @@ public final class DiagnosticLogger: @unchecked Sendable {
         return data
     }
 
-    /// - 목적: 파일명 정렬용 밀리초 시간과 무작위 식별자 생성
-    private static func segmentName(timestamp: Date) -> String {
-        let milliseconds = Int64(timestamp.timeIntervalSince1970 * 1_000)
-        return String(format: "diagnostic-%013lld-%@.jsonl", milliseconds, UUID().uuidString.lowercased())
+    /// - 목적: 주입 시간대 기준 날짜별 로그 파일명 생성
+    private static func dailyFileName(timestamp: Date, timeZone: TimeZone) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return "diagnostic-\(formatter.string(from: timestamp)).jsonl"
     }
 
-    /// - 목적: 관리 파일명 패턴 확인
-    private static func isManagedFileName(_ name: String) -> Bool {
-        name.hasPrefix("diagnostic-") && name.hasSuffix(".jsonl") && !name.contains("/")
+    /// - 목적: 유효한 현지 날짜 파일명 확인
+    private static func isDailyFileName(_ name: String) -> Bool {
+        guard name.hasPrefix("diagnostic-"), name.hasSuffix(".jsonl"), !name.contains("/") else { return false }
+        let value = String(name.dropFirst("diagnostic-".count).dropLast(".jsonl".count))
+        let bytes = Array(value.utf8)
+        guard bytes.count == 10, bytes[4] == 45, bytes[7] == 45,
+              bytes.enumerated().allSatisfy({ [4, 7].contains($0.offset) || (48...57).contains($0.element) }) else {
+            return false
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
+        guard let date = formatter.date(from: value) else { return false }
+        return formatter.string(from: date) == value
+    }
+
+    /// - 목적: 이전 UUID 기반 로그 파일명 확인
+    private static func isLegacyFileName(_ name: String) -> Bool {
+        guard name.hasPrefix("diagnostic-"), name.hasSuffix(".jsonl"), !isDailyFileName(name), !name.contains("/") else {
+            return false
+        }
+        let body = String(name.dropFirst("diagnostic-".count).dropLast(".jsonl".count))
+        guard body.count > 37 else { return false }
+        let uuidStart = body.index(body.endIndex, offsetBy: -36)
+        let separator = body.index(before: uuidStart)
+        let uuidString = String(body[uuidStart...])
+        let timestampString = String(body[..<separator])
+        return body[separator] == "-" && Int64(timestampString) != nil &&
+            UUID(uuidString: uuidString)?.uuidString.lowercased() == uuidString
+    }
+
+    /// - 목적: 중복 행 제거 후 원래 순서를 유지하며 시각순 정렬
+    private static func stableChronologicalOrder(_ rows: [ParsedRow]) -> [ParsedRow] {
+        rows.enumerated().sorted {
+            if $0.element.timestamp != $1.element.timestamp { return $0.element.timestamp < $1.element.timestamp }
+            return $0.offset < $1.offset
+        }.map(\.element)
     }
 
     /// - 목적: 파일 속성의 일반 파일·현재 사용자 소유·단일 링크 확인
@@ -703,22 +772,14 @@ public final class DiagnosticLogger: @unchecked Sendable {
         }
     }
 
-    /// - 목적: 파일 속성을 보관 조각 모델로 변환
-    private static func makeSegment(name: String, rows: [ParsedRow], byteCount: Int, info: stat) -> Segment {
-        return Segment(
+    /// - 목적: 파일 속성을 일별 로그 모델로 변환
+    private static func makeDailyFile(name: String, rows: [ParsedRow], byteCount: Int) -> DailyFile {
+        return DailyFile(
             name: name,
             rows: rows,
             byteCount: byteCount,
-            originalByteCount: byteCount,
-            oldestTimestamp: rows.map(\.timestamp).min() ?? .distantFuture,
-            newestTimestamp: rows.map(\.timestamp).max(),
-            modificationTime: modificationDate(info)
+            originalByteCount: byteCount
         )
-    }
-
-    /// - 목적: 파일 수정 시각을 Date로 변환
-    private static func modificationDate(_ info: stat) -> Date {
-        Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec) + TimeInterval(info.st_mtimespec.tv_nsec) / 1_000_000_000)
     }
 
     /// - 목적: 파일명·크기·inode·수정 시각 일치 확인
@@ -752,20 +813,17 @@ public final class DiagnosticLogger: @unchecked Sendable {
         let timestamp: Date
     }
 
-    /// - 목적: 조각 메타데이터와 파싱 결과 보유
-    private struct Segment {
+    /// - 목적: 일별 파일 메타데이터와 파싱 결과 보유
+    private struct DailyFile {
         let name: String
         let rows: [ParsedRow]
         let byteCount: Int
         let originalByteCount: Int
-        let oldestTimestamp: Date
-        let newestTimestamp: Date?
-        let modificationTime: Date
     }
 
-    /// - 목적: 변경되지 않은 조각의 파싱 결과 재사용
-    private struct CachedSegment {
-        let segment: Segment
+    /// - 목적: 변경되지 않은 날짜 파일의 파싱 결과 재사용
+    private struct CachedDailyFile {
+        let file: DailyFile
         let inode: ino_t
         let size: off_t
         let mode: mode_t
@@ -780,8 +838,8 @@ public final class DiagnosticLogger: @unchecked Sendable {
         }
 
         /// - 목적: 파일 속성에서 캐시 항목 생성
-        init(segment: Segment, info: stat) {
-            self.segment = segment
+        init(file: DailyFile, info: stat) {
+            self.file = file
             inode = info.st_ino
             size = info.st_size
             mode = info.st_mode & 0o777
