@@ -52,6 +52,7 @@ public final class AccountStore: ObservableObject {
     private var configRevision = 0
     private var accountGenerations: [String: Int] = [:]
     private var inFlightFetches: [FetchKey: FetchHandle] = [:]
+    private var appliedRequestIDs: [String: UUID] = [:]
     private var latestRequestIDs: [String: UUID] = [:]
     private var resetHistories: [String: ResetHistory] = [:]
 
@@ -164,8 +165,7 @@ public final class AccountStore: ObservableObject {
 
         onQuotaRefreshStarted?()
         let revision = state(for: id)?.configurationGeneration ?? 0
-        let generation = (accountGenerations[id] ?? 0) + 1
-        accountGenerations[id] = generation
+        accountGenerations[id, default: 0] += 1
         let previous = state(for: id)
         states = states.map { state in
             guard state.id == id else { return state }
@@ -182,7 +182,7 @@ public final class AccountStore: ObservableObject {
         guard configs.first(where: { $0.id == id }) == config,
               state(for: id)?.configurationGeneration == revision,
               latestRequestIDs[id] == result.requestID else { return .superseded }
-        let shouldApply = accountGenerations[id] == generation
+        let shouldApply = appliedRequestIDs[id] != result.requestID
         if shouldApply { apply(result) }
         return result.state.status == .normal ? .succeeded(applied: shouldApply) : .failed
     }
@@ -377,6 +377,8 @@ public final class AccountStore: ObservableObject {
 
     /// 최신 상태 및 정상 스냅샷 저장 후 조기 리셋 이벤트 전달
     private func apply(_ result: AccountFetchResult) {
+        guard appliedRequestIDs[result.config.id] != result.requestID else { return }
+        appliedRequestIDs[result.config.id] = result.requestID
         guard let index = states.firstIndex(where: { $0.id == result.config.id }) else { return }
         var state = result.state
         state.configurationGeneration = states[index].configurationGeneration

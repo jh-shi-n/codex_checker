@@ -157,6 +157,11 @@ public final class PreferencesStore: ObservableObject {
             self.hasRegisteredAccount = bundle.hasRegisteredAccount
             self.firstAccountRegisteredAt = bundle.firstAccountRegisteredAt
         }
+        if let savedSettings, savedSettings.accountPaths.count != Self.accountPathCount {
+            loadError = "계정 경로 설정이 손상되었습니다. 원본을 보존했습니다."
+            settingsLoadFailed = true
+            persistenceError = loadError
+        }
         let values = savedSettings?.preferenceValues
         let readSetting: (String) -> Any? = { key in
             if loadError != nil { return nil }
@@ -203,7 +208,7 @@ public final class PreferencesStore: ObservableObject {
         )
         let rawQuotaSnapshots = userDefaults.data(forKey: Keys.lastSuccessfulQuotaSnapshots)
         self.quotaSnapshotsStorage = Self.decodedQuotaSnapshots(rawQuotaSnapshots, homeDirectory: self.homeDirectory)
-        if let quotaStore {
+        if let quotaStore, !settingsLoadFailed {
             do {
                 if let rawQuotaSnapshots {
                     let decoded = try JSONDecoder().decode([String: QuotaSnapshot].self, from: rawQuotaSnapshots)
@@ -215,7 +220,7 @@ public final class PreferencesStore: ObservableObject {
                     guard missing.allSatisfy({ restored[$0.key] == $0.value || ($0.value.lastUpdated ?? Date()).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) <= Date() }) else {
                         throw CocoaError(.fileReadCorruptFile)
                     }
-                    userDefaults.removeObject(forKey: Keys.lastSuccessfulQuotaSnapshots)
+                    if bundle != nil { userDefaults.removeObject(forKey: Keys.lastSuccessfulQuotaSnapshots) }
                 }
                 self.quotaSnapshotsStorage = try quotaStore.load()
             } catch { self.cacheError = "할당량 캐시를 복원하지 못했습니다: \(error.localizedDescription)" }
@@ -308,6 +313,7 @@ public final class PreferencesStore: ObservableObject {
         let paths = Set(accountPaths.filter { !$0.isEmpty })
         do {
             try quotaStore?.cleanup(registeredPaths: paths, now: now)
+            if let quotaStore { quotaSnapshotsStorage = try quotaStore.load(now: now) }
             quotaSnapshotsStorage = quotaSnapshotsStorage.filter {
                 paths.contains($0.key) && ($0.value.lastUpdated ?? now).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) > now
             }
