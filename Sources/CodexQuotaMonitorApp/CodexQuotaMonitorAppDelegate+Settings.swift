@@ -36,7 +36,7 @@ extension CodexQuotaMonitorAppDelegate {
     }
 
     /// 목적: 설정 화면과 앱 위임자 저장·렌더 콜백 연결
-    func makeSettingsView() -> SettingsView {
+    func makeSettingsView() -> some View {
         SettingsView(
             refreshIntervalMinutes: Binding(
                 get: { [weak self] in self?.preferences.refreshIntervalMinutes ?? 5 },
@@ -99,6 +99,7 @@ extension CodexQuotaMonitorAppDelegate {
                 self?.openNotificationSettings()
             }
         )
+        .safeAreaInset(edge: .top) { StorageStatusView(preferences: preferences) }
     }
 
     /// 사용자 동작 시 macOS 알림 시스템 설정 열기
@@ -241,5 +242,31 @@ extension CodexQuotaMonitorAppDelegate {
             return mainWindow
         }
         return nil
+    }
+}
+
+/// 설정과 캐시 오류를 구분하고 복구 원본 위치를 안내하는 설정 화면 영역
+private struct StorageStatusView: View {
+    @ObservedObject var preferences: PreferencesStore
+
+    var body: some View {
+        if preferences.persistenceError != nil || preferences.cacheError != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                if let error = preferences.persistenceError {
+                    Text(error).foregroundStyle(.red)
+                    Text("원본 설정을 보존했습니다. 손상된 설정을 복구한 뒤 앱을 다시 실행해 주세요.")
+                }
+                if let error = preferences.cacheError {
+                    Text(error).foregroundStyle(.orange)
+                    Button("캐시 정리 재시도") { preferences.cleanupQuotaSnapshots() }
+                }
+                Button("설정 저장 위치 열기") {
+                    NSWorkspace.shared.open(AppConfigurationFile.defaultFileURL.deletingLastPathComponent())
+                }
+            }
+            .font(.caption)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
