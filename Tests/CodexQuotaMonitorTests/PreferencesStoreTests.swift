@@ -7,13 +7,13 @@ import XCTest
 @MainActor
 final class PreferencesStoreTests: XCTestCase {
     /// 목적: 미설정 시 갱신 간격·경로·계정 표시 기본값 확인
-    func testMissingValuesUseFiveMinuteIntervalAndFourDefaultPaths() {
+    func testMissingValuesUseFiveMinuteIntervalAndFourEmptyPaths() {
         let defaults = isolatedDefaults()
         let store = PreferencesStore(userDefaults: defaults)
 
         XCTAssertEqual(store.refreshIntervalMinutes, 5)
         XCTAssertEqual(store.accountPaths.count, 4)
-        XCTAssertEqual(store.accountPaths, AccountConfig.defaultAccounts().map { $0.home.path })
+        XCTAssertEqual(store.accountPaths, ["", "", "", ""])
         XCTAssertEqual(store.enabledAccountIDs, PreferencesStore.defaultEnabledAccountIDs)
         XCTAssertEqual(store.accountDisplayOrder, PreferencesStore.defaultAccountDisplayOrder)
         XCTAssertFalse(store.launchAtLogin)
@@ -127,7 +127,7 @@ final class PreferencesStoreTests: XCTestCase {
         let store = PreferencesStore(userDefaults: defaults)
 
         XCTAssertEqual(store.refreshIntervalMinutes, 5)
-        XCTAssertEqual(store.accountPaths, AccountConfig.defaultAccounts().map { $0.home.path })
+        XCTAssertEqual(store.accountPaths, ["", "", "", ""])
     }
 
     func testCustomRefreshIntervalPersistsAcrossInstances() {
@@ -230,8 +230,8 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(store.accountPaths.count, 4)
         XCTAssertEqual(store.accountPaths[0], validReplacement)
         XCTAssertEqual(store.accountPaths[1], "")
-        XCTAssertEqual(store.accountPaths[2], AccountConfig.defaultAccounts()[2].home.path)
-        XCTAssertEqual(store.accountPaths[3], AccountConfig.defaultAccounts()[3].home.path)
+        XCTAssertEqual(store.accountPaths[2], "")
+        XCTAssertEqual(store.accountPaths[3], "")
 
         let storeWithInjectedDefaults = PreferencesStore(
             userDefaults: isolatedDefaults(),
