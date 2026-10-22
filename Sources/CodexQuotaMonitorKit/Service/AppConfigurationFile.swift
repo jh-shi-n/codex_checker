@@ -123,7 +123,7 @@ public final class AppConfigurationFile {
     }
 
     /// UserDefaults의 Date 정밀도를 보존한 ISO 8601 UTC 문자열 구성
-    private static func registrationDateText(_ date: Date) -> String {
+    nonisolated private static func registrationDateText(_ date: Date) -> String {
         let reference = date.timeIntervalSinceReferenceDate
         let integral = floor(reference)
         let formatter = ISO8601DateFormatter()
@@ -133,7 +133,7 @@ public final class AppConfigurationFile {
     }
 
     /// 기존 초 단위·새 소수 초 UTC 표현의 동일 Date 복원
-    private static func registrationDate(from text: String) -> Date? {
+    nonisolated private static func registrationDate(from text: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         if text.hasSuffix("Z"), let dot = text.lastIndex(of: ".") {
             let base = String(text[..<dot]) + "Z"
