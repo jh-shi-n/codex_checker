@@ -1,6 +1,6 @@
 // 목적: 요청 전송·성공·실패를 비행 경로로 표시
 // 이용처: 사용 구간 초기화 요청의 진행 카드
-// 사용방법: 외부 요청 상태를 state로 전달, 높이 76pt와 가변 너비 사용
+// 사용방법: 외부 요청 상태를 state로 전달, 높이 36pt와 가변 너비 사용
 // 실행 예시: ProbeFlightAnimation(state: .sending)
 import AppKit
 import SwiftUI
@@ -161,7 +161,7 @@ public struct ProbeFlightAnimation: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 76)
+        .frame(height: 36)
         .transaction { $0.animation = nil }
         .onAppear { visible = true; synchronize() }
         .onDisappear { visible = false }
@@ -179,37 +179,32 @@ public struct ProbeFlightAnimation: View {
         ticking = timing.snapshot(at: now, reduceMotion: reduceMotion).isAnimating
     }
 
-    /// 공통 경로·기체·실패 배지의 잘린 카드 구성
+    /// 제목과 버튼 사이의 투명한 경로·기체·실패 배지 구성
     private func card(_ snapshot: ProbeFlightSnapshot) -> some View {
         GeometryReader { geometry in
             let pose = ProbeFlightRoute.position(at: snapshot.progress, in: CGRect(origin: .zero, size: geometry.size))
             ZStack(alignment: .topTrailing) {
-                RoundedRectangle(cornerRadius: 12).fill(
-                    LinearGradient(colors: [Color(red: 0.18, green: 0.11, blue: 0.27).opacity(0.94),
-                                            Color(red: 0.10, green: 0.07, blue: 0.17).opacity(0.88)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing))
                 ProbeFlightRoute()
                     .trim(from: 0, to: snapshot.phase == .entering ? min(1, snapshot.progress * 2) : 1)
                     .stroke(Color.purple.opacity(state == .idle ? 0.23 : 0.48),
                                           style: StrokeStyle(lineWidth: 1.3, lineCap: .round, dash: [3, 5]))
-                airplane.frame(width: 34, height: 28)
+                airplane.frame(width: 26, height: 20)
                     .shadow(color: .purple.opacity(0.45), radius: 5)
                     .rotationEffect(.degrees(pose.angle))
                     .overlay(alignment: .topTrailing) {
                         if state == .failed {
-                            Text("!").font(.system(size: 12, weight: .black))
+                            Text("!").font(.system(size: 10, weight: .black))
                                 .foregroundStyle(Color.black)
-                                .frame(width: 18, height: 18).background(.orange, in: Circle())
+                                .frame(width: 14, height: 14).background(.orange, in: Circle())
                                 .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 1))
-                                .offset(x: 7, y: -5)
+                                .offset(x: 5, y: -3)
                         }
                     }
                     .position(x: pose.point.x, y: pose.point.y + CGFloat(snapshot.lift))
                     .opacity(state == .idle ? 0.48 : 1)
 
             }
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.10), lineWidth: 1))
+            .clipped()
         }
     }
 

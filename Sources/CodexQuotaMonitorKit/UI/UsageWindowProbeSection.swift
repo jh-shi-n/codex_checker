@@ -31,33 +31,36 @@ public struct UsageWindowProbeSection: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 12) {
-                Text(Self.sectionTitle)
-                    .font(.headline.weight(.semibold))
-                Spacer(minLength: 8)
-                Button(action: onRun) {
-                    Text(buttonTitle)
+            Text(Self.sectionTitle)
+                .font(.headline.weight(.semibold))
+                .fixedSize()
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .center, spacing: 12) {
+                    ProbeFlightAnimation(state: flightState)
+                        .id("\(account.id)-\(account.configurationGeneration)")
+                        .frame(minWidth: 48)
+                    Button(action: onRun) {
+                        Text(buttonTitle)
+                    }
+                    .buttonStyle(QuotaResetButtonStyle())
+                    .disabled(!canRun)
+                    .help("최소 요청으로 사용 구간을 시작하고 서버의 초기화 시간을 확인합니다. 실제 사용량이 발생하며, 시간 고정 여부는 서버 상태에 따라 달라집니다.")
+                    .accessibilityLabel(buttonTitle)
+                    .accessibilityHint("최소 요청으로 서버 사용량이 발생할 수 있습니다")
                 }
-                .buttonStyle(QuotaResetButtonStyle())
-                .disabled(!canRun)
-                .help("최소 요청으로 사용 구간을 시작하고 서버의 초기화 시간을 확인합니다. 실제 사용량이 발생하며, 시간 고정 여부는 서버 상태에 따라 달라집니다.")
-                .accessibilityLabel(buttonTitle)
-                .accessibilityHint("최소 요청으로 서버 사용량이 발생할 수 있습니다")
+
+                probeDetails
             }
-
-            ProbeFlightAnimation(state: flightState)
-                .id("\(account.id)-\(account.configurationGeneration)")
-            probeDetails
-
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.07))
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.07))
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+            }
         }
     }
 
