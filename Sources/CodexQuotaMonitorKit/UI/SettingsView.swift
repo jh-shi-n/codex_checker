@@ -259,9 +259,12 @@ public struct SettingsView: View {
                 Section(Self.accountPathSectionTitle) {
                     ForEach(0..<Self.accountPathCount, id: \.self) { index in
                         VStack(alignment: .leading, spacing: 4) {
-                            TextField("C\(index + 1)", text: pathBinding(at: index))
-                                .textFieldStyle(.roundedBorder)
-                                .onSubmit(commitAccountPathsDraft)
+                            HStack {
+                                TextField("C\(index + 1)", text: pathBinding(at: index))
+                                    .textFieldStyle(.roundedBorder)
+                                    .onSubmit(commitAccountPathsDraft)
+                                Button("폴더 선택") { chooseAccountDirectory(at: index) }
+                            }
                             if let validation = accountPathsDraft.validationErrors[index],
                                let message = validation.userMessage {
                                 Text(message)
@@ -286,7 +289,7 @@ public struct SettingsView: View {
                     ForEach(PreferencesStore.stableAccountIDs, id: \.self) { accountID in
                         Toggle(accountID, isOn: enabledAccountBinding(for: accountID))
                     }
-                    Text("선택한 계정은 왼쪽부터 최대 두 개씩 채워집니다. 모두 숨긴 경우 메뉴 막대의 톱니바퀴에서 설정을 열 수 있습니다.")
+                    Text("선택한 계정은 왼쪽부터 최대 두 개씩 채워집니다. 모두 숨기거나 등록된 계정이 없으면 메뉴 막대 아이콘의 안내에서 설정을 열 수 있습니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -561,6 +564,12 @@ public struct SettingsView: View {
             get: { accountPathsDraft.paths[index] },
             set: { accountPathsDraft.replace(at: index, text: $0) }
         )
+    }
+
+    /// 숨김 폴더를 포함한 사용자 선택 경로를 편집 초안에만 반영
+    private func chooseAccountDirectory(at index: Int) {
+        guard let selected = AccountFolderPicker.choose(currentPath: accountPathsDraft.paths[index]) else { return }
+        accountPathsDraft.replace(at: index, text: selected)
     }
 
     /// 전체 검증 성공 시에만 실제 계정 경로 일괄 저장

@@ -6,6 +6,7 @@ import CodexQuotaMonitorKit
 
 extension CodexQuotaMonitorAppDelegate {
     func openSettings() {
+        reloadConfigurationForSettings()
         effectiveLaunchAtLoginStatus = lifecycleCoordinator.readLaunchAtLoginStatus()
         // Accessory apps can report `showSettingsWindow:` as handled without
         // actually presenting SwiftUI's Settings scene. Ring clicks therefore
@@ -16,6 +17,23 @@ extension CodexQuotaMonitorAppDelegate {
             fallbackSettingsWindow?.makeKeyAndOrderFront(nil)
         }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// 파일에서 변경된 계정·주기·표시·알림 설정을 실행 중 서비스와 설정 초안에 반영
+    private func reloadConfigurationForSettings() {
+        let oldPaths = preferences.accountPaths
+        let oldInterval = preferences.refreshIntervalMinutes
+        guard preferences.reloadFromConfiguration() else { return }
+        if oldPaths != preferences.accountPaths { applyAccountPaths(preferences.accountPaths) }
+        if oldInterval != preferences.refreshIntervalMinutes {
+            lifecycleCoordinator.restartRefresh(intervalMinutes: preferences.refreshIntervalMinutes)
+        }
+        sessionActivityToastQueue.updateDuration(seconds: preferences.activityNotificationDurationSeconds)
+        quotaResetScheduler.reconcile(states: accountStore.states, reminderMinutes: preferences.resetReminderMinutes)
+        render(states: accountStore.states)
+        if let window = fallbackSettingsWindow {
+            window.contentViewController = NSHostingController(rootView: makeSettingsView())
+        }
     }
 
     /// 한글 제목과 공통 콘텐츠 크기의 설정 창 생성
@@ -117,8 +135,14 @@ extension CodexQuotaMonitorAppDelegate {
         }
     }
 
-    private func applyAccountPaths(_ paths: [String]) {
+    func applyAccountPaths(_ paths: [String]) {
         preferences.updateAccountPaths(paths)
+        if preferences.hasRegisteredAccounts {
+            installationHistory.markAccountRegistered()
+            accountSetupWindow?.close()
+        } else if installationHistory.requiresAccountSetup {
+            openAccountSetupIfNeeded()
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.lifecycleCoordinator.reconfigure(paths: self.preferences.accountPaths)
