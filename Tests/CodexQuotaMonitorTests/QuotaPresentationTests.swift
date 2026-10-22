@@ -196,7 +196,7 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertFalse(text.contains(AccountDashboardFormatting.dateText(after)))
     }
 
-    /// 초기화 갱신 섹션과 버튼의 사용자 표시명 확인
+    /// 초기화 시간 고정 영역과 실행 버튼의 사용자 표시명 검증
     func testQuotaResetRefreshSectionUsesConciseKoreanCopy() {
         let idle = UsageWindowProbeSection(account: AccountState(id: "C1", status: .normal))
         let running = UsageWindowProbeSection(
@@ -204,9 +204,58 @@ final class QuotaPresentationTests: XCTestCase {
             isRunning: true
         )
 
-        XCTAssertEqual(UsageWindowProbeSection.sectionTitle, "할당량 초기화 갱신")
-        XCTAssertEqual(idle.buttonTitle, "초기화 갱신")
-        XCTAssertEqual(running.buttonTitle, "갱신 중…")
+        XCTAssertEqual(UsageWindowProbeSection.sectionTitle, "초기화 시간 고정")
+        XCTAssertEqual(idle.buttonTitle, "시간 고정")
+        XCTAssertEqual(running.buttonTitle, "전송 중…")
+    }
+
+    /// 실행 중 이전 결과의 시간·토큰을 현재 요청 값으로 오인하지 않는지 검증
+    func testProbeDetailsUseCurrentStartAndHidePreviousTokensWhileSending() {
+        let previous = Date(timeIntervalSince1970: 1_800_000_000)
+        let current = previous.addingTimeInterval(300)
+        let result = UsageWindowProbeResult(accountID: "C1", status: .success,
+            startedAt: previous, completedAt: previous.addingTimeInterval(5),
+            usage: UsageWindowProbeTokenUsage(inputTokens: 170, outputTokens: 4))
+        let presentation = UsageWindowProbePresentationResult(result: result, quotaRefreshSucceeded: true)
+        let running = UsageWindowProbeSection(account: AccountState(id: "C1", status: .normal),
+            probe: presentation, isRunning: true, runningStartedAt: current)
+        XCTAssertEqual(running.lastRunText, AccountDashboardFormatting.dateText(current))
+        XCTAssertEqual(running.tokenText, "—")
+        XCTAssertEqual(running.resultText, "전송 중")
+        let finished = UsageWindowProbeSection(account: AccountState(id: "C1", status: .normal), probe: presentation)
+        XCTAssertEqual(finished.lastRunText, AccountDashboardFormatting.dateText(previous))
+        XCTAssertEqual(finished.tokenText, "174 토큰")
+        XCTAssertEqual(finished.resultText, "초기화 시간 확인 완료")
+    }
+
+    /// 빠른 응답에서도 진입 완료 후 퇴장하고 실패 시 중앙에 정지하는지 검증
+    func testProbeFlightTransitionsAndReducedMotion() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var flight = ProbeFlightTiming(state: .sending, at: start)
+        XCTAssertEqual(flight.snapshot(at: start).progress, 0)
+        flight.update(state: .succeeded, at: start.addingTimeInterval(0.1))
+        XCTAssertEqual(flight.snapshot(at: start.addingTimeInterval(0.35)).phase, .entering)
+        XCTAssertEqual(flight.snapshot(at: start.addingTimeInterval(0.7)).progress, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(flight.snapshot(at: start.addingTimeInterval(1.1)).phase, .departing)
+        XCTAssertEqual(flight.snapshot(at: start.addingTimeInterval(1.6)).progress, 1)
+        XCTAssertFalse(flight.snapshot(at: start.addingTimeInterval(1.6)).isAnimating)
+        flight.update(state: .sending, at: start.addingTimeInterval(2))
+        let hovering = flight.snapshot(at: start.addingTimeInterval(3))
+        XCTAssertEqual(hovering.phase, .hovering)
+        XCTAssertEqual(hovering.progress, 0.5)
+        flight.update(state: .failed, at: start.addingTimeInterval(3))
+        let failed = flight.snapshot(at: start.addingTimeInterval(4))
+        XCTAssertEqual(failed.phase, .failed)
+        XCTAssertEqual(failed.progress, 0.5)
+        XCTAssertFalse(failed.isAnimating)
+        let staticFlight = ProbeFlightTiming(state: .sending, at: start)
+            .snapshot(at: start, reduceMotion: true)
+        XCTAssertEqual(staticFlight.progress, 0.5)
+        XCTAssertFalse(staticFlight.isAnimating)
+        let route = CGRect(x: 0, y: 0, width: 500, height: 76)
+        XCTAssertLessThan(ProbeFlightRoute.position(at: 0, in: route).point.x, 0)
+        XCTAssertEqual(ProbeFlightRoute.position(at: 0.5, in: route).point.x, 250, accuracy: 0.001)
+        XCTAssertGreaterThan(ProbeFlightRoute.position(at: 1, in: route).point.x, 500)
     }
 
     func testDashboardDefaultUsageAndProbeNeverClaimData() async {

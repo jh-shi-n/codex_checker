@@ -7,6 +7,30 @@ import XCTest
 /// 화면 수명과 독립적인 계정별 갱신 동작 검증
 @MainActor
 final class UsageWindowProbeStoreTests: XCTestCase {
+    /// 팝오버 재진입과 중복 실행 시에도 현재 계정의 원래 요청 시작 시각 유지
+    func testRequestStartTimeSurvivesOverlapAndClearsOnCompletion() async throws {
+        let store = UsageWindowProbeStore()
+        let account = AccountState(id: "C1", status: .normal)
+        let gate = ProbeStoreTestGate()
+        let before = Date()
+        let task = try XCTUnwrap(store.start(for: account) { account in
+            await gate.wait()
+            return AccountDashboardDefaults.unavailableProbe(accountID: account.id)
+        })
+        let started = try XCTUnwrap(store.startedAt(for: account))
+        XCTAssertGreaterThanOrEqual(started, before)
+        XCTAssertLessThanOrEqual(started, Date())
+        XCTAssertNil(store.start(for: account) { _ in fatalError("중복 실행 금지") })
+        XCTAssertEqual(store.startedAt(for: account), started)
+        var changed = account
+        changed.configurationGeneration += 1
+        XCTAssertNil(store.startedAt(for: changed))
+        await gate.waitUntilStarted()
+        await gate.release()
+        await task.value
+        XCTAssertNil(store.startedAt(for: account))
+    }
+
     /// 요청 화면 취소 이후에도 다른 계정과 병행 완료 및 결과 복원 검증
     func testCallerCancellationPreservesRefreshAndIndependentAccountResults() async {
         let store = UsageWindowProbeStore()
