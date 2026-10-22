@@ -124,7 +124,6 @@ public final class DiagnosticLogger: @unchecked Sendable {
             }
             self.withStorageLock { directoryFD in
                 let maintenance = self.maintainLocked(directoryFD: directoryFD, at: self.now())
-                guard maintenance.migrationSucceeded else { return }
                 var files = self.enforceCapacity(files: maintenance.files, directoryFD: directoryFD)
                 guard timestamp >= self.now().addingTimeInterval(-self.maxAge) else { return }
                 guard let appended = self.append(line, timestamp: timestamp, files: files, directoryFD: directoryFD) else {
@@ -160,7 +159,6 @@ public final class DiagnosticLogger: @unchecked Sendable {
         withStorageLock { directoryFD in
             let date = now()
             let maintenance = maintainLocked(directoryFD: directoryFD, at: date)
-            guard maintenance.migrationSucceeded else { return }
             _ = enforceCapacity(files: maintenance.files, directoryFD: directoryFD)
         }
     }
@@ -274,7 +272,9 @@ public final class DiagnosticLogger: @unchecked Sendable {
         for name in legacyNames {
             guard let sourceInfo = fileInfo(name: name, directoryFD: directoryFD) else { continue }
             guard let source = readOwnedRows(name: name, expectedInfo: sourceInfo, directoryFD: directoryFD) else {
-                return false
+                quarantineLegacyFile(name, expectedInfo: sourceInfo, directoryFD: directoryFD)
+                reportStorageFailure()
+                continue
             }
             sources.append((name, source.info))
             for row in source.rows where row.timestamp >= cutoff {
@@ -309,6 +309,18 @@ public final class DiagnosticLogger: @unchecked Sendable {
             guard removeLegacyFile(source.name, expectedInfo: source.info, directoryFD: directoryFD) else { return false }
         }
         return true
+    }
+
+    /// - 목적: 읽기 실패 원본을 삭제 없이 격리하여 정상 파일의 이관 지속
+    /// - 보관: 격리 파일은 자동 정리 대상에서 제외하여 수동 복구용 원본 보존
+    private func quarantineLegacyFile(_ name: String, expectedInfo: stat, directoryFD: Int32) {
+        guard Self.isLegacyFileName(name),
+              let info = fileInfo(name: name, directoryFD: directoryFD),
+              Self.sameFile(expectedInfo, info) else { return }
+        let quarantineName = ".diagnostic-quarantine-\(UUID().uuidString.lowercased())"
+        if renameatx_np(directoryFD, name, directoryFD, quarantineName, UInt32(RENAME_EXCL)) != 0 {
+            reportStorageFailure()
+        }
     }
 
     /// - 목적: 현지 날짜 파일에서 검증된 완전 행 로드
