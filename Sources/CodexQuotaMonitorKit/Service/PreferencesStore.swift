@@ -91,7 +91,7 @@ public final class PreferencesStore: ObservableObject {
     private var settingsLoadFailed = false
 
     /// 경로·표시·등록 이력의 단일 인코딩 경계
-    private struct SettingsBundle: Codable {
+    private struct SettingsBundle: Codable, Equatable {
         var schemaVersion = 1
         var settings: AppPreferencesPayload
         var hasRegisteredAccount: Bool
@@ -99,6 +99,7 @@ public final class PreferencesStore: ObservableObject {
     }
 
     @Published public private(set) var cacheError: String?
+    private var cacheMigrationError: String?
     private let quotaStore: SQLiteQuotaSnapshotStore?
     private var quotaSnapshotsStorage: [String: QuotaSnapshot]
 
@@ -221,7 +222,10 @@ public final class PreferencesStore: ObservableObject {
                     if bundle != nil { userDefaults.removeObject(forKey: Keys.lastSuccessfulQuotaSnapshots) }
                 }
                 self.quotaSnapshotsStorage = try quotaStore.load()
-            } catch { self.cacheError = "할당량 캐시를 복원하지 못했습니다: \(error.localizedDescription)" }
+            } catch {
+                self.cacheMigrationError = "할당량 캐시를 복원하지 못했습니다: \(error.localizedDescription)"
+                self.cacheError = self.cacheMigrationError
+            }
         }
 
         // Missing keys are allowed to remain absent. Invalid or non-canonical
@@ -295,7 +299,7 @@ public final class PreferencesStore: ObservableObject {
         quotaSnapshotsStorage.removeValue(forKey: normalizedPath)
         do {
             try quotaStore?.remove(path: normalizedPath)
-            cacheError = nil
+            cacheError = cacheMigrationError
         } catch { cacheError = "할당량 캐시를 삭제하지 못했습니다: \(error.localizedDescription)" }
     }
 
@@ -313,7 +317,7 @@ public final class PreferencesStore: ObservableObject {
             quotaSnapshotsStorage = quotaSnapshotsStorage.filter {
                 paths.contains($0.key) && ($0.value.lastUpdated ?? now).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) > now
             }
-            cacheError = nil
+            cacheError = cacheMigrationError
         } catch { cacheError = "할당량 캐시 정리에 실패했습니다. 다음 주기에 재시도합니다: \(error.localizedDescription)" }
     }
 
@@ -507,6 +511,7 @@ public final class PreferencesStore: ObservableObject {
         guard !settingsLoadFailed else { return false }
         let candidate = SettingsBundle(settings: currentPayload,
             hasRegisteredAccount: hasRegisteredAccount, firstAccountRegisteredAt: firstAccountRegisteredAt)
+        if candidate == committedBundle { return true }
         do {
             let data = try JSONEncoder().encode(candidate)
             userDefaults.set(data, forKey: Keys.settingsBundle)
