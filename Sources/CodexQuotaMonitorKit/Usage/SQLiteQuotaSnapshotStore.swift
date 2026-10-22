@@ -78,6 +78,41 @@ final class SQLiteQuotaSnapshotStore {
         }
     }
 
+    /// 만료·미등록 경로 제거 및 최신 64행 유지; 실패 시 다음 주기에 재시도
+    func cleanup(registeredPaths: Set<String>, now: Date = Date()) throws {
+        try withDatabase { db in
+            try execute(db, "BEGIN IMMEDIATE")
+            defer { _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil) }
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT home_identity FROM quota_snapshots", -1, &statement, nil) == SQLITE_OK,
+                  let statement else { throw CocoaError(.fileReadUnknown) }
+            var removed: [String] = []
+            var code = sqlite3_step(statement)
+            while code == SQLITE_ROW {
+                if let raw = sqlite3_column_text(statement, 0) {
+                    let path = String(cString: raw)
+                    if !registeredPaths.contains(path) { removed.append(path) }
+                }
+                code = sqlite3_step(statement)
+            }
+            sqlite3_finalize(statement)
+            guard code == SQLITE_DONE else { throw CocoaError(.fileReadUnknown) }
+            for path in removed {
+                var deletion: OpaquePointer?
+                guard sqlite3_prepare_v2(db, "DELETE FROM quota_snapshots WHERE home_identity = ?", -1, &deletion, nil) == SQLITE_OK,
+                      let deletion else { throw CocoaError(.fileWriteUnknown) }
+                defer { sqlite3_finalize(deletion) }
+                let bound = path.withCString { sqlite3_bind_text(deletion, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }
+                guard bound == SQLITE_OK, sqlite3_step(deletion) == SQLITE_DONE else { throw CocoaError(.fileWriteUnknown) }
+            }
+            // 유한한 기준 시각만 SQL 조건으로 사용
+            guard now.timeIntervalSince1970.isFinite else { throw CocoaError(.fileWriteInvalidFileName) }
+            try execute(db, "DELETE FROM quota_snapshots WHERE expires_at <= \(now.timeIntervalSince1970)")
+            try execute(db, "DELETE FROM quota_snapshots WHERE home_identity IN (SELECT home_identity FROM quota_snapshots ORDER BY updated_at DESC, home_identity ASC LIMIT -1 OFFSET 64)")
+            try execute(db, "COMMIT")
+        }
+    }
+
     /// 명시적으로 제거한 경로의 캐시 삭제
     func remove(path: String) throws {
         try withDatabase { db in
