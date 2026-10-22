@@ -98,6 +98,34 @@ struct OpenAIServiceSection: Identifiable {
     }
 }
 
+/// 제품 이름을 함께 표시하는 개별 상태 행
+struct OpenAIServiceStatusRow: Identifiable {
+    let section: String
+    let component: OpenAIServiceComponent
+    var id: String { component.id }
+    var title: String { "\(section) - \(component.name)" }
+}
+
+/// 이슈와 정상 상태를 구분하는 표시 그룹
+struct OpenAIServiceStatusGroup: Identifiable {
+    let title: String
+    let isAffected: Bool
+    let rows: [OpenAIServiceStatusRow]
+    var id: String { title }
+
+    /// 제품 분류를 각 행에 유지한 이슈 우선 그룹 구성
+    static func grouped(_ components: [OpenAIServiceComponent]) -> [Self] {
+        guard !components.isEmpty else { return [] }
+        let rows = OpenAIServiceSection.grouped(components).flatMap { section in
+            section.components.map { OpenAIServiceStatusRow(section: section.title, component: $0) }
+        }
+        return [
+            Self(title: "이슈", isAffected: true, rows: rows.filter { $0.component.isAffected }),
+            Self(title: "정상", isAffected: false, rows: rows.filter { !$0.component.isAffected }),
+        ]
+    }
+}
+
 /// 정상·미확인을 포함한 마지막 확인 시각과 전체 기능 현황
 public struct OpenAIServiceStatusDetails: View {
     public let snapshot: OpenAIServiceStatusSnapshot?
@@ -134,16 +162,16 @@ public struct OpenAIServiceStatusDetails: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if !sections.isEmpty {
+            if !statusGroups.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach(sections) { section in
-                            serviceSection(section)
+                        ForEach(statusGroups) { group in
+                            statusSection(group)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: min(CGFloat(snapshot?.components.count ?? 0) * 27 + CGFloat(sections.count) * 42, 320))
+                .frame(height: min(CGFloat(snapshot?.components.count ?? 0) * 27 + CGFloat(statusGroups.count) * 42, 320))
             }
             Link("공식 상태 페이지 열기", destination: URL(string: "https://status.openai.com/")!)
                 .font(.caption)
@@ -153,34 +181,38 @@ public struct OpenAIServiceStatusDetails: View {
         .preferredColorScheme(.dark)
     }
 
-    /// 공식 제품 순서와 섹션 내 알림 우선순위를 적용한 표시 목록
-    var sections: [OpenAIServiceSection] {
-        OpenAIServiceSection.grouped(snapshot?.components ?? [])
+    /// 이슈 항목을 상단에 모으고 정상 항목을 하단에 배치한 목록
+    var statusGroups: [OpenAIServiceStatusGroup] {
+        OpenAIServiceStatusGroup.grouped(snapshot?.components ?? [])
     }
 
-    /// 제품 제목·상태 요약·기능 목록을 구분하는 섹션 구성
-    private func serviceSection(_ section: OpenAIServiceSection) -> some View {
+    /// 상태 그룹 제목·개수·제품명을 포함한 기능 목록 구성
+    private func statusSection(_ group: OpenAIServiceStatusGroup) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text(section.title)
+                Text(group.title)
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(group.isAffected && !group.rows.isEmpty ? Color.orange : .primary)
                 Spacer(minLength: 8)
-                Text(section.affectedCount == 0
-                     ? "정상 · \(section.components.count)개 기능"
-                     : "알림 \(section.affectedCount)개 · \(section.components.count)개 기능")
+                Text("\(group.rows.count)개 기능")
                     .font(.caption2)
-                    .foregroundStyle(section.affectedCount == 0 ? Color.secondary : .orange)
+                    .foregroundStyle(.secondary)
             }
             Divider()
-            ForEach(section.components) { component in
+            if group.rows.isEmpty {
+                Text(group.isAffected ? "현재 보고된 이슈가 없습니다." : "정상 상태인 기능이 없습니다.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(group.rows) { row in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(component.name)
+                    Text(row.title)
                         .font(.caption.weight(.medium))
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
-                    Text(component.statusText)
+                    Text(row.component.statusText)
                         .font(.caption)
-                        .foregroundStyle(component.isAffected ? Color.red : .green)
+                        .foregroundStyle(group.isAffected ? Color.red : .green)
                         .multilineTextAlignment(.trailing)
                         .fixedSize(horizontal: false, vertical: true)
                 }

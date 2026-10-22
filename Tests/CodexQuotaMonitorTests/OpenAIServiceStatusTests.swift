@@ -57,6 +57,25 @@ final class OpenAIServiceStatusTests: XCTestCase {
         XCTAssertTrue(OpenAIServiceSection.grouped([]).isEmpty)
     }
 
+    /// 제품명과 기능명을 보존하면서 이슈·정상 그룹을 분리하는지 검증
+    func testStatusGroupsPutAllIssuesBeforeHealthyFeatures() {
+        let groups = OpenAIServiceStatusGroup.grouped([
+            normal, affected,
+            OpenAIServiceComponent(id: "chat", name: "Conversations", status: "major_outage"),
+            OpenAIServiceComponent(id: "new", name: "Future", status: "under_maintenance"),
+        ])
+        XCTAssertEqual(groups.map(\.title), ["이슈", "정상"])
+        XCTAssertEqual(groups[0].rows.map(\.title), ["ChatGPT - Conversations", "Codex - CLI", "기타 - Future"])
+        XCTAssertEqual(groups[1].rows.map(\.title), ["APIs - Responses"])
+        XCTAssertTrue(groups[0].rows.allSatisfy { $0.component.isAffected })
+        XCTAssertTrue(groups[1].rows.allSatisfy { !$0.component.isAffected })
+        XCTAssertEqual(groups.flatMap(\.rows).count, 4)
+        let healthy = OpenAIServiceStatusGroup.grouped([normal])
+        XCTAssertTrue(healthy[0].rows.isEmpty)
+        XCTAssertEqual(healthy[1].rows.count, 1)
+        XCTAssertTrue(OpenAIServiceStatusGroup.grouped([]).isEmpty)
+    }
+
     /// 빈 목록·잘못된 형식·중복 식별자의 전체 정상 오인 방지 검증
     func testInvalidResponsesCannotBecomeHealthySnapshots() {
         for json in [#"{"components":[]}"#, #"{}"#, #"{"components":[{"id":"","name":"CLI","status":"operational"}]}"#,
