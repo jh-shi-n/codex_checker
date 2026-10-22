@@ -4,6 +4,71 @@ import XCTest
 
 @MainActor
 final class AccountStoreTests: XCTestCase {
+    /// Ping 이후 강제 조회를 자동 조회가 공유해도 양쪽 호출의 성공 유지
+    func testForcedRefreshAndAutomaticRefreshShareSuccess() async {
+        let gate = AccountLoaderProbe()
+        let counter = CallCounter()
+        let store = AccountStore(configs: makeConfigs()) { config in
+            _ = await counter.increment(config.id)
+            await gate.started(config.id)
+            await gate.waitUntilReleased()
+            return AccountState(id: config.id, usedPercent: 42, status: .normal)
+        }
+        let forced = Task { await store.refreshOutcome(accountID: "C1", forceFresh: true) }
+        await gate.waitForStartedCount(1)
+        let automatic = Task { await store.refreshAll() }
+        await gate.waitForStartedCount(4)
+        await gate.release()
+        let result = await forced.value
+        await automatic.value
+        XCTAssertTrue(result.isSuccess)
+        XCTAssertEqual(store.state(for: "C1")?.status, .normal)
+        XCTAssertEqual(store.state(for: "C1")?.usedPercent, 42)
+        let calls = await counter.increment("C1")
+        XCTAssertEqual(calls, 2)
+    }
+
+    /// 다른 슬롯 변경 중 선택 계정 결과 유지와 동일 경로로 되돌린 이전 세대 차단
+    func testReconfigurationIsScopedToSelectedAccountGeneration() async {
+        let gate = AccountLoaderProbe()
+        let configs = makeConfigs()
+        let store = AccountStore(configs: configs) { config in
+            await gate.started(config.id)
+            await gate.waitUntilReleased()
+            return AccountState(id: config.id, usedPercent: 24, status: .normal)
+        }
+        let refresh = Task { await store.refreshOutcome(accountID: "C1", forceFresh: true) }
+        await gate.waitForStartedCount(1)
+        var changed = configs
+        changed[1] = AccountConfig(id: "C2", home: URL(fileURLWithPath: "/tmp/new-c2"), position: .left)
+        store.reconfigure(changed)
+        await gate.release()
+        let result = await refresh.value
+        XCTAssertTrue(result.isSuccess)
+        XCTAssertEqual(store.state(for: "C1")?.usedPercent, 24)
+    }
+
+    /// 경로를 변경 후 원래 값으로 복원해도 이전 계정 세대의 응답 차단
+    func testRestoringSamePathDoesNotReviveOldRefresh() async {
+        let gate = AccountLoaderProbe()
+        let original = makeConfigs()
+        let store = AccountStore(configs: original) { config in
+            await gate.started(config.id)
+            await gate.waitUntilReleased()
+            return AccountState(id: config.id, usedPercent: 91, status: .normal)
+        }
+        let old = Task { await store.refreshOutcome(accountID: "C1", forceFresh: true) }
+        await gate.waitForStartedCount(1)
+        var changed = original
+        changed[0] = AccountConfig(id: "C1", home: URL(fileURLWithPath: "/tmp/temporary-c1"), position: .left)
+        store.reconfigure(changed)
+        store.reconfigure(original)
+        await gate.release()
+        let result = await old.value
+        XCTAssertEqual(result, .superseded)
+        XCTAssertNil(store.state(for: "C1")?.usedPercent)
+    }
+
     /// 경로 변경 슬롯의 상세 세대 갱신과 다른 슬롯·일반 새로고침의 세대 보존 검증
     func testConfigurationGenerationChangesOnlyForReconfiguredSlot() async {
         let configs = makeConfigs()
@@ -366,10 +431,13 @@ final class AccountStoreTests: XCTestCase {
 
     func testSuccessfulQuotaSnapshotRestoresAfterRestartOnlyForTheSameAccountPath() async {
         let defaults = UserDefaults(suiteName: "CodexQuotaMonitorTests.\(UUID().uuidString)")!
-        let preferences = PreferencesStore(userDefaults: defaults)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = root.appendingPathComponent("token-usage.sqlite")
         let configs = makeConfigs()
+        let preferences = PreferencesStore(userDefaults: defaults, defaultPaths: configs.map { $0.home.path }, quotaDatabaseURL: database)
         let resetDate = Date(timeIntervalSince1970: 1_700_000_000)
-        let updatedDate = Date(timeIntervalSince1970: 1_700_000_100)
+        let updatedDate = Date()
 
         let firstStore = AccountStore(configs: configs, preferencesStore: preferences) { config in
             AccountState(
@@ -382,7 +450,7 @@ final class AccountStoreTests: XCTestCase {
         }
         await firstStore.refresh(accountID: "C1")
 
-        let reloadedPreferences = PreferencesStore(userDefaults: defaults)
+        let reloadedPreferences = PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database)
         let restartedStore = AccountStore(
             configs: configs,
             preferencesStore: reloadedPreferences
