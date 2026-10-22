@@ -135,6 +135,7 @@ public final class AccountStore: ObservableObject {
 
             for await result in group {
                 guard configs.first(where: { $0.id == result.config.id }) == result.config,
+                      state(for: result.config.id)?.configurationGeneration == previousStates[result.config.id]?.configurationGeneration,
                       latestRequestIDs[result.config.id] == result.requestID,
                       accountGenerations[result.config.id] == generations[result.config.id]
                 else { continue }
@@ -273,6 +274,10 @@ public final class AccountStore: ObservableObject {
         revision: Int,
         forceFresh: Bool = false
     ) async -> AccountFetchResult {
+        guard configs.first(where: { $0.id == config.id }) == config,
+              state(for: config.id)?.configurationGeneration == revision else {
+            return AccountFetchResult(config: config, state: AccountState(id: config.id, status: .error))
+        }
         let key = FetchKey(id: config.id, homePath: config.home.path, revision: revision)
         let handle: FetchHandle
         if !forceFresh, let existing = inFlightFetches[key] {
