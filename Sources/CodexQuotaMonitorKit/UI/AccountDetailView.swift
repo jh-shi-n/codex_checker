@@ -232,7 +232,7 @@ public struct AccountDetailView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Text("등록된 CLI 폴더의 활동 기록을 표시합니다. Codex 앱이 별도 위치에 저장한 세션은 표시되지 않을 수 있습니다.")
+            Text("해당 계정의 CLI 세션 기록을 표시합니다. Codex Desktop 앱의 실행 내역은 표시되지 않을 수 있습니다.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
