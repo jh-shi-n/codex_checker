@@ -31,15 +31,9 @@ public struct UsageWindowProbeSection: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Image(systemName: "arrow.clockwise")
-                    .foregroundStyle(.purple)
+            HStack(alignment: .center, spacing: 12) {
                 Text(Self.sectionTitle)
                     .font(.headline.weight(.semibold))
-            }
-
-            HStack(alignment: .top, spacing: 12) {
-                probeDetails
                 Spacer(minLength: 8)
                 Button(action: onRun) {
                     Text(buttonTitle)
@@ -51,6 +45,9 @@ public struct UsageWindowProbeSection: View {
                 .accessibilityHint("최소 요청으로 서버 사용량이 발생할 수 있습니다")
             }
 
+            ProbeFlightAnimation(state: flightState)
+                .id("\(account.id)-\(account.configurationGeneration)")
+            probeDetails
 
         }
         .padding(10)
@@ -62,6 +59,13 @@ public struct UsageWindowProbeSection: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
         }
+    }
+
+    /// 요청 전송과 한도 조회를 합친 비행 표시 상태
+    var flightState: ProbeFlightState {
+        if isRunning { return .sending }
+        guard let result = probe?.result else { return .idle }
+        return result.isSuccess && probe?.quotaRefreshSucceeded != false ? .succeeded : .failed
     }
 
     /// 설정 계정의 유휴 상태 실행 허용 여부

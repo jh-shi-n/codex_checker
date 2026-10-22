@@ -274,7 +274,6 @@ public struct AccountDetailView: View {
     /// 현재 계정에 속한 Ping 결과만 노출
     private var currentProbePresentation: UsageWindowProbePresentationResult? {
         guard account.status != .notConfigured,
-              account.status != .loading,
               let probePresentation = probeStore.presentation(for: account),
               probePresentation.isCurrentAccount,
               probePresentation.result.accountID == account.id
