@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// 할당량 초기화 갱신 상태와 실행 동작 표시
+/// 초기화 시간 고정 요청의 실행 상태와 결과 표시
 public struct UsageWindowProbeSection: View {
     /// 섹션 제목
-    public static let sectionTitle = "할당량 초기화 갱신"
+    public static let sectionTitle = "초기화 시간 고정"
 
     public let account: AccountState
     public let probe: UsageWindowProbePresentationResult?
@@ -39,11 +39,11 @@ public struct UsageWindowProbeSection: View {
                 probeDetails
                 Spacer(minLength: 8)
                 Button(action: onRun) {
-                    Label(buttonTitle, systemImage: isRunning ? "hourglass" : "bolt.fill")
+                    Text(buttonTitle)
                 }
                 .buttonStyle(QuotaResetButtonStyle())
                 .disabled(!canRun)
-                .help("최소 Ping 요청 후 최신 할당량을 조회합니다. 실제 사용량이 발생할 수 있습니다.")
+                .help("최소 요청으로 사용 구간을 시작하고 서버의 초기화 시간을 확인합니다. 실제 사용량이 발생하며, 시간 고정 여부는 서버 상태에 따라 달라집니다.")
                 .accessibilityLabel(buttonTitle)
                 .accessibilityHint("최소 요청으로 서버 사용량이 발생할 수 있습니다")
             }
@@ -74,8 +74,8 @@ public struct UsageWindowProbeSection: View {
 
     /// 실행 중 여부에 따른 버튼 표시명
     public var buttonTitle: String {
-        if isRunning { return "갱신 중…" }
-        return "초기화 갱신"
+        if isRunning { return "전송 중…" }
+        return "시간 고정"
     }
 
     @ViewBuilder
@@ -119,10 +119,10 @@ public struct UsageWindowProbeSection: View {
         }
         if result.isCancelled { return "취소됨" }
         if result.isSuccess, probe?.quotaRefreshSucceeded == false {
-            return "Ping 성공 · 한도 조회 실패"
+            return "전송 완료 · 한도 조회 실패"
         }
         if result.isSuccess, probe?.quotaRefreshSucceeded == true {
-            return "갱신 성공"
+            return "초기화 시간 확인 완료"
         }
         return result.isSuccess ? "성공" : (result.failureCategory?.userMessage ?? "실패")
     }
