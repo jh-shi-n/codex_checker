@@ -128,7 +128,12 @@
 - 계정 경로·표시·갱신·알림·자동 실행 선호와 최초 등록 Boolean·날짜의 버전 포함 UserDefaults 단일 묶음 저장
 - 최초 등록 날짜의 의미: 검증된 계정 경로의 앱 설정 반영 시각, 디스크 기록 완료 시각과 별개
 - 계정 추가·전체 삭제 이후에도 최초 등록 이력 유지, 실제 날짜가 없는 과거 등록 이력은 날짜 미설정 허용
-- 기존 `config.json` 또는 `installation.json`과 개별 UserDefaults 키는 최초 이관 원본으로만 사용
+- `~/Library/Application Support/CodexQuotaMonitor/config.json`에 최초 등록 Boolean·날짜를 UserDefaults와 동일하게 저장
+- 앱 시작 시 config.json 부재와 등록 이력·경로 부재를 함께 확인하여 최초 실행 판정, 파일 생성 이후 등록 미완료 실행은 연결 가이드 유지
+- 기존 등록 사용자는 파일이 없어도 등록 이력·실제 날짜 보존 후 파일 생성, 파일 삭제만으로 등록 이력 초기화 제외
+- 경로·표시·갱신·알림 등 운영 설정은 UserDefaults 유지, 기존 JSON 설정·installation.json·개별 키는 이관 원본으로 활용
+- 설정 인코딩 → 등록 이력 JSON 원자적 저장 → UserDefaults 반영 순서, 파일 저장 실패 시 등록 완료·가이드 닫기 방지
+- 계정 추가·삭제와 일반 설정 갱신에서 등록 이력이 같으면 JSON 재기록 생략, 캐시 갱신에서 JSON 쓰기 제외
 - 이관 우선순위: 새 설정 묶음 → 유효한 JSON 설정 → JSON 설정 부재 시 개별 UserDefaults 키
 - 손상된 새 설정·JSON의 원본 보존과 오류 안내, 설정 창 재진입·외부 JSON 편집에 의한 운영 설정 재로드 제외
 - 할당량·초기화 시각·리셋권과 토큰 집계는 `token-usage.sqlite`의 별도 테이블에 저장
