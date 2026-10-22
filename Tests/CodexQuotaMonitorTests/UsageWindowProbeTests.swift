@@ -504,6 +504,7 @@ final class UsageWindowProbeTests: XCTestCase {
         try Data("#!/usr/bin/env probe-runtime\n".utf8).write(to: executable)
         try Data("""
         #!/bin/sh
+        shift
         if [ "$1" = "debug" ]; then
           printf '%s\\n' '{"models":[{"slug":"gpt-5.6-luna","tool_mode":"code_mode_only","apply_patch_tool_type":"freeform","use_responses_lite":true}]}'
           exit 0
