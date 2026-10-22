@@ -90,7 +90,6 @@ public struct AccountDetailView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                footer
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -253,20 +252,6 @@ public struct AccountDetailView: View {
                     loadSessionActivity: loadSessionActivity
                 )
             }
-        }
-    }
-
-    private var footer: some View {
-        HStack(spacing: 8) {
-            Spacer(minLength: 0)
-
-            Button(action: onClose) {
-                Text("닫기")
-                    .frame(minWidth: 50)
-            }
-            .buttonStyle(.borderedProminent)
-            .help("계정 상세 닫기")
-            .accessibilityLabel("계정 상세 닫기")
         }
     }
 
