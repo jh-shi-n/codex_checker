@@ -78,6 +78,60 @@ final class DiagnosticLogContextTests: XCTestCase {
         XCTAssertFalse(events.contains("probeResultApplied"))
     }
 
+    /// 리셋권 사용·후속 한도 조회의 작업 연결 및 리셋권·재시도 키의 로그 제외
+    func testResetCreditAndFollowupQuotaShareSafeOperationContext() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let logger = DiagnosticLogger(directory: root, osLogEnabled: false, timerEnabled: false)
+        let credit = RateLimitResetCredits.Credit(id: "private-credit-must-not-be-logged")
+        let account = AccountState(id: "C3", email: "private@example.com",
+                                   resetCredits: .init(availableCount: 1, credits: [credit]), status: .normal)
+        let store = ResetCreditRedemptionStore()
+        var attemptKey = ""
+        let task = try XCTUnwrap(DiagnosticLogContext.$logger.withValue(logger) {
+            store.start(credit: credit, account: account) { state, _, attempt in
+                attemptKey = attempt
+                DiagnosticLogContext.record(.quotaRefreshStarted, accountID: state.id)
+                return .success(.reset)
+            }
+        })
+        await task.value
+        logger.flush()
+        let rows = try readRows(root)
+        XCTAssertEqual(Set(rows.compactMap { $0["event"] as? String }),
+                       Set(["resetCreditRequested", "quotaRefreshStarted", "resetCreditFinished"]))
+        XCTAssertEqual(Set(rows.compactMap { $0["operationID"] as? String }).count, 1)
+        let serialized = String(decoding: try JSONSerialization.data(withJSONObject: rows), as: UTF8.self)
+        XCTAssertFalse(serialized.contains(credit.id))
+        XCTAssertFalse(serialized.contains(attemptKey))
+        XCTAssertFalse(serialized.contains("private@example.com"))
+        XCTAssertEqual(store.message(for: account), ResetCreditOutcome.reset.message)
+    }
+
+    /// 원문 전송 오류의 미저장 및 실패 로그의 분류 확인
+    func testResetCreditFailureStoresCategoryWithoutRawError() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let logger = DiagnosticLogger(directory: root, osLogEnabled: false, timerEnabled: false)
+        let credit = RateLimitResetCredits.Credit(id: "private-credit")
+        let account = AccountState(id: "C3", resetCredits: .init(availableCount: 1, credits: [credit]), status: .normal)
+        let store = ResetCreditRedemptionStore()
+        let task = try XCTUnwrap(DiagnosticLogContext.$logger.withValue(logger) {
+            store.start(credit: credit, account: account) { _, _, _ in
+                .failure(.transport("private-secret-and-account-path"))
+            }
+        })
+        await task.value
+        logger.flush()
+        let rows = try readRows(root)
+        let finished = try XCTUnwrap(rows.first { $0["event"] as? String == "resetCreditFinished" })
+        XCTAssertEqual(finished["level"] as? String, "error")
+        let fields = try XCTUnwrap(finished["fields"] as? [String: [String: Any]])
+        XCTAssertEqual(fields["failure"]?["value"] as? String, "transport")
+        let serialized = String(decoding: try JSONSerialization.data(withJSONObject: rows), as: UTF8.self)
+        XCTAssertFalse(serialized.contains("private"))
+    }
+
     /// 관리 대상 JSONL만 구조화된 행 목록으로 로드
     private func readRows(_ directory: URL) throws -> [[String: Any]] {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)

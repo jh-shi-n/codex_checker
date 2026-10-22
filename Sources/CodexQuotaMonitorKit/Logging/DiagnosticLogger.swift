@@ -813,6 +813,9 @@ public enum DiagnosticEvent: String, CaseIterable, Sendable {
     case quotaResultApplied
     case quotaResultDiscarded
     case accountReconfigured
+    case resetCreditRequested
+    case resetCreditRejected
+    case resetCreditFinished
 }
 
 /// - 목적: OSLog·파일 진단 수준
