@@ -344,7 +344,7 @@ public enum CodexProtocol {
         params: .object([
             "clientInfo": .object([
                 "name": .string("codex_quota_notch_monitor"),
-                "title": .string("Codex Quota Monitor"),
+                "title": .string("Codex Quota Checker"),
                 "version": .string("1.0"),
             ])
         ])

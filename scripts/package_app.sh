@@ -50,12 +50,12 @@ if [[ "$output_path" == *.app ]]; then
     explicit_app_target=1
 else
     destination_dir="${output_path:A}"
-    target_app="$destination_dir/CodexQuotaMonitor.app"
+    target_app="$destination_dir/CodexQuotaChecker.app"
     explicit_app_target=0
 fi
 
-[[ "${target_app:t}" == "CodexQuotaMonitor.app" ]] || {
-    print -u2 "Destination must be named CodexQuotaMonitor.app: $target_app"
+[[ "${target_app:t}" == "CodexQuotaChecker.app" ]] || {
+    print -u2 "Destination must be named CodexQuotaChecker.app: $target_app"
     exit 2
 }
 
@@ -80,9 +80,9 @@ app_icon="$package_root/resource/AppIcon.icns"
 [[ -f "$info_plist" ]] || { print -u2 "Info.plist not found: $info_plist"; exit 1; }
 [[ -f "$app_icon" ]] || { print -u2 "App icon not found: $app_icon"; exit 1; }
 
-stage_dir="$(mktemp -d "$destination_dir/.CodexQuotaMonitor.stage.XXXXXX")"
+stage_dir="$(mktemp -d "$destination_dir/.CodexQuotaChecker.stage.XXXXXX")"
 stage_owned=1
-stage_app="$stage_dir/CodexQuotaMonitor.app"
+stage_app="$stage_dir/CodexQuotaChecker.app"
 restore_backup() {
     (( backup_owned )) || return 0
     if [[ -z "$backup_app" || ! -d "$backup_app" ]]; then

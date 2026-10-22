@@ -17,7 +17,7 @@ extension CodexQuotaMonitorAppDelegate: NSWindowDelegate {
             contentRect: NSRect(origin: .zero, size: AccountSetupView.windowSize),
             styleMask: [.titled, .closable], backing: .buffered, defer: false
         )
-        window.title = "Codex Quota Monitor 시작하기"
+        window.title = "Codex Quota Checker 시작하기"
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentViewController = NSHostingController(rootView: AccountSetupView(
