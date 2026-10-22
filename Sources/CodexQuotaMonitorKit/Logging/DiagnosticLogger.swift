@@ -477,7 +477,8 @@ public final class DiagnosticLogger: @unchecked Sendable {
         return true
     }
 
-    /// - 목적: 오래된 행부터 제거해 전체 용량 상한 적용
+    /// - 목적: 상한 초과 시 오래된 행을 묶어 제거하여 반복 정렬·파일 교체 억제
+    /// - 정책: 총 용량의 10% 여유 확보, 상한 내 단일 최신 행 보존
     private func enforceCapacity(files input: [DailyFile], directoryFD: Int32) -> [DailyFile] {
         let totalBytes = input.reduce(0) { $0 + $1.byteCount }
         guard totalBytes > maxBytes else { return input }
@@ -493,9 +494,12 @@ public final class DiagnosticLogger: @unchecked Sendable {
             return $0.index < $1.index
         }
 
+        let newestRowBytes = candidates.last?.byteCount ?? 0
+        let targetBytes = max(maxBytes - max(1, maxBytes / 10), min(maxBytes, newestRowBytes))
         var total = totalBytes
         var removedRows: [String: Set<Int>] = [:]
-        for candidate in candidates where total > maxBytes {
+        for candidate in candidates {
+            guard total > targetBytes else { break }
             removedRows[candidate.name, default: []].insert(candidate.index)
             total -= candidate.byteCount
         }
