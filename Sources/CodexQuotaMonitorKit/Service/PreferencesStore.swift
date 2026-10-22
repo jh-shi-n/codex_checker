@@ -134,6 +134,10 @@ public final class PreferencesStore: ObservableObject {
             } else if let document = try configurationFile?.read() {
                 savedSettings = document.settings
                 self.hasRegisteredAccount = document.installation?.hasRegisteredAccount ?? false
+                self.firstAccountRegisteredAt = document.installation?.firstAccountRegisteredAt
+                guard self.hasRegisteredAccount || self.firstAccountRegisteredAt == nil else {
+                    throw CocoaError(.coderReadCorrupt)
+                }
             }
         } catch { loadError = "설정을 읽지 못했습니다. 원본을 보존했습니다: \(error.localizedDescription)" }
         self.settingsLoadFailed = loadError != nil
@@ -356,6 +360,38 @@ public final class PreferencesStore: ObservableObject {
     /// 사전 알림 선택값의 허용 범위 정규화
     nonisolated public static func normalizedResetReminderMinutes(_ minutes: Int) -> Int {
         [0, 3, 5, 10].contains(minutes) ? minutes : 5
+    }
+
+    /// 최초 연결 확인 후 경로·표시·등록 이력을 동일 묶음으로 반영
+    @discardableResult
+    public func registerAccountPaths(_ paths: [String], enabledIDs: [String]? = nil, now: Date = Date()) -> Bool {
+        guard !settingsLoadFailed, paths.count == Self.accountPathCount,
+              now.timeIntervalSince1970.isFinite else { return false }
+        let normalized = paths.map { normalizedAccountPath($0) }
+        guard normalized.contains(where: { !$0.isEmpty }) else { return false }
+        for (index, path) in normalized.enumerated() where path != accountPaths[index] {
+            let validation = validateAccountPath(path)
+            guard validation == .valid || validation == .empty else {
+                persistenceError = validation.userMessage ?? "계정 경로를 확인해 주세요."
+                return false
+            }
+        }
+        let previous = currentPayload
+        let previousRegistered = hasRegisteredAccount
+        let previousDate = firstAccountRegisteredAt
+        accountPaths = normalized
+        if let enabledIDs { enabledAccountIDs = Self.normalizedAccountIDs(enabledIDs) }
+        if !hasRegisteredAccount {
+            hasRegisteredAccount = true
+            firstAccountRegisteredAt = now
+        }
+        guard persist() else {
+            restore(previous)
+            hasRegisteredAccount = previousRegistered
+            firstAccountRegisteredAt = previousDate
+            return false
+        }
+        return true
     }
 
     /// 변경된 경로만 검증하고 모든 슬롯을 하나의 설정 묶음으로 반영
