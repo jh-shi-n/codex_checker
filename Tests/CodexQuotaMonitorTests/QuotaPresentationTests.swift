@@ -57,23 +57,23 @@ final class QuotaPresentationTests: XCTestCase {
     }
 
     func testSessionActivityCopiesCoverLoadingEmptyUnavailableAndStatus() {
-        XCTAssertEqual(CLIActivitySection.loadingText, "Loading session activity…")
-        XCTAssertEqual(CLIActivitySection.emptyText, "No recent Codex activity")
-        XCTAssertEqual(CLIActivitySection.unavailableText, "Session status unavailable")
+        XCTAssertEqual(CLIActivitySection.loadingText, "세션 실행 기록을 불러오는 중입니다…")
+        XCTAssertEqual(CLIActivitySection.emptyText, "최근 15분간 실행 기록이 없습니다.")
+        XCTAssertEqual(CLIActivitySection.unavailableText, "세션 실행 기록을 불러올 수 없습니다.")
         XCTAssertEqual(CLIActivitySection.activityRefreshInterval, 5)
         XCTAssertEqual(CLIActivitySection.cardListMaxHeight, 440)
-        XCTAssertEqual(CLIActivitySection.statusText(.working), "Working")
-        XCTAssertEqual(CLIActivitySection.statusText(.waiting), "Waiting")
-        XCTAssertEqual(CLIActivitySection.statusText(.completed), "Completed")
-        XCTAssertEqual(CLIActivitySection.statusText(.stopped), "Stopped")
-        XCTAssertEqual(CLIActivitySection.statusText(.error), "Error")
-        XCTAssertEqual(CLIActivitySection.statusText(.unknown), "Unknown")
+        XCTAssertEqual(CLIActivitySection.statusText(.working), "작업 중")
+        XCTAssertEqual(CLIActivitySection.statusText(.waiting), "대기 중")
+        XCTAssertEqual(CLIActivitySection.statusText(.completed), "완료")
+        XCTAssertEqual(CLIActivitySection.statusText(.stopped), "중단")
+        XCTAssertEqual(CLIActivitySection.statusText(.error), "오류")
+        XCTAssertEqual(CLIActivitySection.statusText(.unknown), "확인 불가")
 
         guard let inactive = SessionActivityStatus(rawValue: "inactive") else {
             XCTFail("inactive status should be normalized")
             return
         }
-        XCTAssertEqual(CLIActivitySection.statusText(inactive), "Inactive")
+        XCTAssertEqual(CLIActivitySection.statusText(inactive), "활동 없음")
     }
 
     func testAccountDetailPopoverUsesPracticalFixedContentSizeAndBoundedActivityCards() {
@@ -487,11 +487,11 @@ final class QuotaPresentationTests: XCTestCase {
 
         XCTAssertEqual(
             CLIActivitySection.mainStatusText(for: SessionActivityPresentationItem(session: activeUnknown)),
-            "Working"
+            "작업 중"
         )
         XCTAssertEqual(
             CLIActivitySection.mainStatusText(for: SessionActivityPresentationItem(session: inactiveUnknown)),
-            "Unknown"
+            "확인 불가"
         )
 
         guard let inactiveStatus = SessionActivityStatus(rawValue: "inactive") else {
@@ -515,18 +515,18 @@ final class QuotaPresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             CLIActivitySection.mainStatusText(for: SessionActivityPresentationItem(session: inactive)),
-            "Inactive"
+            "활동 없음"
         )
     }
 
     func testSessionRowLabelDistinguishesLastKnownFromCurrentActivity() {
         XCTAssertEqual(
             CLIActivitySection.sessionRowLabel(for: .localActivity),
-            "Current session"
+            "최근 세션"
         )
         XCTAssertEqual(
             CLIActivitySection.sessionRowLabel(for: .lastKnown),
-            "Last-known session"
+            "마지막 확인 세션"
         )
     }
 
@@ -622,7 +622,7 @@ final class QuotaPresentationTests: XCTestCase {
             CLIActivitySection.mainStatusText(
                 for: SessionActivityPresentationItem(session: active)
             ),
-            "Working"
+            "작업 중"
         )
     }
 
