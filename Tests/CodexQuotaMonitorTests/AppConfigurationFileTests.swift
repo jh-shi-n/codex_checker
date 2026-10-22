@@ -160,7 +160,7 @@ final class AppConfigurationFileTests: XCTestCase {
             try bytes.write(to: legacy)
             let document = try XCTUnwrap(file.read())
             XCTAssertEqual(document.settings, settings)
-            XCTAssertNil(document.installation)
+            XCTAssertEqual(document.installation?.hasRegisteredAccount, false)
             XCTAssertEqual(try Data(contentsOf: legacy), bytes)
         }
     }
@@ -221,11 +221,13 @@ final class AppConfigurationFileTests: XCTestCase {
             XCTAssertEqual(try file.read()?.settings, settings)
             let data = try Data(contentsOf: file.fileURL)
             let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-            XCTAssertEqual(Set(object.keys), ["schemaVersion", "settings", "installation"])
+            XCTAssertEqual(Set(object.keys), ["settings", "hasRegisteredAccount", "firstAccountRegisteredAt"])
             let savedSettings = try XCTUnwrap(object["settings"] as? [String: Any])
             XCTAssertEqual(Set(savedSettings.keys), allowedSettingFields)
-            let installation = try XCTUnwrap(object["installation"] as? [String: Any])
-            XCTAssertEqual(Set(installation.keys), ["schemaVersion", "hasRegisteredAccount", "firstAccountRegisteredAt"])
+            XCTAssertEqual(object["hasRegisteredAccount"] as? Bool, true)
+            XCTAssertNotNil(object["firstAccountRegisteredAt"] as? String)
+            XCTAssertNil(object["schemaVersion"])
+            XCTAssertNil(object["installation"])
             let attributes = try FileManager.default.attributesOfItem(atPath: file.fileURL.path)
             XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
             try file.saveSettings(settings)
@@ -328,6 +330,37 @@ final class AppConfigurationFileTests: XCTestCase {
             let restored = PreferencesStore(userDefaults: defaults)
             XCTAssertTrue(restored.hasRegisteredAccount)
             XCTAssertEqual(restored.firstAccountRegisteredAt, date)
+        }
+    }
+
+    /// 실제 등록일의 최상위 저장·날짜 미상의 명시적 null·이전 버전 제거 검증
+    func testRegistrationJSONContainsDateInsteadOfSchemaVersion() throws {
+        try withFixture { file, defaults, root in
+            let store = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file.fileURL)) as? [String: Any])
+            XCTAssertEqual(Set(object.keys), ["hasRegisteredAccount", "firstAccountRegisteredAt"])
+            XCTAssertTrue(object["firstAccountRegisteredAt"] is NSNull)
+            let date = Date(timeIntervalSinceReferenceDate: 814_000_000.1234567)
+            XCTAssertTrue(store.registerAccountPaths([root.path, "", "", ""], now: date))
+            object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file.fileURL)) as? [String: Any])
+            XCTAssertEqual(Set(object.keys), ["hasRegisteredAccount", "firstAccountRegisteredAt"])
+            XCTAssertEqual(object["hasRegisteredAccount"] as? Bool, true)
+            XCTAssertTrue((object["firstAccountRegisteredAt"] as? String)?.hasSuffix("Z") == true)
+            XCTAssertEqual(try file.read()?.installation?.firstAccountRegisteredAt, date)
+        }
+    }
+
+    /// 과거 버전 포함 파일을 등록일자 형식으로 이관하고 기존 완료 이력 유지 검증
+    func testLegacyVersionedMarkerRewritesAsRegistrationDateRecord() throws {
+        try withFixture { file, defaults, _ in
+            let old = Data(#"{"schemaVersion":2,"installation":{"schemaVersion":1,"hasRegisteredAccount":true,"firstAccountRegisteredAt":"2026-01-01T01:00:00Z"}}"#.utf8)
+            try old.write(to: file.fileURL)
+            let store = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            XCTAssertTrue(store.hasRegisteredAccount)
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file.fileURL)) as? [String: Any])
+            XCTAssertEqual(Set(object.keys), ["hasRegisteredAccount", "firstAccountRegisteredAt"])
+            XCTAssertEqual(object["firstAccountRegisteredAt"] as? String, "2026-01-01T01:00:00.000000000Z")
+            XCTAssertFalse(store.requiresAccountSetup)
         }
     }
 
