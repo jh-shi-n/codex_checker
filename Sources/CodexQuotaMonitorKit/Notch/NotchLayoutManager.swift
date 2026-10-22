@@ -108,6 +108,7 @@ public final class NotchLayoutManager: NSObject {
         rightAccounts: [AccountState],
         menuBarHeight: CGFloat? = nil,
         showAccountLabels: Bool? = nil,
+        accountDisplayNames: [String: String]? = nil,
         onRefresh: ((AccountState) -> Void)? = nil,
         onSettings: (() -> Void)? = nil
     ) {
@@ -122,6 +123,7 @@ public final class NotchLayoutManager: NSObject {
             accounts: leftAccounts,
             menuBarHeight: menuBarHeight,
             showAccountLabels: self.showAccountLabels,
+            accountDisplayNames: accountDisplayNames,
             onRefresh: onRefresh,
             onSettings: onSettings
         )
@@ -129,10 +131,11 @@ public final class NotchLayoutManager: NSObject {
             accounts: rightAccounts,
             menuBarHeight: menuBarHeight,
             showAccountLabels: self.showAccountLabels,
+            accountDisplayNames: accountDisplayNames,
             onRefresh: onRefresh,
             onSettings: onSettings
         )
-        if needsRelayout { relayout() }
+        if needsRelayout || accountDisplayNames != nil { relayout() }
     }
 
     /// Updates the queue-owned current value for each independent lane. The
@@ -241,14 +244,14 @@ public final class NotchLayoutManager: NSObject {
             itemCount: leftPanel.accounts.count,
             diameter: leftDiameter,
             spacing: QuotaDonutMetrics.accountSpacing,
-            requestedWidth: NotchActivityToastMetrics.requiredWidth(for: leftDisplayedToast)
+            requestedWidth: NotchActivityToastMetrics.requiredWidth(for: leftDisplayedToast, names: leftPanel.accountDisplayNames)
         )
         let rightToastWidth = layout.resolvedToastWidth(
             side: .right,
             itemCount: rightPanel.accounts.count,
             diameter: rightDiameter,
             spacing: QuotaDonutMetrics.accountSpacing,
-            requestedWidth: NotchActivityToastMetrics.requiredWidth(for: rightDisplayedToast)
+            requestedWidth: NotchActivityToastMetrics.requiredWidth(for: rightDisplayedToast, names: rightPanel.accountDisplayNames)
         )
 
         let leftFrame = layout.panelFrame(

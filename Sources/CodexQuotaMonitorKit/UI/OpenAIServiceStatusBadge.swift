@@ -61,6 +61,71 @@ public struct OpenAIServiceStatusBadge: View {
 
 }
 
+/// 공식 제품 구분에 따른 표시 전용 서비스 섹션
+struct OpenAIServiceSection: Identifiable {
+    let title: String
+    let components: [OpenAIServiceComponent]
+    var id: String { title }
+    var affectedCount: Int { components.filter(\.isAffected).count }
+
+    /// 중복 이름의 Login은 공식 식별자로 구분하며 미지원 기능은 기타로 보존
+    static func grouped(_ components: [OpenAIServiceComponent]) -> [Self] {
+        let categories: [(String, Set<String>)] = [
+            ("APIs", ["Chat Completions", "Responses", "Agents", "Decisions", "Fine-tuning",
+                      "Embeddings", "Images", "Batch", "Audio", "Moderations", "Realtime", "Files", "Live"]),
+            ("ChatGPT", ["Conversations", "ChatGPT Work", "Codex in ChatGPT Desktop", "Compliance API",
+                         "Search", "File uploads", "Voice mode", "GPTs", "Image Generation", "Deep Research",
+                         "Agent", "dots", "Space", "Sites", "Connectors/Apps"]),
+            ("Codex", ["Codex Web", "Codex API", "CLI", "VS Code extension"]),
+            ("FedRAMP", ["FedRAMP"]),
+            ("Ads Platform", ["Ads Manager", "Ads API"]),
+        ]
+        var buckets: [String: [OpenAIServiceComponent]] = [:]
+        for component in components {
+            let category: String
+            switch component.id {
+            case "01JSM5RTJWHRWDTS6Q604VEW3B": category = "APIs"
+            case "01JMXBNJXG1S2D9V65P1ZZTD94": category = "ChatGPT"
+            default:
+                category = categories.first { $0.1.contains(component.name) }?.0 ?? "기타"
+            }
+            buckets[category, default: []].append(component)
+        }
+        return (categories.map(\.0) + ["기타"]).compactMap { title in
+            guard let items = buckets[title], !items.isEmpty else { return nil }
+            return Self(title: title, components: items.filter(\.isAffected) + items.filter { !$0.isAffected })
+        }
+    }
+}
+
+/// 제품 이름을 함께 표시하는 개별 상태 행
+struct OpenAIServiceStatusRow: Identifiable {
+    let section: String
+    let component: OpenAIServiceComponent
+    var id: String { component.id }
+    var title: String { "\(section) - \(component.name)" }
+}
+
+/// 이슈와 정상 상태를 구분하는 표시 그룹
+struct OpenAIServiceStatusGroup: Identifiable {
+    let title: String
+    let isAffected: Bool
+    let rows: [OpenAIServiceStatusRow]
+    var id: String { title }
+
+    /// 제품 분류를 각 행에 유지한 이슈 우선 그룹 구성
+    static func grouped(_ components: [OpenAIServiceComponent]) -> [Self] {
+        guard !components.isEmpty else { return [] }
+        let rows = OpenAIServiceSection.grouped(components).flatMap { section in
+            section.components.map { OpenAIServiceStatusRow(section: section.title, component: $0) }
+        }
+        return [
+            Self(title: "이슈", isAffected: true, rows: rows.filter { $0.component.isAffected }),
+            Self(title: "정상", isAffected: false, rows: rows.filter { !$0.component.isAffected }),
+        ]
+    }
+}
+
 /// 정상·미확인을 포함한 마지막 확인 시각과 전체 기능 현황
 public struct OpenAIServiceStatusDetails: View {
     public let snapshot: OpenAIServiceStatusSnapshot?
@@ -97,35 +162,63 @@ public struct OpenAIServiceStatusDetails: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if !displayedComponents.isEmpty {
+            if !statusGroups.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach(displayedComponents) { component in
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(component.name)
-                                    .font(.caption.weight(.medium))
-                                Spacer(minLength: 8)
-                                Text(component.statusText)
-                                    .font(.caption)
-                                    .foregroundStyle(component.isAffected ? Color.red : .green)
-                            }
+                        ForEach(statusGroups) { group in
+                            statusSection(group)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: min(CGFloat(displayedComponents.count) * 28, 260))
+                .frame(height: min(CGFloat(snapshot?.components.count ?? 0) * 27 + CGFloat(statusGroups.count) * 42, 320))
             }
             Link("공식 상태 페이지 열기", destination: URL(string: "https://status.openai.com/")!)
                 .font(.caption)
         }
         .padding(16)
-        .frame(width: 300, alignment: .leading)
+        .frame(width: 340, alignment: .leading)
         .preferredColorScheme(.dark)
     }
 
-    /// 알림 기능을 먼저 배치하고 나머지 정상 기능을 공식 응답 순서로 표시
-    private var displayedComponents: [OpenAIServiceComponent] {
-        guard let snapshot else { return [] }
-        return snapshot.affectedComponents + snapshot.components.filter { !$0.isAffected }
+    /// 이슈 항목을 상단에 모으고 정상 항목을 하단에 배치한 목록
+    var statusGroups: [OpenAIServiceStatusGroup] {
+        OpenAIServiceStatusGroup.grouped(snapshot?.components ?? [])
+    }
+
+    /// 상태 그룹 제목·개수·제품명을 포함한 기능 목록 구성
+    private func statusSection(_ group: OpenAIServiceStatusGroup) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(group.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(group.isAffected && !group.rows.isEmpty ? Color.orange : .primary)
+                Spacer(minLength: 8)
+                Text("\(group.rows.count)개 기능")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Divider()
+            if group.rows.isEmpty {
+                Text(group.isAffected ? "현재 보고된 이슈가 없습니다." : "정상 상태인 기능이 없습니다.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(group.rows) { row in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(row.title)
+                        .font(.caption.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Text(row.component.statusText)
+                        .font(.caption)
+                        .foregroundStyle(group.isAffected ? Color.red : .green)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(10)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
     }
 }

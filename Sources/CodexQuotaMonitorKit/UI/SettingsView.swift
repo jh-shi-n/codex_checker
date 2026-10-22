@@ -103,6 +103,7 @@ public struct SettingsView: View {
     @Binding public var refreshIntervalMinutes: Int
     @Binding public var resetReminderMinutes: Int
     @Binding public var accountPaths: [String]
+    @Binding public var accountDisplayNames: [String: String]
     @Binding public var launchAtLogin: Bool
     @Binding public var showAccountLabels: Bool
     @Binding public var activityNotificationDurationSeconds: Int
@@ -111,6 +112,7 @@ public struct SettingsView: View {
     /// 모든 계정의 표시 순서 목록
     @Binding public var accountDisplayOrder: [String]
     @ObservedObject public var notificationDelivery: QuotaResetNotificationDelivery
+    @State private var accountNamesDraft: [String: String]
     @State private var refreshIntervalDraft: RefreshIntervalDraft
     @State private var accountPathsDraft: AccountPathsDraft
     /// 활성 계정 바인딩의 반응형 화면 초안
@@ -136,6 +138,7 @@ public struct SettingsView: View {
         accountPathValidator: AccountPathValidator = .live,
         enabledAccountIDs: Binding<[String]> = .constant(PreferencesStore.defaultEnabledAccountIDs),
         accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
+        accountDisplayNames: Binding<[String: String]> = .constant([:]),
         resetReminderMinutes: Binding<Int> = .constant(5),
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
@@ -150,6 +153,8 @@ public struct SettingsView: View {
         self._activityNotificationDurationSeconds = activityNotificationDurationSeconds
         self._enabledAccountIDs = enabledAccountIDs
         self._accountDisplayOrder = accountDisplayOrder
+        self._accountDisplayNames = accountDisplayNames
+        self._accountNamesDraft = State(initialValue: accountDisplayNames.wrappedValue)
         self._notificationDelivery = ObservedObject(wrappedValue: notificationDelivery)
         self.onRetryNotificationAuthorization = onRetryNotificationAuthorization
         self.onSendNotificationTest = onSendNotificationTest
@@ -182,6 +187,7 @@ public struct SettingsView: View {
         accountPathValidator: AccountPathValidator = .live,
         enabledAccountIDs: Binding<[String]> = .constant(PreferencesStore.defaultEnabledAccountIDs),
         accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
+        accountDisplayNames: Binding<[String: String]> = .constant([:]),
         resetReminderMinutes: Binding<Int> = .constant(5),
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
@@ -207,6 +213,8 @@ public struct SettingsView: View {
         self._activityNotificationDurationSeconds = activityNotificationDurationSeconds
         self._enabledAccountIDs = enabledAccountIDs
         self._accountDisplayOrder = accountDisplayOrder
+        self._accountDisplayNames = accountDisplayNames
+        self._accountNamesDraft = State(initialValue: accountDisplayNames.wrappedValue)
         self._notificationDelivery = ObservedObject(wrappedValue: notificationDelivery)
         self.onRetryNotificationAuthorization = onRetryNotificationAuthorization
         self.onSendNotificationTest = onSendNotificationTest
@@ -233,6 +241,9 @@ public struct SettingsView: View {
             Form {
                 Section(Self.refreshSectionTitle) {
                     Picker("새로고침 간격", selection: refreshIntervalBinding) {
+                        if !Self.refreshIntervalOptions.contains(refreshIntervalMinutes) {
+                            Text("직접 입력: \(refreshIntervalMinutes)분").tag(refreshIntervalMinutes)
+                        }
                         ForEach(Self.refreshIntervalOptions, id: \.self) { minutes in
                             Text("\(minutes)분").tag(minutes)
                         }
@@ -247,14 +258,9 @@ public struct SettingsView: View {
                             .frame(width: 64)
                             .textFieldStyle(.roundedBorder)
                             .onSubmit(commitRefreshIntervalDraft)
-                        Stepper(
-                            "",
-                            value: refreshIntervalBinding,
-                            in: Self.minimumRefreshIntervalMinutes...Self.maximumRefreshIntervalMinutes
-                        )
-                        .labelsHidden()
+
                     }
-                    Text("모든 계정에 적용됩니다. 1~1,440분을 입력한 뒤 Enter를 누르면 적용됩니다.")
+                    Text("모든 계정에 적용됩니다. 1~60분을 입력한 뒤 Enter를 누르면 적용됩니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -263,7 +269,16 @@ public struct SettingsView: View {
                     ForEach(0..<Self.accountPathCount, id: \.self) { index in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                TextField("C\(index + 1)", text: pathBinding(at: index))
+                                Text("C\(index + 1)")
+                                    .font(.caption.weight(.semibold))
+                                    .frame(width: 28, alignment: .leading)
+                                TextField("계정 이름 (최대 14자)", text: nameBinding(for: "C\(index + 1)"))
+                                    .textFieldStyle(.roundedBorder)
+                                    .accessibilityLabel("C\(index + 1) 사용자 이름")
+                                    .onSubmit(commitAccountNames)
+                            }
+                            HStack {
+                                TextField("계정 폴더 경로", text: pathBinding(at: index))
                                     .textFieldStyle(.roundedBorder)
                                     .onSubmit(commitAccountPathsDraft)
                                 Button("폴더 선택") { chooseAccountDirectory(at: index) }
@@ -278,19 +293,28 @@ public struct SettingsView: View {
                         }
                     }
                     HStack {
+                        Button("이름 적용", action: commitAccountNames)
+                            .disabled(accountNamesDraft == accountDisplayNames)
                         Button("경로 적용", action: commitAccountPathsDraft)
                             .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
-                        Button("편집 취소", action: synchronizeAccountPathDrafts)
-                            .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
+                        Button("편집 취소", action: cancelAccountEdits)
+                            .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths) && accountNamesDraft == accountDisplayNames)
                     }
-                    Text("경로 적용 또는 Enter를 누를 때 저장됩니다. 편집 취소 시 기존 경로를 유지합니다.")
+                    Text("이름은 문자·숫자·공백으로 최대 14자까지 입력할 수 있습니다. 이름 적용 또는 Enter로 저장합니다. 비워두면 슬롯명을 사용합니다. 경로는 적용 또는 Enter로 저장합니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 Section(Self.accountVisibilitySectionTitle) {
                     ForEach(PreferencesStore.stableAccountIDs, id: \.self) { accountID in
-                        Toggle(accountID, isOn: enabledAccountBinding(for: accountID))
+                        Toggle(isOn: enabledAccountBinding(for: accountID)) {
+                            HStack(spacing: 8) {
+                                Text(accountID)
+                                if let name = accountDisplayNames[accountID], !name.isEmpty {
+                                    Text(name).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                     }
                     Text("선택한 계정은 왼쪽부터 최대 두 개씩 채워집니다. 모두 숨기거나 등록된 계정이 없으면 메뉴 막대 아이콘의 안내에서 설정을 열 수 있습니다.")
                         .font(.caption)
@@ -298,45 +322,25 @@ public struct SettingsView: View {
                 }
 
                 Section(Self.accountDisplayOrderSectionTitle) {
-                    ForEach(normalizedAccountDisplayOrder, id: \.self) { accountID in
-                        let order = normalizedAccountDisplayOrder
-                        let index = order.firstIndex(of: accountID) ?? 0
-                        HStack {
-                            Text(accountID)
-                            Spacer()
-                            Button {
-                                moveAccount(accountID, up: true)
-                            } label: {
-                                Image(systemName: "chevron.up")
-                            }
-                            .disabled(index == 0)
-                            .accessibilityLabel("\(accountID) 위로 이동")
-                            .accessibilityIdentifier("account-order-up-\(accountID.lowercased())")
-
-                            Button {
-                                moveAccount(accountID, up: false)
-                            } label: {
-                                Image(systemName: "chevron.down")
-                            }
-                            .disabled(index == order.count - 1)
-                            .accessibilityLabel("\(accountID) 아래로 이동")
-                            .accessibilityIdentifier("account-order-down-\(accountID.lowercased())")
-                        }
-                    }
+                    AccountOrderEditor(
+                        order: Binding(get: { normalizedAccountDisplayOrder }, set: { ids in updateAccountDisplayOrder(ids) }),
+                        names: accountDisplayNames
+                    )
+                    Text("오른쪽 손잡이나 행을 드래그해 원하는 위치에 놓으세요.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section(Self.activitySectionTitle) {
-                    Stepper(
-                        value: activityNotificationDurationBinding,
-                        in: Self.minimumActivityNotificationDurationSeconds...Self.maximumActivityNotificationDurationSeconds
-                    ) {
-                        HStack {
-                            Text(Self.activityNotificationDurationLabel)
-                            Spacer()
-                            Text("\(activityNotificationDurationSeconds)초")
-                                .foregroundStyle(.secondary)
+                    Picker(Self.activityNotificationDurationLabel, selection: activityNotificationDurationBinding) {
+                        ForEach(Self.minimumActivityNotificationDurationSeconds...Self.maximumActivityNotificationDurationSeconds, id: \.self) { seconds in
+                            Text("\(seconds)초").tag(seconds)
                         }
                     }
+                    .pickerStyle(.menu)
+                    Text("1~10초 중 선택할 수 있습니다. 기본값은 3초이며 다음 활동 알림부터 적용됩니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section(Self.quotaResetNotificationSectionTitle) {
@@ -382,7 +386,7 @@ public struct SettingsView: View {
 
                 Section("앱 실행") {
                     Toggle(Self.launchAtLoginLabel, isOn: $launchAtLogin)
-                    Toggle("계정 이름 표시 (C1~C4)", isOn: $showAccountLabels)
+                    Toggle("계정 이름 표시", isOn: $showAccountLabels)
                     Text("로그인 시 앱을 자동으로 실행합니다. macOS 시스템 설정 > 로그인 항목에서 승인이 필요할 수 있습니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -402,6 +406,7 @@ public struct SettingsView: View {
             synchronizeAccountPathDrafts()
             synchronizeAccountDisplayDrafts()
         }
+        .onChange(of: accountDisplayNames) { _, names in accountNamesDraft = names }
         .onChange(of: accountPaths) { _, _ in synchronizeAccountPathDrafts() }
         .onChange(of: enabledAccountIDs) { _, _ in synchronizeAccountDisplayDrafts() }
         .onChange(of: accountDisplayOrder) { _, _ in synchronizeAccountDisplayDrafts() }
@@ -470,6 +475,23 @@ public struct SettingsView: View {
         case .notRequested, .denied, .authorized, .provisional, .ephemeral, .unknown, .error:
             false
         }
+    }
+
+    /// 한글 조합과 공백 입력을 보존하는 계정 이름 편집 초안
+    private func nameBinding(for accountID: String) -> Binding<String> {
+        Binding(
+            get: { accountNamesDraft[accountID] ?? "" },
+            set: { accountNamesDraft[accountID] = $0 }
+        )
+    }
+
+    /// 입력 완료 시 이름 제한 적용 및 내부 슬롯과 분리한 일괄 저장
+    private func commitAccountNames() {
+        accountDisplayNames = accountNamesDraft.reduce(into: [:]) { names, entry in
+            let name = AccountDisplayName.normalized(entry.value)
+            if !name.isEmpty { names[entry.key] = name }
+        }
+        accountNamesDraft = accountDisplayNames
     }
 
     /// 목적: 표시 계정 ID별 활성 상태 바인딩 제공
@@ -542,16 +564,6 @@ public struct SettingsView: View {
         return normalized
     }
 
-    /// 목적: 지정 계정을 위·아래 한 칸 이동
-    private func moveAccount(_ accountID: String, up: Bool) {
-        var order = normalizedAccountDisplayOrder
-        guard let index = order.firstIndex(of: accountID) else { return }
-        let destination = index + (up ? -1 : 1)
-        guard order.indices.contains(destination) else { return }
-        order.swapAt(index, destination)
-        updateAccountDisplayOrder(order)
-    }
-
     /// 목적: 직접 입력한 갱신 간격의 유효값 반영
     private func commitRefreshIntervalDraft() {
         guard let value = refreshIntervalDraft.commit() else {
@@ -580,6 +592,12 @@ public struct SettingsView: View {
         guard let paths = accountPathsDraft.commit(validator: accountPathValidator),
               paths != Self.paddedAccountPaths(accountPaths) else { return }
         accountPaths = paths
+    }
+
+    /// 저장 전 이름·경로 편집 내용을 함께 취소
+    private func cancelAccountEdits() {
+        synchronizeAccountPathDrafts()
+        accountNamesDraft = accountDisplayNames
     }
 
     /// 외부 경로 변경 또는 편집 취소 시 저장된 경로로 초안 복원

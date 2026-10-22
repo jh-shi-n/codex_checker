@@ -114,7 +114,7 @@ public final class RefreshService {
     nonisolated public static let quickIntervalPresets = [1, 5, 10, 30]
     nonisolated public static let supportedIntervalMinutes = quickIntervalPresets
     nonisolated public static let minimumIntervalMinutes = 1
-    nonisolated public static let maximumIntervalMinutes = 1_440
+    nonisolated public static let maximumIntervalMinutes = 60
     nonisolated public static let defaultIntervalMinutes = 5
     nonisolated public static let allowedIntervals = quickIntervalPresets
 

@@ -27,6 +27,16 @@ final class QuotaResetNotificationDeliveryTests: XCTestCase {
         XCTAssertEqual(delivery.status.deliveryError, "모의 알림 전달 오류")
     }
 
+    /// 표시 이름 변경 시 알림 문구만 교체하고 내부 계정 ID 유지 검증
+    func testScheduledNotificationUsesCustomNameWithoutChangingIdentity() async {
+        let backend = StubNotificationBackend(status: .authorized)
+        let delivery = QuotaResetNotificationDelivery(backend: backend)
+        let alert = QuotaResetAlert(accountID: "C1", title: "초기화 예정", body: "C1: 5분 뒤 초기화 예정")
+        await delivery.notifyScheduled(alert, displayName: "업무 계정")
+        XCTAssertEqual(backend.delivered.first?.body, "업무 계정: 5분 뒤 초기화 예정")
+        XCTAssertEqual(alert.accountID, "C1")
+    }
+
     /// 요청 오류 직후 허용 권한을 재조회한 경우 오래된 오류 제거 검증
     func testFailedRequestClearsErrorWhenImmediateStatusIsAuthorized() async {
         for authorization in [QuotaResetNotificationAuthorization.authorized, .provisional, .ephemeral] {

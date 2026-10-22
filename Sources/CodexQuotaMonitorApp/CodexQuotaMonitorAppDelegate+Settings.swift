@@ -75,6 +75,14 @@ extension CodexQuotaMonitorAppDelegate {
                 },
                 set: { [weak self] ids in self?.applyAccountDisplayOrder(ids) }
             ),
+            accountDisplayNames: Binding(
+                get: { [weak self] in self?.preferences.accountDisplayNames ?? [:] },
+                set: { [weak self] names in
+                    guard let self else { return }
+                    self.preferences.updateAccountDisplayNames(names)
+                    self.render(states: self.accountStore.states)
+                }
+            ),
             resetReminderMinutes: Binding(
                 get: { [weak self] in self?.preferences.resetReminderMinutes ?? 5 },
                 set: { [weak self] minutes in

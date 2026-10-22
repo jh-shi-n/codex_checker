@@ -16,6 +16,7 @@ public struct AccountDetailView: View {
     public let onClose: () -> Void
     public let serviceStatus: OpenAIServiceStatusStore?
 
+    @Environment(\.accountDisplayNames) private var accountDisplayNames
     @State private var tokenUsageSnapshot: TokenUsageSnapshot?
     @State private var isTokenUsageLoading = false
     @State private var tokenUsageRefreshFailed = false
@@ -79,6 +80,8 @@ public struct AccountDetailView: View {
                     account: displayedAccount,
                     probe: currentProbePresentation,
                     isRunning: isProbeRunning,
+                    runningStartedAt: probeStore.startedAt(for: account),
+                    lastExecutionAt: probeStore.lastStartedAt(for: account),
                     isConfigured: displayedAccount.status != .notConfigured,
                     onRun: runProbe
                 )
@@ -90,7 +93,6 @@ public struct AccountDetailView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                footer
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -129,8 +131,11 @@ public struct AccountDetailView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {
-                    Text(account.id)
+                    Text(AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id))
                         .font(.title3.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id))
                     Text(AccountDashboardFormatting.subscriptionBadgeText(account.planType))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(SubscriptionBadgeStyle.accentColor(for: account.planType))
@@ -146,6 +151,14 @@ public struct AccountDetailView: View {
                     if let serviceStatus {
                         OpenAIServiceStatusBadge(store: serviceStatus)
                     }
+                    Button(action: onSettings) {
+                        Image(systemName: "gearshape")
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("설정 열기")
+                    .accessibilityLabel("설정 열기")
                 }
                 HStack(spacing: 7) {
                     Text(account.email ?? "—")
@@ -248,27 +261,6 @@ public struct AccountDetailView: View {
         }
     }
 
-    private var footer: some View {
-        HStack(spacing: 8) {
-            Button(action: onSettings) {
-                Label("설정 열기", systemImage: "gearshape")
-            }
-            .buttonStyle(.bordered)
-            .help("설정 열기")
-            .accessibilityLabel("설정 열기")
-
-            Spacer(minLength: 0)
-
-            Button(action: onClose) {
-                Text("닫기")
-                    .frame(minWidth: 50)
-            }
-            .buttonStyle(.borderedProminent)
-            .help("계정 상세 닫기")
-            .accessibilityLabel("계정 상세 닫기")
-        }
-    }
-
     private var statusColor: Color {
         switch account.status {
         case .notConfigured:
@@ -287,7 +279,6 @@ public struct AccountDetailView: View {
     /// 현재 계정에 속한 Ping 결과만 노출
     private var currentProbePresentation: UsageWindowProbePresentationResult? {
         guard account.status != .notConfigured,
-              account.status != .loading,
               let probePresentation = probeStore.presentation(for: account),
               probePresentation.isCurrentAccount,
               probePresentation.result.accountID == account.id

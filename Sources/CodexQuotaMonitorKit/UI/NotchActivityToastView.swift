@@ -241,9 +241,9 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
         self.secondLine = secondLine
     }
 
-    public static func make(for toast: SessionActivityToast) -> NotchActivityToastCopy {
+    public static func make(for toast: SessionActivityToast, names: [String: String] = [:]) -> NotchActivityToastCopy {
         if let transition = toast.transition {
-            let account = normalized(transition.accountID, fallback: "Account") ?? "Account"
+            let account = normalized(AccountDisplayName.resolved(names[transition.accountID], slotID: transition.accountID), fallback: "Account") ?? "Account"
             let firstLine: String
             if let sessionID = transition.sessionID,
                !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -326,9 +326,9 @@ public enum NotchActivityToastMetrics {
     public static let characterAdvance: CGFloat = 6.2
     public static let minimumWidth: CGFloat = 72
 
-    public static func requiredWidth(for toast: SessionActivityToast?) -> CGFloat {
+    public static func requiredWidth(for toast: SessionActivityToast?, names: [String: String] = [:]) -> CGFloat {
         guard let toast else { return 0 }
-        let copy = NotchActivityToastCopy.make(for: toast)
+        let copy = NotchActivityToastCopy.make(for: toast, names: names)
         let longestLine = copy.lines.map(\.count).max() ?? 0
         let estimated = CGFloat(longestLine) * characterAdvance + horizontalPadding
         guard estimated.isFinite else { return minimumWidth }
@@ -348,6 +348,7 @@ public struct NotchActivityToastView: View {
     public let width: CGFloat?
     public let isExiting: Bool
 
+    @Environment(\.accountDisplayNames) private var accountDisplayNames
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
@@ -363,10 +364,10 @@ public struct NotchActivityToastView: View {
     }
 
     public var body: some View {
-        let copy = NotchActivityToastCopy.make(for: toast)
+        let copy = NotchActivityToastCopy.make(for: toast, names: accountDisplayNames)
         let status = toast.transition?.status ?? .unknown
         let resolvedWidth = width.map { max(0, $0) }
-            ?? NotchActivityToastMetrics.requiredWidth(for: toast)
+            ?? NotchActivityToastMetrics.requiredWidth(for: toast, names: accountDisplayNames)
         let transition: AnyTransition = NotchActivityToastPresentation.usesSlide(
             reduceMotion: reduceMotion
         )

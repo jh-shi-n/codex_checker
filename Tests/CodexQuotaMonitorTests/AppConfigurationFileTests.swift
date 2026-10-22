@@ -55,6 +55,7 @@ final class AppConfigurationFileTests: XCTestCase {
             settings.activityNotificationDurationSeconds = 8
             settings.showAccountLabels = true
             settings.launchAtLogin = true
+            settings.accountDisplayNames = ["C1": "업무", "C4": "테스트"]
             try file.saveSettings(settings)
             try file.saveInstallation(InstallationHistory(hasRegisteredAccount: true, firstAccountRegisteredAt: date))
             let original = try Data(contentsOf: file.fileURL)
@@ -63,6 +64,7 @@ final class AppConfigurationFileTests: XCTestCase {
             XCTAssertEqual(store.accountPaths, settings.accountPaths)
             XCTAssertEqual(store.enabledAccountIDs, [])
             XCTAssertEqual(store.accountDisplayOrder, settings.accountDisplayOrder)
+            XCTAssertEqual(store.accountDisplayNames, settings.accountDisplayNames)
             XCTAssertEqual(store.refreshIntervalMinutes, 13)
             XCTAssertEqual(store.resetReminderMinutes, 3)
             XCTAssertEqual(store.activityNotificationDurationSeconds, 8)
@@ -75,6 +77,7 @@ final class AppConfigurationFileTests: XCTestCase {
             store.updateRefreshInterval(minutes: 17)
             let restored = PreferencesStore(userDefaults: defaults, configurationFile: file, quotaDatabaseURL: database)
             XCTAssertEqual(restored.refreshIntervalMinutes, 17)
+            XCTAssertEqual(restored.accountDisplayNames, settings.accountDisplayNames)
             XCTAssertEqual(restored.firstAccountRegisteredAt, date)
             XCTAssertEqual(try Data(contentsOf: file.fileURL), original)
         }
@@ -211,6 +214,7 @@ final class AppConfigurationFileTests: XCTestCase {
             let date = Date(timeIntervalSince1970: 1_800_000_000)
             let history = InstallationHistory(hasRegisteredAccount: true, firstAccountRegisteredAt: date)
             var settings = payload(paths: [root.path, "", "", ""])
+            settings.accountDisplayNames = ["C1": "업무", "C3": "Café"]
             try file.saveSettings(settings)
             try file.saveInstallation(history)
             XCTAssertEqual(try file.read()?.settings, settings)
@@ -224,6 +228,7 @@ final class AppConfigurationFileTests: XCTestCase {
             XCTAssertEqual(Set(object.keys), ["settings", "hasRegisteredAccount", "firstAccountRegisteredAt"])
             let savedSettings = try XCTUnwrap(object["settings"] as? [String: Any])
             XCTAssertEqual(Set(savedSettings.keys), allowedSettingFields)
+            XCTAssertEqual(savedSettings["accountDisplayNames"] as? [String: String], settings.accountDisplayNames)
             XCTAssertEqual(object["hasRegisteredAccount"] as? Bool, true)
             XCTAssertNotNil(object["firstAccountRegisteredAt"] as? String)
             XCTAssertNil(object["schemaVersion"])
@@ -232,6 +237,67 @@ final class AppConfigurationFileTests: XCTestCase {
             XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
             try file.saveSettings(settings)
             XCTAssertEqual(try Data(contentsOf: file.fileURL), data)
+        }
+    }
+
+    /// 이전 JSON의 이름 필드 누락과 기존 멤버별 초기화 호출 호환 검증
+    func testLegacySettingsWithoutDisplayNamesLoadAndMigrate() throws {
+        try withFixture { file, defaults, root in
+            let original = payload(paths: [root.path, "", "", ""])
+            XCTAssertNil(original.accountDisplayNames)
+            let old = Data(#"{"schemaVersion":2,"installation":{"schemaVersion":1,"hasRegisteredAccount":false},"settings":{"accountPaths":["","","",""],"enabledAccountIDs":["C1","C2","C3","C4"],"accountDisplayOrder":["C1","C2","C3","C4"],"refreshIntervalMinutes":7,"resetReminderMinutes":3,"activityNotificationDurationSeconds":8,"showAccountLabels":true,"launchAtLogin":false}}"#.utf8)
+            try old.write(to: file.fileURL)
+            XCTAssertNil(try file.read()?.settings?.accountDisplayNames)
+            let store = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            XCTAssertNil(store.persistenceError)
+            XCTAssertEqual(store.accountDisplayNames, [:])
+            XCTAssertEqual(store.refreshIntervalMinutes, 7)
+            XCTAssertEqual(store.resetReminderMinutes, 3)
+            XCTAssertTrue(store.showAccountLabels)
+            XCTAssertEqual(store.displayName(for: "C4"), "C4")
+        }
+    }
+
+    /// 이름의 파일 이관·정규화와 이후 설정·등록 이력 저장 시 보존 검증
+    func testDisplayNamesNormalizeDuringConfigMigrationAndSurviveBundleReload() throws {
+        try withFixture { file, defaults, root in
+            var settings = payload(paths: ["", "", "", ""])
+            settings.accountDisplayNames = ["C1": " Cafe\u{301}😀 ", "C2": "!", "C3": String(repeating: "가", count: 15), "C5": "제외"]
+            try file.saveSettings(settings)
+            let store = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            let expected = ["C1": "Café", "C3": String(repeating: "가", count: 14)]
+            XCTAssertNil(store.persistenceError)
+            XCTAssertEqual(store.accountDisplayNames, expected)
+            XCTAssertEqual(try file.read()?.settings?.accountDisplayNames, settings.accountDisplayNames)
+            store.updateShowAccountLabels(true)
+            XCTAssertTrue(store.registerAccountPaths([root.path, "", "", ""]))
+            let restored = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            XCTAssertEqual(restored.accountDisplayNames, expected)
+            XCTAssertEqual(restored.displayName(for: "C2"), "C2")
+            XCTAssertTrue(restored.showAccountLabels)
+            XCTAssertEqual(try file.read()?.settings?.accountDisplayNames, settings.accountDisplayNames)
+        }
+    }
+
+    /// 파일 저장 실패 시 이름·묶음의 직전 값 복원과 재시도 검증
+    func testDisplayNameWriteFailureRollsBackAndCanRetry() throws {
+        try withFixture { file, defaults, _ in
+            let store = PreferencesStore(userDefaults: defaults, configurationFile: file)
+            store.updateAccountDisplayNames(["C1": "기존"])
+            let committed = try XCTUnwrap(defaults.data(forKey: PreferencesStore.Keys.settingsBundle))
+            let marker = try Data(contentsOf: file.fileURL)
+            let corrupt = Data("invalid marker".utf8)
+            try corrupt.write(to: file.fileURL)
+            store.updateAccountDisplayNames(["C1": "변경", "C2": "새 이름"])
+            XCTAssertNotNil(store.persistenceError)
+            XCTAssertEqual(store.accountDisplayNames, ["C1": "기존"])
+            XCTAssertEqual(store.displayName(for: "C2"), "C2")
+            XCTAssertEqual(defaults.data(forKey: PreferencesStore.Keys.settingsBundle), committed)
+            XCTAssertEqual(try Data(contentsOf: file.fileURL), corrupt)
+            try marker.write(to: file.fileURL)
+            store.updateAccountDisplayNames(["C1": "변경"])
+            XCTAssertNil(store.persistenceError)
+            XCTAssertEqual(PreferencesStore(userDefaults: defaults, configurationFile: file).accountDisplayNames, ["C1": "변경"])
         }
     }
 
@@ -367,7 +433,7 @@ final class AppConfigurationFileTests: XCTestCase {
     /// 저장 허용 목록의 명시적 외부 계약
     private var allowedSettingFields: Set<String> {
         ["accountPaths", "enabledAccountIDs", "accountDisplayOrder", "refreshIntervalMinutes",
-         "resetReminderMinutes", "activityNotificationDurationSeconds", "showAccountLabels", "launchAtLogin"]
+         "resetReminderMinutes", "activityNotificationDurationSeconds", "showAccountLabels", "launchAtLogin", "accountDisplayNames"]
     }
 
     /// 인증정보 없는 이전 설정 파일의 기본 테스트 자료 생성
