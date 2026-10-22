@@ -125,6 +125,57 @@ public typealias CodexProcessFactory = @Sendable () -> any CodexProcessTransport
 public struct CodexQuotaService: Sendable {
     public static let overallTimeout: TimeInterval = 12
 
+    /// 확인된 단일 사용 시도 실행; 응답 유실 시 동일 키로만 재시도
+    public func consumeResetCredit(
+        for config: AccountConfig, creditID: String, idempotencyKey: String
+    ) async -> Result<ResetCreditOutcome, CodexQuotaServiceError> {
+        await Task.detached {
+            self.consumeResetCreditSync(for: config, creditID: creditID, idempotencyKey: idempotencyKey)
+        }.value
+    }
+
+    /// 계정별 app-server 초기화 후 선택 리셋권 사용 요청 1회 전송
+    func consumeResetCreditSync(
+        for config: AccountConfig, creditID: String, idempotencyKey: String
+    ) -> Result<ResetCreditOutcome, CodexQuotaServiceError> {
+        guard config.isConfigured else { return .failure(.notConfigured) }
+        guard !creditID.isEmpty, !idempotencyKey.isEmpty else {
+            return .failure(.protocolError("리셋권 식별자 또는 요청 키가 없습니다."))
+        }
+        guard FileManager.default.fileExists(atPath: config.authFile.path) else { return .failure(.loginRequired) }
+        guard let executable = locator.locate() else { return .failure(.codexNotFound) }
+        let deadline = Date().addingTimeInterval(Self.overallTimeout)
+        let process = processFactory()
+        defer { process.terminate(until: deadline) }
+        do {
+            try process.launch(executable: executable, home: config.home)
+            try process.send(CodexProtocol.initializeRequest)
+            guard let response = try process.readResponses(for: [0], until: deadline)[0] else {
+                throw CodexQuotaServiceError.timeout
+            }
+            try validateResponse(response, requestName: "initialize")
+            try process.send(CodexRequest(method: "initialized", params: .object([:])))
+            try process.send(CodexRequest(id: 3, method: "account/rateLimitResetCredit/consume", params: .object([
+                "creditId": .string(creditID), "idempotencyKey": .string(idempotencyKey),
+            ])))
+            guard let response = try process.readResponses(for: [3], until: deadline)[3] else {
+                throw CodexQuotaServiceError.timeout
+            }
+            try validateResponse(response, requestName: "account/rateLimitResetCredit/consume")
+            guard let raw = response.result?.objectValue?["outcome"]?.stringValue,
+                  let outcome = ResetCreditOutcome(rawValue: raw) else {
+                throw CodexQuotaServiceError.malformedResponse("리셋권 사용 결과를 확인할 수 없습니다.")
+            }
+            return .success(outcome)
+        } catch let error as CodexQuotaServiceError {
+            return .failure(error)
+        } catch let error as CodexProcessError {
+            return .failure(map(error))
+        } catch {
+            return .failure(.transport(error.localizedDescription))
+        }
+    }
+
     private let locator: any CodexLocating
     private let processFactory: CodexProcessFactory
 
