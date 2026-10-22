@@ -384,12 +384,33 @@ public struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("앱 실행") {
+                Section {
                     Toggle(Self.launchAtLoginLabel, isOn: $launchAtLogin)
                     Toggle("계정 이름 표시", isOn: $showAccountLabels)
                     Text("로그인 시 앱을 자동으로 실행합니다. macOS 시스템 설정 > 로그인 항목에서 승인이 필요할 수 있습니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } header: {
+                    Text("앱 실행")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("OpenAI와 무관한 비공식 독립 프로젝트입니다.")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("버전 \(appVersion)")
+                            .foregroundStyle(.secondary)
+                        Link(destination: URL(string: "https://github.com/jh-shi-n/codex_quota_checker")!) {
+                            HStack(spacing: 5) {
+                                Image(systemName: "chevron.left.slash.chevron.right")
+                                Text("GitHub")
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 9, weight: .medium))
+                            }
+                        }
+                        .help("https://github.com/jh-shi-n/codex_quota_checker")
+                        .accessibilityLabel("GitHub 프로젝트 저장소 열기")
+                    }
+                    .font(.caption)
                 }
             }
             .formStyle(.grouped)
@@ -410,6 +431,11 @@ public struct SettingsView: View {
         .onChange(of: accountPaths) { _, _ in synchronizeAccountPathDrafts() }
         .onChange(of: enabledAccountIDs) { _, _ in synchronizeAccountDisplayDrafts() }
         .onChange(of: accountDisplayOrder) { _, _ in synchronizeAccountDisplayDrafts() }
+    }
+
+    /// 설치 앱의 번들 버전 표시 및 소스 미리보기의 현재 릴리스 기본값
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.1"
     }
 
     private var refreshIntervalBinding: Binding<Int> {
