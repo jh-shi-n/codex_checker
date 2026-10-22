@@ -5,8 +5,14 @@
 import CodexQuotaMonitorKit
 
 extension CodexQuotaMonitorAppDelegate {
+    /// 앱 시작과 서비스 연결 및 진단·캐시 정리 시작
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = notification
+        DiagnosticLogContext.record(.appStarted, fields: [
+            .version: .identifier(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"),
+            .build: .identifier(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"),
+        ])
+        DiagnosticLogContext.recordCLIVersion()
         installWakeObserver()
         quotaResetNotifications.start()
         quotaResetScheduler.start()
@@ -27,8 +33,10 @@ extension CodexQuotaMonitorAppDelegate {
         }
     }
 
+    /// 진행 서비스 종료와 마지막 진단 이벤트의 디스크 기록 대기
     func applicationWillTerminate(_ notification: Notification) {
         _ = notification
+        DiagnosticLogContext.record(.appTerminating)
         sessionActivityDelivery.stop()
         quotaResetScheduler.stop()
         UsageWindowProbeStore.shared.cancelAll()
@@ -55,6 +63,7 @@ extension CodexQuotaMonitorAppDelegate {
         fallbackSettingsWindow = nil
         accountSetupModel?.cancelCheck()
         accountSetupWindow?.close()
+        DiagnosticLogger.shared.flush()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -70,6 +79,8 @@ extension CodexQuotaMonitorAppDelegate {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
+                DiagnosticLogContext.record(.appWoke)
+                DiagnosticLogger.shared.maintain()
                 await self?.tokenUsageCache.purgeExpired()
                 self?.preferences.cleanupQuotaSnapshots()
                 await self?.lifecycleCoordinator.wake()

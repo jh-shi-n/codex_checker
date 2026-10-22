@@ -138,7 +138,10 @@ public final class AccountStore: ObservableObject {
                       state(for: result.config.id)?.configurationGeneration == previousStates[result.config.id]?.configurationGeneration,
                       latestRequestIDs[result.config.id] == result.requestID,
                       accountGenerations[result.config.id] == generations[result.config.id]
-                else { continue }
+                else {
+                    logQuotaResult(.quotaResultDiscarded, result: result, reason: "superseded")
+                    continue
+                }
                 apply(result)
             }
         }
@@ -182,7 +185,10 @@ public final class AccountStore: ObservableObject {
         )
         guard configs.first(where: { $0.id == id }) == config,
               state(for: id)?.configurationGeneration == revision,
-              latestRequestIDs[id] == result.requestID else { return .superseded }
+              latestRequestIDs[id] == result.requestID else {
+            logQuotaResult(.quotaResultDiscarded, result: result, reason: "superseded")
+            return .superseded
+        }
         let shouldApply = appliedRequestIDs[id] != result.requestID
         if shouldApply { apply(result) }
         return result.state.status == .normal ? .succeeded(applied: shouldApply) : .failed
@@ -202,6 +208,10 @@ public final class AccountStore: ObservableObject {
         let oldStates = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
         let oldConfigs = Dictionary(uniqueKeysWithValues: configs.map { ($0.id, $0) })
         let normalized = Self.normalizeConfigs(newConfigs)
+        for config in normalized where oldConfigs[config.id] != config {
+            DiagnosticLogContext.record(.accountReconfigured, accountID: config.id,
+                                        fields: [.generation: .integer(configRevision)])
+        }
         configs = normalized
         states = normalized.map { config in
             if let previous = oldStates[config.id], oldConfigs[config.id] == config {
@@ -248,6 +258,8 @@ public final class AccountStore: ObservableObject {
         let config: AccountConfig
         let state: AccountState
         var requestID = UUID()
+        /// 자동·수동 조회가 같은 요청을 공유해도 원래 작업 문맥 유지
+        var operationID: UUID?
     }
 
     private struct FetchKey: Hashable, Sendable {
@@ -284,9 +296,22 @@ public final class AccountStore: ObservableObject {
             handle = existing
         } else {
             let requestID = UUID()
+            let operationID = DiagnosticLogContext.operationID ?? requestID
+            let logger = DiagnosticLogContext.logger ?? .shared
             let task = Task.detached(priority: nil) {
+                let started = ProcessInfo.processInfo.systemUptime
+                logger.record(.quotaRefreshStarted, operationID: operationID, accountID: config.id,
+                              fields: [.requestID: .identifier(requestID.uuidString),
+                                       .generation: .integer(revision), .forceFresh: .boolean(forceFresh)])
                 var result = await Self.fetch(config: config, previous: previous, loader: loader)
                 result.requestID = requestID
+                result.operationID = operationID
+                var fields = DiagnosticLogContext.resetFields(before: previous, after: result.state)
+                fields[.requestID] = .identifier(requestID.uuidString)
+                fields[.status] = .identifier(result.state.status.rawValue)
+                fields[.durationMS] = DiagnosticLogContext.elapsedMS(since: started)
+                logger.record(.quotaRefreshFinished, level: result.state.status == .normal ? .notice : .error,
+                              operationID: operationID, accountID: config.id, fields: fields)
                 return result
             }
             let created = FetchHandle(task: task, requestID: requestID)
@@ -418,6 +443,7 @@ public final class AccountStore: ObservableObject {
             }
         }
         states[index] = state
+        logQuotaResult(.quotaResultApplied, result: result)
         guard result.config.isConfigured, result.state.status == .normal else { return }
         let earlyReset = EarlyQuotaReset.detect(
             previous: preferencesStore.quotaSnapshot(for: result.config.home),
@@ -439,6 +465,20 @@ public final class AccountStore: ObservableObject {
         if let earlyReset {
             onEarlyQuotaReset?(earlyReset)
         }
+    }
+
+    /// 조회 식별자와 세대로 화면 반영·무시 결과의 연결 기록
+    private func logQuotaResult(_ event: DiagnosticEvent, result: AccountFetchResult, reason: String? = nil) {
+        var fields: [DiagnosticField: DiagnosticValue] = [
+            .requestID: .identifier(result.requestID.uuidString),
+            .status: .identifier(result.state.status.rawValue),
+            .generation: .integer(state(for: result.config.id)?.configurationGeneration ?? 0),
+        ]
+        if let reason { fields[.reason] = .identifier(reason) }
+        (DiagnosticLogContext.logger ?? .shared).record(
+            event, operationID: result.operationID ?? DiagnosticLogContext.operationID ?? result.requestID,
+            accountID: result.config.id, fields: fields
+        )
     }
 
     private static func initialState(

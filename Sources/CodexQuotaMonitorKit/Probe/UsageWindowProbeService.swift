@@ -528,18 +528,22 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         let wakeSignal = DispatchSemaphore(value: 0)
         let exitSignal = DispatchSemaphore(value: 0)
         let cancellation = ProcessCancellation(wakeSignal: wakeSignal)
+        let operationID = DiagnosticLogContext.operationID
+        let logger = DiagnosticLogContext.logger ?? .shared
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<UsageWindowProbeProcessResult, Error>) in
                 DispatchQueue.global(qos: .utility).async {
                     do {
-                        continuation.resume(returning: try self.runSynchronously(
-                            command: command,
-                            timeout: timeout,
-                            cancellation: cancellation,
-                            wakeSignal: wakeSignal,
-                            exitSignal: exitSignal
-                        ))
+                        let result = try DiagnosticLogContext.$logger.withValue(logger) {
+                            try DiagnosticLogContext.$operationID.withValue(operationID) {
+                                try self.runSynchronously(
+                                    command: command, timeout: timeout, cancellation: cancellation,
+                                    wakeSignal: wakeSignal, exitSignal: exitSignal
+                                )
+                            }
+                        }
+                        continuation.resume(returning: result)
                     } catch {
                         continuation.resume(throwing: error)
                     }
@@ -555,6 +559,14 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
                                 isolation: UsageWindowProbeExecutionIsolation,
                                 cancellation: ProcessCancellation,
                                 timeout: TimeInterval) throws -> URL {
+        let started = ProcessInfo.processInfo.systemUptime
+        var succeeded = false
+        DiagnosticLogContext.record(.catalogStarted)
+        defer {
+            DiagnosticLogContext.record(.catalogFinished, level: succeeded ? .notice : .error,
+                                        fields: [.applied: .boolean(succeeded),
+                                                 .durationMS: DiagnosticLogContext.elapsedMS(since: started)])
+        }
         let process = Process()
         let output = Pipe()
         let errors = Pipe()
@@ -617,6 +629,7 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
             try JSONSerialization.data(withJSONObject: catalog).write(to: url, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         } catch { throw UsageWindowProbeProcessError.configurationFailure }
+        succeeded = true
         return url
     }
 
@@ -627,6 +640,15 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         wakeSignal: DispatchSemaphore,
         exitSignal: DispatchSemaphore
     ) throws -> UsageWindowProbeProcessResult {
+        let processStarted = ProcessInfo.processInfo.systemUptime
+        var processFields: [DiagnosticField: DiagnosticValue] = [:]
+        var processSucceeded = false
+        DiagnosticLogContext.record(.processStarted, fields: [.model: .identifier(command.modelIdentifier)])
+        defer {
+            processFields[.durationMS] = DiagnosticLogContext.elapsedMS(since: processStarted)
+            DiagnosticLogContext.record(.processFinished, level: processSucceeded ? .notice : .error,
+                                        fields: processFields)
+        }
         let isolation: UsageWindowProbeExecutionIsolation
         do {
             isolation = try UsageWindowProbeExecutionIsolation.create(
@@ -742,6 +764,9 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         drain(errorPipe.fileHandleForReading, into: errorCollector)
 
         let status: Int32? = process.isRunning ? nil : process.terminationStatus
+        if let status { processFields[.exitCode] = .integer(Int(status)) }
+        if cancellation.isCancelled { processFields[.reason] = .identifier("cancelled") }
+        if didTimeout { processFields[.reason] = .identifier("timeout") }
         process.terminationHandler = nil
         close(pipe: inputPipe)
         close(pipe: outputPipe)
@@ -756,6 +781,7 @@ public final class UsageWindowProbeLiveProcessRunner: UsageWindowProbeProcessRun
         guard status != nil else {
             throw UsageWindowProbeProcessError.processFailure
         }
+        processSucceeded = status == 0
         return UsageWindowProbeProcessResult(
             exitStatus: status,
             stdout: outputCollector.value,
@@ -893,13 +919,14 @@ public actor UsageWindowProbeService {
         self.clock = clock
     }
 
-    /// Runs the probe for one configured account. This service only returns
-    /// the probe result; refreshing AccountStore and interpreting reset times
-    /// remain responsibilities of the caller.
+    /// 설정 계정의 Ping 실행과 단계별 진단 기록; 한도 재조회·초기화 시각 해석은 호출자 책임
     public func probe(_ config: AccountConfig) async -> UsageWindowProbeResult {
         let startedAt = clock()
+        let startedUptime = ProcessInfo.processInfo.systemUptime
         let commandMetadata = commandBuilder.metadata
         if activeAccountIDs.contains(config.id) {
+            DiagnosticLogContext.record(.probeRejected, accountID: config.id,
+                                        fields: [.reason: .identifier("already_running")])
             let completedAt = clock()
             return UsageWindowProbeResult(
                 accountID: config.id,
@@ -912,6 +939,8 @@ public actor UsageWindowProbeService {
         }
 
         activeAccountIDs.insert(config.id)
+        DiagnosticLogContext.record(.probeStarted, accountID: config.id,
+                                    fields: [.model: .identifier(commandMetadata.modelIdentifier)])
         states[config.id] = UsageWindowProbeState(
             accountID: config.id,
             status: .running,
@@ -920,6 +949,15 @@ public actor UsageWindowProbeService {
         )
 
         let result = await execute(config: config, startedAt: startedAt)
+        var fields: [DiagnosticField: DiagnosticValue] = [
+            .status: .identifier(result.status.rawValue),
+            .durationMS: DiagnosticLogContext.elapsedMS(since: startedUptime),
+        ]
+        if let failure = result.failureCategory { fields[.failure] = .identifier(failure.rawValue) }
+        if let count = result.inputTokens { fields[.inputTokens] = .integer(count) }
+        if let count = result.outputTokens { fields[.outputTokens] = .integer(count) }
+        DiagnosticLogContext.record(.probeFinished, level: result.isSuccess || result.isCancelled ? .notice : .error,
+                                    accountID: config.id, fields: fields)
         activeAccountIDs.remove(config.id)
         states[config.id] = UsageWindowProbeState(
             accountID: config.id,
