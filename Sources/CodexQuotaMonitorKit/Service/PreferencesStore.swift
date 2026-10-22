@@ -100,6 +100,8 @@ public final class PreferencesStore: ObservableObject {
         var firstAccountRegisteredAt: Date?
     }
 
+    @Published public private(set) var cacheError: String?
+    private let quotaStore: SQLiteQuotaSnapshotStore?
     private var quotaSnapshotsStorage: [String: QuotaSnapshot]
 
     /// 목적: 설정값 로드, 기본값 병합, 비정규 저장값 정리
@@ -108,10 +110,13 @@ public final class PreferencesStore: ObservableObject {
         defaultPaths: [String]? = nil,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileSystem: AccountPathFileSystem = .live,
-        configurationFile: AppConfigurationFile? = nil
+        configurationFile: AppConfigurationFile? = nil,
+        quotaDatabaseURL: URL? = nil
     ) {
         self.userDefaults = userDefaults
         self.configurationFile = configurationFile
+        self.quotaStore = (quotaDatabaseURL ?? (userDefaults === UserDefaults.standard ? TokenUsageSnapshotCache.defaultDatabaseURL : nil))
+            .map { SQLiteQuotaSnapshotStore(databaseURL: $0) }
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.fileSystem = fileSystem
         let requestedDefaults = defaultPaths ?? Array(repeating: "", count: Self.accountPathCount)
@@ -192,10 +197,24 @@ public final class PreferencesStore: ObservableObject {
             persistedActivityDuration ?? Self.defaultActivityNotificationDurationSeconds
         )
         let rawQuotaSnapshots = userDefaults.data(forKey: Keys.lastSuccessfulQuotaSnapshots)
-        self.quotaSnapshotsStorage = Self.decodedQuotaSnapshots(
-            rawQuotaSnapshots,
-            homeDirectory: self.homeDirectory
-        )
+        self.quotaSnapshotsStorage = Self.decodedQuotaSnapshots(rawQuotaSnapshots, homeDirectory: self.homeDirectory)
+        if let quotaStore {
+            do {
+                if let rawQuotaSnapshots {
+                    let decoded = try JSONDecoder().decode([String: QuotaSnapshot].self, from: rawQuotaSnapshots)
+                    let canonical = Dictionary(decoded.map { (Self.normalizedAccountPath($0.key, homeDirectory: self.homeDirectory), $0.value) }, uniquingKeysWith: { _, last in last })
+                    let existing = try quotaStore.load()
+                    let missing = canonical.filter { existing[$0.key] == nil && !$0.key.isEmpty }
+                    try quotaStore.save(missing)
+                    let restored = try quotaStore.load()
+                    guard missing.allSatisfy({ restored[$0.key] == $0.value || ($0.value.lastUpdated ?? Date()).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) <= Date() }) else {
+                        throw CocoaError(.fileReadCorruptFile)
+                    }
+                    userDefaults.removeObject(forKey: Keys.lastSuccessfulQuotaSnapshots)
+                }
+                self.quotaSnapshotsStorage = try quotaStore.load()
+            } catch { self.cacheError = "할당량 캐시를 복원하지 못했습니다: \(error.localizedDescription)" }
+        }
 
         // Missing keys are allowed to remain absent. Invalid or non-canonical
         // raw values are written back once so subsequent launches read the
@@ -222,36 +241,6 @@ public final class PreferencesStore: ObservableObject {
 
     /// 계정 표시 활성화 여부와 독립적인 등록 경로 존재 여부
     public var hasRegisteredAccounts: Bool { accountPaths.contains { !$0.isEmpty } }
-
-    /// 설정 창 재진입 시 JSON을 다시 읽고 잘못된 파일은 현재 메모리 상태로 대체하지 않는 로드
-    @discardableResult
-    public func reloadFromConfiguration() -> Bool {
-        guard let configurationFile else { return false }
-        do {
-            guard try configurationFile.read()?.settings != nil else { return false }
-        } catch {
-            persistenceError = "설정 파일을 읽지 못했습니다: \(error.localizedDescription)"
-            return false
-        }
-        let loaded = PreferencesStore(
-            userDefaults: userDefaults, defaultPaths: defaultPaths, homeDirectory: homeDirectory,
-            fileSystem: fileSystem, configurationFile: configurationFile
-        )
-        guard loaded.persistenceError == nil else {
-            persistenceError = loaded.persistenceError
-            return false
-        }
-        accountPaths = loaded.accountPaths
-        enabledAccountIDs = loaded.enabledAccountIDs
-        accountDisplayOrder = loaded.accountDisplayOrder
-        refreshIntervalMinutes = loaded.refreshIntervalMinutes
-        resetReminderMinutes = loaded.resetReminderMinutes
-        activityNotificationDurationSeconds = loaded.activityNotificationDurationSeconds
-        showAccountLabels = loaded.showAccountLabels
-        launchAtLogin = loaded.launchAtLogin
-        persistenceError = nil
-        return true
-    }
 
     /// Compatibility alias for settings views that use the shorter name.
     public var intervalMinutes: Int { refreshIntervalMinutes }
@@ -283,7 +272,10 @@ public final class PreferencesStore: ObservableObject {
         let normalizedPath = normalizedAccountPath(accountPath)
         guard !normalizedPath.isEmpty else { return }
         quotaSnapshotsStorage[normalizedPath] = snapshot
-        persist()
+        do {
+            try quotaStore?.save([normalizedPath: snapshot])
+            cacheError = nil
+        } catch { cacheError = "할당량 캐시를 저장하지 못했습니다: \(error.localizedDescription)" }
     }
 
     public func updateQuotaSnapshot(for accountPath: URL, snapshot: QuotaSnapshot) {
@@ -294,7 +286,10 @@ public final class PreferencesStore: ObservableObject {
         let normalizedPath = normalizedAccountPath(accountPath)
         guard !normalizedPath.isEmpty else { return }
         quotaSnapshotsStorage.removeValue(forKey: normalizedPath)
-        persist()
+        do {
+            try quotaStore?.remove(path: normalizedPath)
+            cacheError = nil
+        } catch { cacheError = "할당량 캐시를 삭제하지 못했습니다: \(error.localizedDescription)" }
     }
 
     public func removeQuotaSnapshot(for accountPath: URL) {
