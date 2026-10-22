@@ -81,6 +81,7 @@ public struct AccountDetailView: View {
                     probe: currentProbePresentation,
                     isRunning: isProbeRunning,
                     runningStartedAt: probeStore.startedAt(for: account),
+                    lastExecutionAt: probeStore.lastStartedAt(for: account),
                     isConfigured: displayedAccount.status != .notConfigured,
                     onRun: runProbe
                 )

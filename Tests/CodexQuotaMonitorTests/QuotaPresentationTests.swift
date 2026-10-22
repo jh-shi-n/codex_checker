@@ -204,8 +204,8 @@ final class QuotaPresentationTests: XCTestCase {
             isRunning: true
         )
 
-        XCTAssertEqual(UsageWindowProbeSection.sectionTitle, "초기화 시간 고정")
-        XCTAssertEqual(idle.buttonTitle, "시간 고정")
+        XCTAssertEqual(UsageWindowProbeSection.sectionTitle, "초기화 시간 설정")
+        XCTAssertEqual(idle.buttonTitle, "시간 설정")
         XCTAssertEqual(running.buttonTitle, "전송 중…")
     }
 
@@ -219,11 +219,11 @@ final class QuotaPresentationTests: XCTestCase {
         let presentation = UsageWindowProbePresentationResult(result: result, quotaRefreshSucceeded: true)
         let running = UsageWindowProbeSection(account: AccountState(id: "C1", status: .normal),
             probe: presentation, isRunning: true, runningStartedAt: current)
-        XCTAssertEqual(running.lastRunText, AccountDashboardFormatting.dateText(current))
+        XCTAssertEqual(running.lastRunText, AccountDashboardFormatting.dateText(current, timeStyle: .medium))
         XCTAssertEqual(running.tokenText, "—")
         XCTAssertEqual(running.resultText, "전송 중")
-        let finished = UsageWindowProbeSection(account: AccountState(id: "C1", status: .normal), probe: presentation)
-        XCTAssertEqual(finished.lastRunText, AccountDashboardFormatting.dateText(previous))
+        let finished = UsageWindowProbeSection(account: AccountState(id: "C1", status: .normal), probe: presentation, lastExecutionAt: current)
+        XCTAssertEqual(finished.lastRunText, AccountDashboardFormatting.dateText(current, timeStyle: .medium))
         XCTAssertEqual(finished.tokenText, "174 토큰")
         XCTAssertEqual(finished.resultText, "초기화 시간 확인 완료")
     }

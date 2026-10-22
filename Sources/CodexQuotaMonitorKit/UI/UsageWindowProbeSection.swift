@@ -1,14 +1,15 @@
 import SwiftUI
 
-/// 초기화 시간 고정 요청의 실행 상태와 결과 표시
+/// 초기화 시간 설정 요청의 실행 상태와 결과 표시
 public struct UsageWindowProbeSection: View {
     /// 섹션 제목
-    public static let sectionTitle = "초기화 시간 고정"
+    public static let sectionTitle = "초기화 시간 설정"
 
     public let account: AccountState
     public let probe: UsageWindowProbePresentationResult?
     public let isRunning: Bool
     public let runningStartedAt: Date?
+    public let lastExecutionAt: Date?
     public let isConfigured: Bool
     public let onRun: () -> Void
 
@@ -18,6 +19,7 @@ public struct UsageWindowProbeSection: View {
         probe: UsageWindowProbePresentationResult? = nil,
         isRunning: Bool = false,
         runningStartedAt: Date? = nil,
+        lastExecutionAt: Date? = nil,
         isConfigured: Bool? = nil,
         onRun: @escaping () -> Void = {}
     ) {
@@ -25,6 +27,7 @@ public struct UsageWindowProbeSection: View {
         self.probe = probe
         self.isRunning = isRunning
         self.runningStartedAt = runningStartedAt
+        self.lastExecutionAt = lastExecutionAt
         self.isConfigured = isConfigured ?? (account.status != .notConfigured)
         self.onRun = onRun
     }
@@ -45,7 +48,7 @@ public struct UsageWindowProbeSection: View {
                     }
                     .buttonStyle(QuotaResetButtonStyle())
                     .disabled(!canRun)
-                    .help("최소 요청으로 사용 구간을 시작하고 서버의 초기화 시간을 확인합니다. 실제 사용량이 발생하며, 시간 고정 여부는 서버 상태에 따라 달라집니다.")
+                    .help("최소 요청으로 사용 구간을 시작하고 서버의 초기화 시간을 확인합니다. 실제 사용량이 발생하며, 시간 설정 여부는 서버 상태에 따라 달라집니다.")
                     .accessibilityLabel(buttonTitle)
                     .accessibilityHint("최소 요청으로 서버 사용량이 발생할 수 있습니다")
                 }
@@ -82,13 +85,13 @@ public struct UsageWindowProbeSection: View {
     /// 실행 중 여부에 따른 버튼 표시명
     public var buttonTitle: String {
         if isRunning { return "전송 중…" }
-        return "시간 고정"
+        return "시간 설정"
     }
 
     @ViewBuilder
     private var probeDetails: some View {
         VStack(alignment: .leading, spacing: 4) {
-            detailRow(label: "실행 시각", value: lastRunText)
+            detailRow(label: "마지막 실행 시각", value: lastRunText)
             detailRow(label: "결과", value: resultText)
             detailRow(label: "소모 토큰", value: tokenText)
         }
@@ -101,18 +104,18 @@ public struct UsageWindowProbeSection: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(label)
                 .foregroundStyle(.secondary)
-                .frame(width: 76, alignment: .leading)
+                .frame(width: 96, alignment: .leading)
             Text(value)
                 .fontWeight(.medium)
                 .lineLimit(2)
         }
     }
 
-    /// 실제 요청 시작 시각 표시; 실행 중 이전 결과의 시각 재사용 제외
+    /// 마지막 버튼 실행 시각 표시; 서버 응답 시각으로 덮어쓰기 제외
     var lastRunText: String {
-        let startedAt = isRunning ? runningStartedAt : probe?.result.startedAt
+        let startedAt = lastExecutionAt ?? runningStartedAt
         guard let startedAt else { return "—" }
-        return AccountDashboardFormatting.dateText(startedAt)
+        return AccountDashboardFormatting.dateText(startedAt, timeStyle: .medium)
     }
 
     /// Ping 실행·취소와 한도 재조회 결과를 구분한 문구

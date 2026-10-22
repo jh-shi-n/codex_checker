@@ -23,6 +23,7 @@ public final class UsageWindowProbeStore: ObservableObject {
 
     @Published private var running: Set<Key> = []
     @Published private var results: [Key: UsageWindowProbePresentationResult] = [:]
+    @Published private var lastStartedAtByAccount: [Key: Date] = [:]
     private var tasks: [Key: Operation] = [:]
 
     /// 취소 후 재시작된 동일 계정 작업의 완료 처리 격리
@@ -42,6 +43,11 @@ public final class UsageWindowProbeStore: ObservableObject {
         tasks[Key(account)]?.startedAt
     }
 
+    /// 버튼 실행 시각의 메모리 조회; 완료·팝오버 닫기 이후에도 유지
+    func lastStartedAt(for account: AccountState) -> Date? {
+        lastStartedAtByAccount[Key(account)]
+    }
+
     /// 현재 계정 설정에 속한 마지막 실행 결과 반환
     func presentation(for account: AccountState) -> UsageWindowProbePresentationResult? {
         results[Key(account)]
@@ -54,6 +60,9 @@ public final class UsageWindowProbeStore: ObservableObject {
         guard AccountDashboardActionState.canRunProbe(account: account, isRunning: running.contains(key)) else {
             return nil
         }
+        let startedAt = Date()
+        lastStartedAtByAccount = lastStartedAtByAccount.filter { $0.key.id != key.id || $0.key == key }
+        lastStartedAtByAccount[key] = startedAt
         running.insert(key)
         let operationID = UUID()
         let task = Task { @MainActor in
@@ -69,7 +78,7 @@ public final class UsageWindowProbeStore: ObservableObject {
                 results[key] = presentation
             }
         }
-        tasks[key] = Operation(id: operationID, task: task, startedAt: Date())
+        tasks[key] = Operation(id: operationID, task: task, startedAt: startedAt)
         return task
     }
 
