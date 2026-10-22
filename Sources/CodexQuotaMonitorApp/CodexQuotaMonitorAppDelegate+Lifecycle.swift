@@ -2,6 +2,7 @@
 // 이용처: 앱 위임자의 macOS 수명주기 콜백
 // 사용방법: NSApplicationDelegate 이벤트를 통한 자동 호출
 @preconcurrency import AppKit
+import CodexQuotaMonitorKit
 
 extension CodexQuotaMonitorAppDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -27,6 +28,7 @@ extension CodexQuotaMonitorAppDelegate {
         _ = notification
         sessionActivityDelivery.stop()
         quotaResetScheduler.stop()
+        UsageWindowProbeStore.shared.cancelAll()
         serviceStatus.cancel()
         tokenCleanupTask?.cancel()
         tokenCleanupTask = nil
