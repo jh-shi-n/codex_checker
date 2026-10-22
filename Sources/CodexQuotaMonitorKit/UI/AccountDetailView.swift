@@ -21,10 +21,8 @@ public struct AccountDetailView: View {
     @State private var tokenUsageRefreshFailed = false
     @State private var tokenUsageRefreshError: TokenUsageSnapshotError?
     @State private var isTokenUsageExpanded = false
-    @State private var probePresentation: UsageWindowProbePresentationResult?
-    @State private var isProbeRunning = false
+    @ObservedObject private var probeStore = UsageWindowProbeStore.shared
     @State private var tokenUsageRefreshTask: Task<Void, Never>?
-    @State private var probeTask: Task<Void, Never>?
 
     public init(
         account: AccountState,
@@ -115,21 +113,9 @@ public struct AccountDetailView: View {
                 await loadCachedTokenUsageSnapshot()
             }
         }
-        .onChange(of: account.status) { _, status in
-            if status == .notConfigured || (status == .loading && !isProbeRunning) {
-                isProbeRunning = false
-                probePresentation = nil
-            }
-        }
-        .onChange(of: account.id) { _, _ in
-            probePresentation = nil
-            isProbeRunning = false
-        }
         .onDisappear {
             tokenUsageRefreshTask?.cancel()
-            probeTask?.cancel()
             isTokenUsageLoading = false
-            isProbeRunning = false
         }
     }
 
@@ -300,7 +286,7 @@ public struct AccountDetailView: View {
     private var currentProbePresentation: UsageWindowProbePresentationResult? {
         guard account.status != .notConfigured,
               account.status != .loading,
-              let probePresentation,
+              let probePresentation = probeStore.presentation(for: account),
               probePresentation.isCurrentAccount,
               probePresentation.result.accountID == account.id
         else { return nil }
@@ -359,24 +345,12 @@ public struct AccountDetailView: View {
         }
     }
 
-    /// 선택 계정 Ping 결과를 계정 ID 기준으로 반영
-    private func runProbe() {
-        guard AccountDashboardActionState.canRunProbe(
-            account: account,
-            isRunning: isProbeRunning
-        ) else { return }
+    /// 계정별 공용 저장소의 실행 상태 조회
+    private var isProbeRunning: Bool { probeStore.isRunning(for: account) }
 
-        isProbeRunning = true
-        probeTask = Task { @MainActor in
-            let presentation = await runUsageWindowProbe(account)
-            guard !Task.isCancelled else { return }
-            guard presentation.result.accountID == account.id else {
-                isProbeRunning = false
-                return
-            }
-            probePresentation = presentation
-            isProbeRunning = false
-        }
+    /// 화면 수명과 독립적으로 선택 계정의 초기화 갱신 시작
+    private func runProbe() {
+        probeStore.start(for: account, runner: runUsageWindowProbe)
     }
 
     /// 계정 조회 상태의 상세 화면 표시명 변환
