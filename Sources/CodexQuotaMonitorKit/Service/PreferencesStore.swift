@@ -184,7 +184,7 @@ public final class PreferencesStore: ObservableObject {
             homeDirectory: self.homeDirectory
         )
         self.accountPaths = normalizedPathResult.values
-        if bundle == nil && loadError == nil && self.accountPaths.contains(where: { !$0.isEmpty }) {
+        if bundle == nil && loadError == nil && normalizedPathResult.values.contains(where: { !$0.isEmpty }) {
             self.hasRegisteredAccount = true
         }
 

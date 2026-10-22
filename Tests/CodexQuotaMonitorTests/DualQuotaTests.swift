@@ -239,7 +239,10 @@ final class DualQuotaTests: XCTestCase {
 
     func testQuotaSnapshotRestoresBothQuotasAndAccountStorePreservesBothOnError() async throws {
         let defaults = UserDefaults(suiteName: "CodexQuotaMonitorTests.\(UUID().uuidString)")!
-        let preferences = PreferencesStore(userDefaults: defaults)
+        let cacheRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let database = cacheRoot.appendingPathComponent("token-usage.sqlite")
+        let preferences = PreferencesStore(userDefaults: defaults, defaultPaths: (1...4).map { "/tmp/dual-quota-\($0)" }, quotaDatabaseURL: database)
         let configs = (1...4).map { index in
             AccountConfig(
                 id: "C\(index)",
@@ -255,7 +258,7 @@ final class DualQuotaTests: XCTestCase {
         }
 
         await store.refresh(accountID: "C1")
-        let reloadedPreferences = PreferencesStore(userDefaults: defaults)
+        let reloadedPreferences = PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database)
         let snapshot = reloadedPreferences.quotaSnapshot(for: configs[0].home)
         XCTAssertEqual(snapshot?.primaryRemainingPercent, 80)
         XCTAssertEqual(snapshot?.secondaryRemainingPercent, 40)
