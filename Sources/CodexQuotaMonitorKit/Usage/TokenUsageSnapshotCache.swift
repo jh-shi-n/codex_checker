@@ -20,6 +20,9 @@ public actor TokenUsageSnapshotCache {
             .standardizedFileURL
     }
 
+    /// 정리 실패의 호출자 조회 경계; 다음 주기의 성공 시 해제
+    public var hasCleanupFailure: Bool { persistence?.hasCleanupFailure ?? false }
+
     private let provider: any TokenUsageProvider
     private let invalidationState: InvalidationState
     private let persistence: SQLiteTokenUsageSnapshotStore?

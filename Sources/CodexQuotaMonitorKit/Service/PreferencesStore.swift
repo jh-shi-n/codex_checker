@@ -149,6 +149,11 @@ public final class PreferencesStore: ObservableObject {
         self.persistenceError = loadError
         self.committedBundle = bundle
         if let bundle {
+            for key in [Keys.accountPaths, Keys.enabledAccountIDs, Keys.accountDisplayOrder,
+                        Keys.refreshIntervalMinutes, Keys.resetReminderMinutes, Keys.launchAtLogin,
+                        Keys.showAccountLabels, Keys.activityNotificationDurationSeconds] {
+                userDefaults.removeObject(forKey: key)
+            }
             self.hasRegisteredAccount = bundle.hasRegisteredAccount
             self.firstAccountRegisteredAt = bundle.firstAccountRegisteredAt
         }
@@ -258,6 +263,7 @@ public final class PreferencesStore: ObservableObject {
     public func quotaSnapshot(for accountPath: String) -> QuotaSnapshot? {
         let normalizedPath = normalizedAccountPath(accountPath)
         guard !normalizedPath.isEmpty else { return nil }
+        cleanupQuotaSnapshots()
         return quotaSnapshotsStorage[normalizedPath]
     }
 
@@ -274,7 +280,7 @@ public final class PreferencesStore: ObservableObject {
         quotaSnapshotsStorage[normalizedPath] = snapshot
         do {
             try quotaStore?.save([normalizedPath: snapshot])
-            cacheError = nil
+            cleanupQuotaSnapshots()
         } catch { cacheError = "할당량 캐시를 저장하지 못했습니다: \(error.localizedDescription)" }
     }
 
@@ -294,6 +300,19 @@ public final class PreferencesStore: ObservableObject {
 
     public func removeQuotaSnapshot(for accountPath: URL) {
         removeQuotaSnapshot(for: accountPath.path)
+    }
+
+    /// 설정과 독립적인 할당량 정리 오류 기록 및 재시도
+    public func cleanupQuotaSnapshots(now: Date = Date()) {
+        guard !settingsLoadFailed else { return }
+        let paths = Set(accountPaths.filter { !$0.isEmpty })
+        do {
+            try quotaStore?.cleanup(registeredPaths: paths, now: now)
+            quotaSnapshotsStorage = quotaSnapshotsStorage.filter {
+                paths.contains($0.key) && ($0.value.lastUpdated ?? now).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) > now
+            }
+            cacheError = nil
+        } catch { cacheError = "할당량 캐시 정리에 실패했습니다. 다음 주기에 재시도합니다: \(error.localizedDescription)" }
     }
 
     /// Returns the normalized representation used as a snapshot key.
@@ -342,12 +361,14 @@ public final class PreferencesStore: ObservableObject {
     /// five-minute default and values above the maximum clamp before being
     /// published and persisted.
     public func updateRefreshInterval(minutes: Int) {
+        guard !settingsLoadFailed else { return }
         refreshIntervalMinutes = RefreshService.normalizedIntervalMinutes(minutes)
         persist()
     }
 
     /// 사전 알림 시점 저장; 도달 시각 재조회와 알림은 별도 유지
     public func updateResetReminder(minutes: Int) {
+        guard !settingsLoadFailed else { return }
         resetReminderMinutes = Self.normalizedResetReminderMinutes(minutes)
         persist()
     }
@@ -401,6 +422,7 @@ public final class PreferencesStore: ObservableObject {
                 return false
             }
         }
+        if normalized.contains(where: { !$0.isEmpty }) { return registerAccountPaths(normalized) }
         accountPaths = normalized
         return persist()
     }
@@ -408,6 +430,7 @@ public final class PreferencesStore: ObservableObject {
     /// 목적: 활성 계정 ID를 정규화해 게시·저장
     /// 조건: 빈 배열 허용, 유효한 C1–C4 ID만 유지
     public func updateEnabledAccountIDs(_ ids: [String]) {
+        guard !settingsLoadFailed else { return }
         enabledAccountIDs = Self.normalizedAccountIDs(ids)
         persist()
     }
@@ -415,6 +438,7 @@ public final class PreferencesStore: ObservableObject {
     /// 목적: 계정 표시 순서를 전체 ID 순열로 정규화해 게시·저장
     /// 조건: 누락 ID는 기본 순서대로 뒤에 추가
     public func updateAccountDisplayOrder(_ ids: [String]) {
+        guard !settingsLoadFailed else { return }
         accountDisplayOrder = Self.normalizedAccountDisplayOrder(ids)
         persist()
     }
@@ -429,16 +453,19 @@ public final class PreferencesStore: ObservableObject {
     }
 
     public func updateLaunchAtLogin(_ enabled: Bool) {
+        guard !settingsLoadFailed else { return }
         launchAtLogin = enabled
         persist()
     }
 
     public func updateShowAccountLabels(_ enabled: Bool) {
+        guard !settingsLoadFailed else { return }
         showAccountLabels = enabled
         persist()
     }
 
     public func updateActivityNotificationDuration(seconds: Int) {
+        guard !settingsLoadFailed else { return }
         activityNotificationDurationSeconds = Self.normalizedActivityNotificationDurationSeconds(seconds)
         persist()
     }
@@ -483,6 +510,7 @@ public final class PreferencesStore: ObservableObject {
             userDefaults.set(data, forKey: Keys.settingsBundle)
             committedBundle = candidate
             persistenceError = nil
+            cleanupQuotaSnapshots()
             return true
         } catch {
             if let committedBundle { restore(committedBundle.settings) }
