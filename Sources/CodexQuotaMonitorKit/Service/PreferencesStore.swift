@@ -20,9 +20,7 @@ public final class PreferencesStore: ObservableObject {
         public static let lastSuccessfulQuotaSnapshots = "CodexQuotaMonitor.lastSuccessfulQuotaSnapshots"
     }
 
-    /// The small, local-only part of a successful account response that is
-    /// useful while the next refresh is in progress. It deliberately excludes
-    /// identity, credentials, and the raw app-server response.
+    /// 인증정보·원본 응답을 제외한 최근 정상 할당량의 SQLite 저장 자료형
     public struct QuotaSnapshot: Codable, Equatable, Sendable {
         public let usedPercent: Double?
         public let remainingPercent: Double?
@@ -258,9 +256,7 @@ public final class PreferencesStore: ObservableObject {
     /// Compatibility alias for hosts that refer to persisted homes as paths.
     public var paths: [String] { accountPaths }
 
-    /// Canonicalized snapshots currently retained in local settings. The
-    /// dictionary key is the normalized account home path, never an account
-    /// identifier, so changing a home cannot reuse another account's data.
+    /// 슬롯 ID 대신 정규화 경로로 구분한 정상 할당량의 메모리 사본
     public var lastSuccessfulQuotaSnapshots: [String: QuotaSnapshot] {
         quotaSnapshotsStorage
     }
@@ -309,11 +305,11 @@ public final class PreferencesStore: ObservableObject {
 
     /// 설정과 독립적인 할당량 정리 오류 기록 및 재시도
     public func cleanupQuotaSnapshots(now: Date = Date()) {
-        guard !settingsLoadFailed else { return }
+        guard !settingsLoadFailed, let quotaStore else { return }
         let paths = Set(accountPaths.filter { !$0.isEmpty })
         do {
-            try quotaStore?.cleanup(registeredPaths: paths, now: now)
-            if let quotaStore { quotaSnapshotsStorage = try quotaStore.load(now: now) }
+            try quotaStore.cleanup(registeredPaths: paths, now: now)
+            quotaSnapshotsStorage = try quotaStore.load(now: now)
             quotaSnapshotsStorage = quotaSnapshotsStorage.filter {
                 paths.contains($0.key) && ($0.value.lastUpdated ?? now).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) > now
             }
