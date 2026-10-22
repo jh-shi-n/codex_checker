@@ -394,6 +394,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         guard result.isSuccess,
               isCurrent
         else {
+            if !isCurrent {
+                DiagnosticLogContext.record(.probeResultDiscarded, accountID: account.id,
+                                            fields: [.reason: .identifier("configuration_changed")])
+            }
             return UsageWindowProbePresentationResult(
                 result: result,
                 primaryResetBefore: before.primaryResetAt,

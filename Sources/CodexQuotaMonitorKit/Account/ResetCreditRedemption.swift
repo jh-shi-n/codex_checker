@@ -72,25 +72,64 @@ final class ResetCreditRedemptionStore: ObservableObject {
     func start(
         credit: RateLimitResetCredits.Credit, account: AccountState, runner: @escaping ResetCreditRunner
     ) -> Task<Void, Never>? {
-        guard canUse(credit, for: account) else { return nil }
+        let operationID = UUID()
+        let logger = DiagnosticLogContext.logger ?? .shared
+        guard canUse(credit, for: account) else {
+            logger.record(.resetCreditRejected, operationID: operationID, accountID: account.id,
+                          fields: [.reason: .identifier(isRunning(for: account) ? "already_running" : "unavailable")])
+            return nil
+        }
         let key = key(account)
+        let isRetry = attempts[key]?[credit.id] != nil
         let attempt = attempts[key]?[credit.id] ?? UUID().uuidString
         attempts[key, default: [:]][credit.id] = attempt
         running.insert(key)
         messages[key] = nil
+        logger.record(.resetCreditRequested, operationID: operationID, accountID: account.id,
+                      fields: [.generation: .integer(account.configurationGeneration),
+                               .reason: .identifier(isRetry ? "retry" : "new_request")])
         return Task { @MainActor in
             defer { running.remove(key) }
-            switch await runner(account, credit.id, attempt) {
+            let started = ProcessInfo.processInfo.systemUptime
+            let result = await DiagnosticLogContext.$operationID.withValue(operationID) {
+                await runner(account, credit.id, attempt)
+            }
+            var fields: [DiagnosticField: DiagnosticValue] = [
+                .durationMS: DiagnosticLogContext.elapsedMS(since: started),
+                .generation: .integer(account.configurationGeneration),
+            ]
+            switch result {
             case let .success(outcome):
+                fields[.status] = .identifier(outcome.rawValue)
+                logger.record(.resetCreditFinished, operationID: operationID, accountID: account.id, fields: fields)
                 messages[key] = outcome.message
                 if outcome == .reset || outcome == .alreadyRedeemed {
                     redeemed[key, default: []].insert(credit.id)
                 } else {
                     attempts[key]?[credit.id] = nil
                 }
-            case .failure:
+            case let .failure(error):
+                fields[.status] = .identifier("failed")
+                fields[.failure] = .identifier(Self.failureCode(error))
+                logger.record(.resetCreditFinished, level: error == .cancelled ? .notice : .error,
+                              operationID: operationID, accountID: account.id, fields: fields)
                 messages[key] = "사용 결과를 확인하지 못했습니다. 한도를 새로고침해 주세요. 다시 사용하면 같은 요청으로 확인합니다."
             }
+        }
+    }
+
+    /// 원문 메시지·경로를 제외한 리셋권 요청 오류 분류
+    private static func failureCode(_ error: CodexQuotaServiceError) -> String {
+        switch error {
+        case .notConfigured: "not_configured"
+        case .loginRequired: "login_required"
+        case .codexNotFound: "codex_not_found"
+        case .timeout: "timeout"
+        case .cancelled: "cancelled"
+        case .processCrashed: "process_crashed"
+        case .malformedResponse: "malformed_response"
+        case .protocolError: "protocol_error"
+        case .transport: "transport"
         }
     }
 }

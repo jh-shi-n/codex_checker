@@ -31,6 +31,7 @@ public final class UsageWindowProbeStore: ObservableObject {
         let id: UUID
         let task: Task<Void, Never>
         let startedAt: Date
+        let logger: DiagnosticLogger
     }
 
     /// 현재 계정 설정에 속한 실행 상태 반환
@@ -57,14 +58,20 @@ public final class UsageWindowProbeStore: ObservableObject {
     @discardableResult
     func start(for account: AccountState, runner: @escaping UsageWindowProbeRunner) -> Task<Void, Never>? {
         let key = Key(account)
+        let operationID = UUID()
+        let logger = DiagnosticLogContext.logger ?? .shared
+        var initialFields = DiagnosticLogContext.resetFields(before: account)
+        initialFields[.generation] = .integer(key.generation)
+        logger.record(.probeRequested, operationID: operationID, accountID: account.id, fields: initialFields)
         guard AccountDashboardActionState.canRunProbe(account: account, isRunning: running.contains(key)) else {
+            logger.record(.probeRejected, operationID: operationID, accountID: account.id,
+                          fields: [.reason: .identifier(running.contains(key) ? "already_running" : "not_configured")])
             return nil
         }
         let startedAt = Date()
         lastStartedAtByAccount = lastStartedAtByAccount.filter { $0.key.id != key.id || $0.key == key }
         lastStartedAtByAccount[key] = startedAt
         running.insert(key)
-        let operationID = UUID()
         let task = Task { @MainActor in
             defer {
                 if tasks[key]?.id == operationID {
@@ -72,19 +79,55 @@ public final class UsageWindowProbeStore: ObservableObject {
                     running.remove(key)
                 }
             }
-            let presentation = await runner(account)
-            guard !Task.isCancelled else { return }
+            let presentation = await DiagnosticLogContext.$operationID.withValue(operationID) {
+                await runner(account)
+            }
+            guard !Task.isCancelled else {
+                logger.record(.probeResultDiscarded, operationID: operationID, accountID: account.id,
+                              fields: [.reason: .identifier("cancelled")])
+                return
+            }
             if presentation.result.accountID == account.id, presentation.isCurrentAccount {
                 results[key] = presentation
+                var fields: [DiagnosticField: DiagnosticValue] = [
+                    .generation: .integer(key.generation),
+                    .status: .identifier(presentation.result.status.rawValue),
+                ]
+                if let date = presentation.primaryResetBefore { fields[.primaryResetBefore] = .timestamp(date) }
+                if let date = presentation.primaryResetAfter { fields[.primaryResetAfter] = .timestamp(date) }
+                if let date = presentation.secondaryResetBefore { fields[.secondaryResetBefore] = .timestamp(date) }
+                if let date = presentation.secondaryResetAfter { fields[.secondaryResetAfter] = .timestamp(date) }
+                if let succeeded = presentation.quotaRefreshSucceeded { fields[.applied] = .boolean(succeeded) }
+                let reason: String
+                if presentation.result.isCancelled { reason = "cancelled" }
+                else if !presentation.result.isSuccess { reason = "probe_failed" }
+                else if presentation.quotaRefreshSucceeded != true { reason = "quota_refresh_failed" }
+                else if presentation.primaryResetAfter == nil { reason = "primary_reset_missing" }
+                else if presentation.primaryResetBefore == presentation.primaryResetAfter,
+                        presentation.secondaryResetBefore == presentation.secondaryResetAfter {
+                    reason = "reset_times_unchanged"
+                } else { reason = "reset_times_changed" }
+                fields[.reason] = .identifier(reason)
+                logger.record(.probeResultApplied, operationID: operationID, accountID: account.id,
+                              fields: fields)
+            } else {
+                logger.record(.probeResultDiscarded, operationID: operationID, accountID: account.id,
+                              fields: [.reason: .identifier("account_changed")])
             }
         }
-        tasks[key] = Operation(id: operationID, task: task, startedAt: startedAt)
+        tasks[key] = Operation(id: operationID, task: task, startedAt: startedAt, logger: logger)
         return task
     }
 
     /// 앱 종료 시 진행 중 Ping·한도 조회 취소 및 늦은 응답 반영 방지
     public func cancelAll() {
-        for operation in tasks.values { operation.task.cancel() }
+        for (key, operation) in tasks {
+            operation.logger.record(
+                .probeCancelled, operationID: operation.id, accountID: key.id,
+                fields: [.generation: .integer(key.generation)]
+            )
+            operation.task.cancel()
+        }
         tasks.removeAll()
         running.removeAll()
     }
