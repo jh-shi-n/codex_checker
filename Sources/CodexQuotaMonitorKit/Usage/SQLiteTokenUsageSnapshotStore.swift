@@ -10,6 +10,8 @@ final class SQLiteTokenUsageSnapshotStore: @unchecked Sendable {
     private let databaseURL: URL
     private let errorLock = NSLock()
     private var cleanupFailed = false
+    private var pendingAccountRemovals: Set<String> = []
+    private var pendingRemoveAll = false
 
     /// 최근 정리 SQL 실패 상태의 동시성 보호 조회
     var hasCleanupFailure: Bool {
@@ -21,7 +23,7 @@ final class SQLiteTokenUsageSnapshotStore: @unchecked Sendable {
     /// 다음 정리 성공 시 해제되는 재시도 상태 기록
     private func recordCleanup(_ succeeded: Bool) {
         errorLock.lock()
-        cleanupFailed = !succeeded
+        cleanupFailed = !succeeded || pendingRemoveAll || !pendingAccountRemovals.isEmpty
         errorLock.unlock()
     }
 
@@ -37,7 +39,11 @@ final class SQLiteTokenUsageSnapshotStore: @unchecked Sendable {
         homeIdentity: String,
         referenceDate: Date
     ) -> StoredTokenUsageSnapshot? {
-        withDatabase { database in
+        errorLock.lock()
+        let blocked = pendingRemoveAll || pendingAccountRemovals.contains(accountID)
+        errorLock.unlock()
+        guard !blocked else { return nil }
+        return withDatabase { database in
             let sql = """
             SELECT snapshot, updated_at, expires_at
             FROM token_usage_snapshots
@@ -118,6 +124,10 @@ final class SQLiteTokenUsageSnapshotStore: @unchecked Sendable {
                 bind(accountID, to: statement, at: 1)
             }
         } ?? false
+        errorLock.lock()
+        if succeeded { pendingAccountRemovals.remove(accountID) }
+        else { pendingAccountRemovals.insert(accountID) }
+        errorLock.unlock()
         recordCleanup(succeeded)
     }
 
@@ -126,11 +136,21 @@ final class SQLiteTokenUsageSnapshotStore: @unchecked Sendable {
         let succeeded = withDatabase { database in
             sqlite3_exec(database, "DELETE FROM token_usage_snapshots", nil, nil, nil) == SQLITE_OK
         } ?? false
+        errorLock.lock()
+        pendingRemoveAll = !succeeded
+        if succeeded { pendingAccountRemovals.removeAll() }
+        errorLock.unlock()
         recordCleanup(succeeded)
     }
 
     /// 기준 시각까지 만료된 행 제거
     func purgeExpired(beforeOrAt referenceDate: Date) {
+        errorLock.lock()
+        let retryAll = pendingRemoveAll
+        let retryAccounts = pendingAccountRemovals
+        errorLock.unlock()
+        if retryAll { removeAll() }
+        else { for accountID in retryAccounts { remove(accountID: accountID) } }
         let succeeded = withDatabase { database in
             execute(database, sql: "DELETE FROM token_usage_snapshots WHERE expires_at <= ?") { statement in
                 sqlite3_bind_double(statement, 1, referenceDate.timeIntervalSince1970) == SQLITE_OK
