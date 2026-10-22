@@ -1,6 +1,7 @@
 # Codex Quota Monitor
 
 - macOS 메뉴 막대·노치에서 최대 4개 Codex 계정의 할당량과 로컬 활동 확인
+- Codex를 활용해 제작한 비공식 독립 앱
 
 ![앱 화면 예시](resource/images/app-example.png)
 
@@ -17,6 +18,48 @@
 | 리셋권 확인 | 서버에서 제공하는 잔여 개수와 소멸일 확인 |
 | 서비스 상태 | OpenAI 공개 서비스 상태와 공식 상태 페이지 확인 |
 
+## 요구 사항
+
+- macOS 14 이상
+- 설치·로그인된 Codex CLI
+- 시스템 알림 사용 시 `.app` 실행과 macOS 알림 권한 허용
+
+## 설치
+
+### 릴리스 다운로드 설치
+
+- 제공 앱: macOS 14 이상, Apple Silicon(arm64)용 ZIP
+- Intel Mac은 소스 빌드 필요; 별도 검증된 Intel 배포 파일 미제공
+
+1. [GitHub Releases](https://github.com/jh-shi-n/codex_quota_checker/releases)에서 앱 ZIP 다운로드
+2. 압축 해제 후 `CodexQuotaMonitor.app`을 응용 프로그램 폴더로 이동
+3. 앱 실행
+4. 개발자 확인 불가 또는 Apple의 악성 소프트웨어 검사 여부를 확인할 수 없다는 경고로 차단된 경우, 출처를 신뢰하는 앱에 한해 **시스템 설정 → 개인정보 보호 및 보안 → 확인 없이 열기** 선택
+5. 확인 창에서 실행 허용
+
+- 임시 서명(ad-hoc) 적용, Apple Developer ID 서명·공증 미적용
+- 임시 서명만으로 macOS의 첫 실행 승인이 생략되는 것은 아님
+- 사용자에 의한 별도 서명 명령 실행 불필요
+- 첫 실행 허용 절차: [Apple 공식 안내](https://support.apple.com/ko-kr/102445)
+
+### 소스에서 직접 빌드
+
+- Swift tools 6.0 지원 도구 체인과 macOS SDK 필요
+- 빌드·패키징 과정에서 임시 서명 자동 적용, 유료 Apple Developer 계정·인증서 불필요
+
+```bash
+git clone https://github.com/jh-shi-n/codex_quota_checker.git
+cd codex_quota_checker
+scripts/package_app.sh --output "$PWD/codex/CodexQuotaMonitor.app" --configuration release
+open "$PWD/codex/CodexQuotaMonitor.app"
+```
+
+- 이미 저장소를 내려받은 경우 저장소 루트에서 패키징 명령부터 실행
+- 생성된 앱을 응용 프로그램 폴더로 옮겨 사용 가능
+- 직접 빌드한 앱도 macOS 보안 설정에 따라 추가 실행 승인 가능
+- 다른 Mac에 전달한 앱은 해당 Mac에서 첫 실행 허용이 필요할 수 있음
+- 개발 중 테스트 실행: 저장소 루트에서 `swift test`
+
 ## 시작하기
 
 1. 사용할 계정을 Codex CLI에서 로그인
@@ -32,35 +75,17 @@
 
 ## 설정
 
-- 계정 폴더·표시 계정·표시 순서 설정
+- 계정 폴더·표시 계정 설정
+- 계정 이름: 문자·숫자·공백으로 최대 14자, 미입력 시 C1–C4 표시
+- 계정 표시 순서: 행 또는 오른쪽 손잡이를 드래그해 변경
 - 새로고침 주기: 1~60분, 기본 5분
 - 초기화 사전 알림: 끔·3분 전·5분 전·10분 전
-- 활동 알림 표시 시간·계정 라벨 표시 설정
+- 활동 알림 표시 시간: 1~10초, 기본 3초
+- 계정 이름 표시 설정
 - macOS 로그인 시 자동 실행 설정
 - 시스템 알림 권한 확인·요청과 테스트 알림 제공
 
 ![설정 화면 예시](resource/images/settings-example.png)
-
-## 요구 사항
-
-- macOS 14 이상
-- 설치·로그인된 Codex CLI
-- 시스템 알림 사용 시 `.app` 실행과 macOS 알림 권한 허용
-
-## 빌드·실행
-
-- 소스 빌드 시 Swift tools 6.0 지원 환경 필요
-- 저장소 루트에서 실행
-
-```bash
-swift build
-swift test
-scripts/package_app.sh --output /path/to/CodexQuotaMonitor.app --configuration release
-open /path/to/CodexQuotaMonitor.app
-```
-
-- 생성된 앱을 응용 프로그램 폴더로 복사하여 사용 가능
-- 로컬 실행용 임시 서명 제공, 배포용 서명·공증 미제공
 
 ## 데이터와 표시 범위
 
@@ -68,7 +93,8 @@ open /path/to/CodexQuotaMonitor.app
 - 계정 인증 파일·API 키·OAuth 토큰의 설정·캐시 복사 제외
 - 사용자 설정과 최초 등록 이력은 로컬에 저장
 - 할당량·토큰 집계 캐시는 마지막 정상 결과 복원에 사용
-- 토큰 집계 캐시는 마지막 성공 업데이트부터 14일 보관, 원본 세션 파일 삭제 제외
+- 토큰 집계 범위는 최근 24주이며, 집계 결과 캐시는 마지막 성공 업데이트부터 14일 보관
+- 캐시 만료 시 원본 세션 파일 삭제 제외
 - 토큰 사용량·세션 활동은 등록한 계정 폴더의 로컬 기록 기준으로 서버 전체 기록과 차이 가능
 - Codex Desktop 앱의 실행 내역은 표시되지 않을 수 있음
 - 초기화 시간 설정은 실제 요청에 따른 사용량 발생 가능, 서버 초기화 시각 변경 보장 없음
