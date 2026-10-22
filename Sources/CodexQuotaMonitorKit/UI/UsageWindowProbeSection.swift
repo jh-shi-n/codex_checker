@@ -8,6 +8,7 @@ public struct UsageWindowProbeSection: View {
     public let account: AccountState
     public let probe: UsageWindowProbePresentationResult?
     public let isRunning: Bool
+    public let runningStartedAt: Date?
     public let isConfigured: Bool
     public let onRun: () -> Void
 
@@ -16,12 +17,14 @@ public struct UsageWindowProbeSection: View {
         account: AccountState,
         probe: UsageWindowProbePresentationResult? = nil,
         isRunning: Bool = false,
+        runningStartedAt: Date? = nil,
         isConfigured: Bool? = nil,
         onRun: @escaping () -> Void = {}
     ) {
         self.account = account
         self.probe = probe
         self.isRunning = isRunning
+        self.runningStartedAt = runningStartedAt
         self.isConfigured = isConfigured ?? (account.status != .notConfigured)
         self.onRun = onRun
     }
@@ -48,10 +51,7 @@ public struct UsageWindowProbeSection: View {
                 .accessibilityHint("최소 요청으로 서버 사용량이 발생할 수 있습니다")
             }
 
-            Text("최소 요청 후 서버에서 최신 할당량과 초기화 시각을 조회합니다. 실제 사용량이 발생할 수 있습니다.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+
         }
         .padding(10)
         .background(
@@ -81,11 +81,9 @@ public struct UsageWindowProbeSection: View {
     @ViewBuilder
     private var probeDetails: some View {
         VStack(alignment: .leading, spacing: 4) {
-            detailRow(label: "마지막 실행", value: lastRunText)
+            detailRow(label: "실행 시각", value: lastRunText)
             detailRow(label: "결과", value: resultText)
-            detailRow(label: "사용 토큰", value: tokenText)
-            detailRow(label: "5시간 Reset", value: primaryResetText)
-            detailRow(label: "7일 Reset", value: secondaryResetText)
+            detailRow(label: "소모 토큰", value: tokenText)
         }
         .font(.caption)
     }
@@ -103,9 +101,11 @@ public struct UsageWindowProbeSection: View {
         }
     }
 
-    private var lastRunText: String {
-        guard let completedAt = probe?.result.completedAt else { return "—" }
-        return AccountDashboardFormatting.dateText(completedAt)
+    /// 실제 요청 시작 시각 표시; 실행 중 이전 결과의 시각 재사용 제외
+    var lastRunText: String {
+        let startedAt = isRunning ? runningStartedAt : probe?.result.startedAt
+        guard let startedAt else { return "—" }
+        return AccountDashboardFormatting.dateText(startedAt)
     }
 
     /// Ping 실행·취소와 한도 재조회 결과를 구분한 문구
@@ -113,9 +113,9 @@ public struct UsageWindowProbeSection: View {
         // While a new request is active, do not leave a previous failure or
         // success looking like the current result. The terminal categorical
         // result is shown again as soon as the callback completes.
-        if isRunning { return "실행 중" }
+        if isRunning { return "전송 중" }
         guard let result = probe?.result else {
-            return "대기"
+            return "실행 전"
         }
         if result.isCancelled { return "취소됨" }
         if result.isSuccess, probe?.quotaRefreshSucceeded == false {
@@ -124,54 +124,21 @@ public struct UsageWindowProbeSection: View {
         if result.isSuccess, probe?.quotaRefreshSucceeded == true {
             return "초기화 시간 확인 완료"
         }
-        return result.isSuccess ? "성공" : (result.failureCategory?.userMessage ?? "실패")
+        return result.isSuccess ? "전송 완료" : (result.failureCategory?.userMessage ?? "실패")
     }
 
-    private var tokenText: String {
-        guard let usage = probe?.result.usage, usage.hasReportedUsage else { return "—" }
-        let total = usage.totalTokensIncludingComponents
+    /// 서버가 제공한 합계 또는 입력·출력 합산만 표시하고 이전 실행 수치 혼용 방지
+    var tokenText: String {
+        guard !isRunning, let usage = probe?.result.usage, usage.hasReportedUsage else { return "—" }
+        if let total = usage.totalTokensIncludingComponents {
+            return "\(AccountDashboardFormatting.numberText(Int64(total))) 토큰"
+        }
         return [
             usage.inputTokens.map { "입력 \(AccountDashboardFormatting.numberText(Int64($0)))" },
             usage.outputTokens.map { "출력 \(AccountDashboardFormatting.numberText(Int64($0)))" },
-            total.map { "합계 \(AccountDashboardFormatting.numberText(Int64($0)))" },
-        ]
-        .compactMap { $0 }
-        .joined(separator: " · ")
+        ].compactMap { $0 }.joined(separator: " · ")
     }
 
-    private var primaryResetText: String {
-        resetText(
-            before: probe?.primaryResetBefore,
-            after: probe?.primaryResetAfter,
-            current: account.primaryResetAt
-        )
-    }
-
-    private var secondaryResetText: String {
-        resetText(
-            before: probe?.secondaryResetBefore,
-            after: probe?.secondaryResetAfter,
-            current: account.secondaryResetAt
-        )
-    }
-
-    /// 조회 결과가 없는 경우 현재 서버 시각을 유지하는 표시
-    private func resetText(before: Date?, after: Date?, current: Date?) -> String {
-        guard probe != nil,
-              before != nil || after != nil || probe?.quotaRefreshSucceeded != nil
-        else {
-            return AccountDashboardFormatting.dateText(
-                current,
-                dateStyle: .medium,
-                timeStyle: .short
-            )
-        }
-        return AccountDashboardFormatting.resetObservationText(
-            before: before,
-            after: after,
-            quotaRefreshSucceeded: probe?.quotaRefreshSucceeded
-        )
-    }
 }
 
 /// 불투명 배경과 선명한 테두리의 할당량 갱신 버튼 스타일

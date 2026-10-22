@@ -79,6 +79,7 @@ public struct AccountDetailView: View {
                     account: displayedAccount,
                     probe: currentProbePresentation,
                     isRunning: isProbeRunning,
+                    runningStartedAt: probeStore.startedAt(for: account),
                     isConfigured: displayedAccount.status != .notConfigured,
                     onRun: runProbe
                 )

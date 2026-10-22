@@ -29,11 +29,17 @@ public final class UsageWindowProbeStore: ObservableObject {
     private struct Operation {
         let id: UUID
         let task: Task<Void, Never>
+        let startedAt: Date
     }
 
     /// 현재 계정 설정에 속한 실행 상태 반환
     func isRunning(for account: AccountState) -> Bool {
         running.contains(Key(account))
+    }
+
+    /// 팝오버 재진입에도 유지되는 현재 요청의 시작 시각 조회
+    func startedAt(for account: AccountState) -> Date? {
+        tasks[Key(account)]?.startedAt
     }
 
     /// 현재 계정 설정에 속한 마지막 실행 결과 반환
@@ -63,7 +69,7 @@ public final class UsageWindowProbeStore: ObservableObject {
                 results[key] = presentation
             }
         }
-        tasks[key] = Operation(id: operationID, task: task)
+        tasks[key] = Operation(id: operationID, task: task, startedAt: Date())
         return task
     }
 
