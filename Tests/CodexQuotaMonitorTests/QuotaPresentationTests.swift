@@ -1100,6 +1100,9 @@ final class QuotaPresentationTests: XCTestCase {
 
         let copy = NotchActivityToastCopy.make(for: toast)
         XCTAssertEqual(copy.firstLine, "C4 · Session 019fe59b...")
+        XCTAssertEqual(NotchActivityToastCopy.make(for: toast, names: ["C4": "업무 계정"]).firstLine,
+                       "업무 계정 · Session 019fe59b...")
+        XCTAssertEqual(toast.transition?.accountID, "C4")
         XCTAssertEqual(copy.secondLine, "Worker · Settings window fix · Working")
         XCTAssertEqual(copy.lines.count, 2)
         XCTAssertFalse(copy.lines.joined(separator: " ").contains(transition.sessionID!))

@@ -13,6 +13,8 @@ public struct AppPreferencesPayload: Codable, Equatable, Sendable {
     public var activityNotificationDurationSeconds: Int
     public var showAccountLabels: Bool
     public var launchAtLogin: Bool
+    /// 이전 JSON의 필드 누락과 기존 멤버별 초기화 호출 호환
+    public var accountDisplayNames: [String: String]? = nil
 
     /// 기존 정규화 경로와 동일한 키를 사용하는 설정 로드 어댑터
     @MainActor var preferenceValues: [String: Any] {
@@ -20,6 +22,7 @@ public struct AppPreferencesPayload: Codable, Equatable, Sendable {
             PreferencesStore.Keys.accountPaths: accountPaths,
             PreferencesStore.Keys.enabledAccountIDs: enabledAccountIDs,
             PreferencesStore.Keys.accountDisplayOrder: accountDisplayOrder,
+            PreferencesStore.Keys.accountDisplayNames: accountDisplayNames ?? [:],
             PreferencesStore.Keys.refreshIntervalMinutes: refreshIntervalMinutes,
             PreferencesStore.Keys.resetReminderMinutes: resetReminderMinutes,
             PreferencesStore.Keys.activityNotificationDurationSeconds: activityNotificationDurationSeconds,

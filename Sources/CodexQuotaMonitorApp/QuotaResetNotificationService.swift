@@ -48,9 +48,9 @@ final class QuotaResetNotificationService: NSObject, UNUserNotificationCenterDel
     }
 
     /// 감지된 조기 리셋의 시스템 알림 전달 시도
-    func notify(_ reset: EarlyQuotaReset) {
+    func notify(_ reset: EarlyQuotaReset, displayName: String? = nil) {
         logger.notice("reset_detected windows=\(reset.windows.count, privacy: .public)")
-        Task { await delivery.notifyReset(reset) }
+        Task { await delivery.notifyReset(reset, displayName: displayName) }
     }
 
     /// 앱 전면 실행 중 배너와 알림 센터 표시

@@ -103,6 +103,7 @@ public struct SettingsView: View {
     @Binding public var refreshIntervalMinutes: Int
     @Binding public var resetReminderMinutes: Int
     @Binding public var accountPaths: [String]
+    @Binding public var accountDisplayNames: [String: String]
     @Binding public var launchAtLogin: Bool
     @Binding public var showAccountLabels: Bool
     @Binding public var activityNotificationDurationSeconds: Int
@@ -111,6 +112,7 @@ public struct SettingsView: View {
     /// 모든 계정의 표시 순서 목록
     @Binding public var accountDisplayOrder: [String]
     @ObservedObject public var notificationDelivery: QuotaResetNotificationDelivery
+    @State private var accountNamesDraft: [String: String]
     @State private var refreshIntervalDraft: RefreshIntervalDraft
     @State private var accountPathsDraft: AccountPathsDraft
     /// 활성 계정 바인딩의 반응형 화면 초안
@@ -136,6 +138,7 @@ public struct SettingsView: View {
         accountPathValidator: AccountPathValidator = .live,
         enabledAccountIDs: Binding<[String]> = .constant(PreferencesStore.defaultEnabledAccountIDs),
         accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
+        accountDisplayNames: Binding<[String: String]> = .constant([:]),
         resetReminderMinutes: Binding<Int> = .constant(5),
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
@@ -150,6 +153,8 @@ public struct SettingsView: View {
         self._activityNotificationDurationSeconds = activityNotificationDurationSeconds
         self._enabledAccountIDs = enabledAccountIDs
         self._accountDisplayOrder = accountDisplayOrder
+        self._accountDisplayNames = accountDisplayNames
+        self._accountNamesDraft = State(initialValue: accountDisplayNames.wrappedValue)
         self._notificationDelivery = ObservedObject(wrappedValue: notificationDelivery)
         self.onRetryNotificationAuthorization = onRetryNotificationAuthorization
         self.onSendNotificationTest = onSendNotificationTest
@@ -182,6 +187,7 @@ public struct SettingsView: View {
         accountPathValidator: AccountPathValidator = .live,
         enabledAccountIDs: Binding<[String]> = .constant(PreferencesStore.defaultEnabledAccountIDs),
         accountDisplayOrder: Binding<[String]> = .constant(PreferencesStore.defaultAccountDisplayOrder),
+        accountDisplayNames: Binding<[String: String]> = .constant([:]),
         resetReminderMinutes: Binding<Int> = .constant(5),
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
@@ -207,6 +213,8 @@ public struct SettingsView: View {
         self._activityNotificationDurationSeconds = activityNotificationDurationSeconds
         self._enabledAccountIDs = enabledAccountIDs
         self._accountDisplayOrder = accountDisplayOrder
+        self._accountDisplayNames = accountDisplayNames
+        self._accountNamesDraft = State(initialValue: accountDisplayNames.wrappedValue)
         self._notificationDelivery = ObservedObject(wrappedValue: notificationDelivery)
         self.onRetryNotificationAuthorization = onRetryNotificationAuthorization
         self.onSendNotificationTest = onSendNotificationTest
@@ -261,7 +269,16 @@ public struct SettingsView: View {
                     ForEach(0..<Self.accountPathCount, id: \.self) { index in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                TextField("C\(index + 1)", text: pathBinding(at: index))
+                                Text("C\(index + 1)")
+                                    .font(.caption.weight(.semibold))
+                                    .frame(width: 28, alignment: .leading)
+                                TextField("계정 이름 (최대 14자)", text: nameBinding(for: "C\(index + 1)"))
+                                    .textFieldStyle(.roundedBorder)
+                                    .accessibilityLabel("C\(index + 1) 사용자 이름")
+                                    .onSubmit(commitAccountNames)
+                            }
+                            HStack {
+                                TextField("계정 폴더 경로", text: pathBinding(at: index))
                                     .textFieldStyle(.roundedBorder)
                                     .onSubmit(commitAccountPathsDraft)
                                 Button("폴더 선택") { chooseAccountDirectory(at: index) }
@@ -276,12 +293,14 @@ public struct SettingsView: View {
                         }
                     }
                     HStack {
+                        Button("이름 적용", action: commitAccountNames)
+                            .disabled(accountNamesDraft == accountDisplayNames)
                         Button("경로 적용", action: commitAccountPathsDraft)
                             .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
-                        Button("편집 취소", action: synchronizeAccountPathDrafts)
-                            .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths))
+                        Button("편집 취소", action: cancelAccountEdits)
+                            .disabled(accountPathsDraft.paths == Self.paddedAccountPaths(accountPaths) && accountNamesDraft == accountDisplayNames)
                     }
-                    Text("경로 적용 또는 Enter를 누를 때 저장됩니다. 편집 취소 시 기존 경로를 유지합니다.")
+                    Text("이름은 문자·숫자·공백으로 최대 14자까지 입력할 수 있습니다. 이름 적용 또는 Enter로 저장합니다. 비워두면 슬롯명을 사용합니다. 경로는 적용 또는 Enter로 저장합니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -378,7 +397,7 @@ public struct SettingsView: View {
 
                 Section("앱 실행") {
                     Toggle(Self.launchAtLoginLabel, isOn: $launchAtLogin)
-                    Toggle("계정 이름 표시 (C1~C4)", isOn: $showAccountLabels)
+                    Toggle("계정 이름 표시", isOn: $showAccountLabels)
                     Text("로그인 시 앱을 자동으로 실행합니다. macOS 시스템 설정 > 로그인 항목에서 승인이 필요할 수 있습니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -398,6 +417,7 @@ public struct SettingsView: View {
             synchronizeAccountPathDrafts()
             synchronizeAccountDisplayDrafts()
         }
+        .onChange(of: accountDisplayNames) { _, names in accountNamesDraft = names }
         .onChange(of: accountPaths) { _, _ in synchronizeAccountPathDrafts() }
         .onChange(of: enabledAccountIDs) { _, _ in synchronizeAccountDisplayDrafts() }
         .onChange(of: accountDisplayOrder) { _, _ in synchronizeAccountDisplayDrafts() }
@@ -466,6 +486,23 @@ public struct SettingsView: View {
         case .notRequested, .denied, .authorized, .provisional, .ephemeral, .unknown, .error:
             false
         }
+    }
+
+    /// 한글 조합과 공백 입력을 보존하는 계정 이름 편집 초안
+    private func nameBinding(for accountID: String) -> Binding<String> {
+        Binding(
+            get: { accountNamesDraft[accountID] ?? "" },
+            set: { accountNamesDraft[accountID] = $0 }
+        )
+    }
+
+    /// 입력 완료 시 이름 제한 적용 및 내부 슬롯과 분리한 일괄 저장
+    private func commitAccountNames() {
+        accountDisplayNames = accountNamesDraft.reduce(into: [:]) { names, entry in
+            let name = AccountDisplayName.normalized(entry.value)
+            if !name.isEmpty { names[entry.key] = name }
+        }
+        accountNamesDraft = accountDisplayNames
     }
 
     /// 목적: 표시 계정 ID별 활성 상태 바인딩 제공
@@ -576,6 +613,12 @@ public struct SettingsView: View {
         guard let paths = accountPathsDraft.commit(validator: accountPathValidator),
               paths != Self.paddedAccountPaths(accountPaths) else { return }
         accountPaths = paths
+    }
+
+    /// 저장 전 이름·경로 편집 내용을 함께 취소
+    private func cancelAccountEdits() {
+        synchronizeAccountPathDrafts()
+        accountNamesDraft = accountDisplayNames
     }
 
     /// 외부 경로 변경 또는 편집 취소 시 저장된 경로로 초안 복원

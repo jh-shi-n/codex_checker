@@ -16,6 +16,7 @@ public struct AccountDetailView: View {
     public let onClose: () -> Void
     public let serviceStatus: OpenAIServiceStatusStore?
 
+    @Environment(\.accountDisplayNames) private var accountDisplayNames
     @State private var tokenUsageSnapshot: TokenUsageSnapshot?
     @State private var isTokenUsageLoading = false
     @State private var tokenUsageRefreshFailed = false
@@ -129,8 +130,11 @@ public struct AccountDetailView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {
-                    Text(account.id)
+                    Text(AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id))
                         .font(.title3.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id))
                     Text(AccountDashboardFormatting.subscriptionBadgeText(account.planType))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(SubscriptionBadgeStyle.accentColor(for: account.planType))

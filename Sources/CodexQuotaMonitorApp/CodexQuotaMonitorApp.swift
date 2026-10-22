@@ -38,7 +38,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             return self.accountStore.state(for: id)
         },
         notify: { [weak self] alert in
-            await self?.quotaResetNotifications.delivery.notifyScheduled(alert)
+            guard let self else { return }
+            await self.quotaResetNotifications.delivery.notifyScheduled(
+                alert, displayName: self.preferences.displayName(for: alert.accountID)
+            )
         }
     )
     let refreshService: RefreshService
@@ -219,7 +222,8 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         accountStore.onEarlyQuotaReset = { [weak self] reset in
-            self?.quotaResetNotifications.notify(reset)
+            guard let self else { return }
+            self.quotaResetNotifications.notify(reset, displayName: self.preferences.displayName(for: reset.accountID))
         }
 
         activityToastCancellable = sessionActivityToastQueue.$currentLeft
@@ -294,6 +298,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             leftAccounts: QuotaClusterView.splitVisibleAccounts(visible, side: .left),
             rightAccounts: QuotaClusterView.splitVisibleAccounts(visible, side: .right),
             showAccountLabels: preferences.showAccountLabels,
+            accountDisplayNames: preferences.accountDisplayNames,
             onRefresh: { [weak self] account in
                 self?.refreshAccount(account.id)
             },

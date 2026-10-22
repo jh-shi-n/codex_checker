@@ -8,6 +8,7 @@ import SwiftUI
 @MainActor
 public final class RightQuotaPanel: NotchQuotaPanel {
     public private(set) var accounts: [AccountState]
+    public private(set) var accountDisplayNames: [String: String] = [:]
     public let serviceStatus: OpenAIServiceStatusStore?
     public private(set) var menuBarHeight: CGFloat
     public private(set) var diameterOverride: CGFloat?
@@ -92,6 +93,7 @@ public final class RightQuotaPanel: NotchQuotaPanel {
         menuBarHeight: CGFloat? = nil,
         diameterOverride: CGFloat? = nil,
         showAccountLabels: Bool? = nil,
+        accountDisplayNames: [String: String]? = nil,
         onRefresh: ((AccountState) -> Void)? = nil,
         onSettings: (() -> Void)? = nil,
         loadSessionActivity: SessionActivityLoader? = nil,
@@ -101,6 +103,7 @@ public final class RightQuotaPanel: NotchQuotaPanel {
         onClose: (() -> Void)? = nil
     ) {
         self.accounts = accounts
+        if let accountDisplayNames { self.accountDisplayNames = accountDisplayNames }
         if let menuBarHeight { self.menuBarHeight = menuBarHeight }
         if let diameterOverride { self.diameterOverride = diameterOverride }
         if let showAccountLabels { self.showAccountLabels = showAccountLabels }
@@ -168,7 +171,8 @@ public final class RightQuotaPanel: NotchQuotaPanel {
             runUsageWindowProbe: runUsageWindowProbe,
             onClose: onClose,
             activityPresentation: activityPresentation,
-            serviceStatus: serviceStatus
+            serviceStatus: serviceStatus,
+            accountDisplayNames: accountDisplayNames
         )
         if let activityHostingView {
             activityHostingView.rootView = root

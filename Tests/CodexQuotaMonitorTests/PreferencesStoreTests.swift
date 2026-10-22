@@ -18,6 +18,8 @@ final class PreferencesStoreTests: XCTestCase {
             XCTAssertEqual(store.accountPaths, ["", "", "", ""])
             XCTAssertEqual(store.enabledAccountIDs, PreferencesStore.defaultEnabledAccountIDs)
             XCTAssertEqual(store.accountDisplayOrder, PreferencesStore.defaultAccountDisplayOrder)
+            XCTAssertEqual(store.accountDisplayNames, [:])
+            XCTAssertEqual(store.displayName(for: "C1"), "C1")
             XCTAssertFalse(store.launchAtLogin)
             XCTAssertFalse(store.showAccountLabels)
             XCTAssertEqual(store.activityNotificationDurationSeconds, 3)
@@ -40,6 +42,7 @@ final class PreferencesStoreTests: XCTestCase {
             XCTAssertTrue(store.updateAccountPaths(paths))
             store.updateEnabledAccountIDs(["C3", "C1"])
             store.updateAccountDisplayOrder(["C4", "C3", "C2", "C1"])
+            store.updateAccountDisplayNames(["C1": " 업무 🌟 ", "C3": "Cafe\u{301}", "C4": "  "])
             store.setRefreshInterval(7)
             store.updateResetReminder(minutes: 3)
             store.setActivityNotificationDuration(seconds: 8)
@@ -49,10 +52,13 @@ final class PreferencesStoreTests: XCTestCase {
 
             defaults.set(99, forKey: PreferencesStore.Keys.refreshIntervalMinutes)
             defaults.set(["/stale", "", "", ""], forKey: PreferencesStore.Keys.accountPaths)
+            defaults.set(["C1": "stale"], forKey: PreferencesStore.Keys.accountDisplayNames)
             let restored = PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database)
             XCTAssertEqual(restored.accountPaths, paths)
             XCTAssertEqual(restored.enabledAccountIDs, ["C3", "C1"])
             XCTAssertEqual(restored.accountDisplayOrder, ["C4", "C3", "C2", "C1"])
+            XCTAssertEqual(restored.accountDisplayNames, ["C1": "업무", "C3": "Café"])
+            XCTAssertEqual(restored.displayName(for: "C4"), "C4")
             XCTAssertEqual(restored.refreshIntervalMinutes, 7)
             XCTAssertEqual(restored.resetReminderMinutes, 3)
             XCTAssertEqual(restored.activityNotificationDurationSeconds, 8)
@@ -90,6 +96,69 @@ final class PreferencesStoreTests: XCTestCase {
         }
     }
 
+    /// NFC·Swift Character 기준 길이 제한과 금지 기호·이모지 제거 검증
+    func testAccountDisplayNamePolicyNormalizesUnicodeAndFiltersInvalidCharacters() {
+        XCTAssertEqual(AccountDisplayName.maxLength, 14)
+        XCTAssertEqual(AccountDisplayName.normalized("  Cafe\u{301} 한글 １２Ⅳ  "), "Café 한글 １２Ⅳ")
+        XCTAssertEqual(AccountDisplayName.normalized(" A\tB\nC\u{00A0}D\u{200D}E\u{202E}F!_-+©😀👩‍💻♥️ "), "ABCDEF")
+        XCTAssertEqual(AccountDisplayName.normalized("क\u{093F}a\u{20DD}"), "क\u{093F}a\u{20DD}")
+        XCTAssertEqual(AccountDisplayName.normalized("1️⃣"), "1")
+        for character in ["가", "e\u{301}", "क\u{093F}", "a\u{20DD}"] {
+            let normalized = AccountDisplayName.normalized(String(repeating: character, count: 15))
+            XCTAssertEqual(normalized.count, 14)
+            XCTAssertEqual(normalized.unicodeScalars.map(\.value),
+                String(repeating: character, count: 14).precomposedStringWithCanonicalMapping.unicodeScalars.map(\.value))
+        }
+        XCTAssertEqual(AccountDisplayName.normalized("가"), "가")
+        XCTAssertEqual(AccountDisplayName.normalized("abcdefghijklmn  o"), "abcdefghijklmn")
+        XCTAssertEqual(AccountDisplayName.normalized("abcdefghijklm n"), "abcdefghijklm")
+        XCTAssertEqual(AccountDisplayName.resolved(nil, slotID: "C1"), "C1")
+        XCTAssertEqual(AccountDisplayName.resolved(" 💥!\n ", slotID: "C2"), "C2")
+        XCTAssertEqual(AccountDisplayName.resolved(" 이름 ", slotID: "C3"), "이름")
+    }
+
+    /// 새 필드가 없는 기존 묶음의 정상 로드와 빈 이름 맵 기본값 검증
+    func testLegacyBundleWithoutDisplayNamesRestoresEmptyMap() throws {
+        try withFixture { defaults, _, database in
+            defaults.set(try bundleData(), forKey: PreferencesStore.Keys.settingsBundle)
+            defaults.set(["C1": "stale"], forKey: PreferencesStore.Keys.accountDisplayNames)
+            let store = PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database)
+            XCTAssertNil(store.persistenceError)
+            XCTAssertEqual(store.accountDisplayNames, [:])
+            XCTAssertEqual(store.displayName(for: "C3"), "C3")
+            XCTAssertEqual(store.accountPaths, ["", "", "", ""])
+            XCTAssertNil(defaults.object(forKey: PreferencesStore.Keys.accountDisplayNames))
+            XCTAssertEqual(PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database).accountDisplayNames, [:])
+        }
+    }
+
+    /// 이름 변경의 슬롯 식별자·경로·표시 순서·정상 캐시 보존 검증
+    func testDisplayNameUpdatesPreserveAccountConfigurationAndQuotaCache() throws {
+        try withFixture { defaults, root, database in
+            let store = PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database)
+            XCTAssertTrue(store.updateAccountPaths([root.path, "", "", ""]))
+            let snapshot = PreferencesStore.QuotaSnapshot(usedPercent: 25, lastUpdated: Date())
+            store.updateQuotaSnapshot(for: root, snapshot: snapshot)
+            let paths = store.accountPaths
+            let ids = store.enabledAccountIDs
+            let order = store.accountDisplayOrder
+            let registrationDate = store.firstAccountRegisteredAt
+            store.updateAccountDisplayNames(["C1": "작업", "C5": "제외", "c2": "제외", root.path: "제외"])
+            XCTAssertEqual(store.accountDisplayNames, ["C1": "작업"])
+            XCTAssertEqual(store.accountPaths, paths)
+            XCTAssertEqual(store.enabledAccountIDs, ids)
+            XCTAssertEqual(store.accountDisplayOrder, order)
+            XCTAssertEqual(store.firstAccountRegisteredAt, registrationDate)
+            XCTAssertEqual(store.quotaSnapshot(for: root), snapshot)
+            let restored = PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database)
+            XCTAssertEqual(restored.displayName(for: "C1"), "작업")
+            XCTAssertEqual(restored.quotaSnapshot(for: root), snapshot)
+            store.updateAccountDisplayNames(["C1": "😀! "])
+            XCTAssertEqual(store.accountDisplayNames, [:])
+            XCTAssertEqual(PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database).displayName(for: "C1"), "C1")
+        }
+    }
+
     /// 미설정·비활성·알 수 없는 계정의 제외와 표시 순서 검증
     func testVisibleAccountsFiltersUnconfiguredAndDisabledStatesInSelectedOrder() throws {
         try withFixture { defaults, _, database in
@@ -113,7 +182,7 @@ final class PreferencesStoreTests: XCTestCase {
     func testNumericSettingsNormalizeBeforeBundlePersistence() throws {
         try withFixture { defaults, _, database in
             let store = PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database)
-            for (input, expected) in [(0, 5), (-1, 5), (1_441, 1_440), (7, 7)] {
+            for (input, expected) in [(0, 5), (-1, 5), (61, 60), (7, 7)] {
                 store.updateRefreshInterval(minutes: input)
                 XCTAssertEqual(store.refreshIntervalMinutes, expected)
                 XCTAssertEqual(PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database).refreshIntervalMinutes, expected)
@@ -140,6 +209,8 @@ final class PreferencesStoreTests: XCTestCase {
             defaults.set([" ~/one/../account ", "", "~/two", ""], forKey: PreferencesStore.Keys.accountPaths)
             defaults.set([" c3 ", "C3", "unknown"], forKey: PreferencesStore.Keys.enabledAccountIDs)
             defaults.set(["c2", "invalid", "C2"], forKey: PreferencesStore.Keys.accountDisplayOrder)
+            defaults.set(["C1": " 팀😀 ", "C2": "💥!", "C3": String(repeating: "가", count: 15), "C5": "제외"],
+                forKey: PreferencesStore.Keys.accountDisplayNames)
             defaults.set("yes", forKey: PreferencesStore.Keys.launchAtLogin)
             defaults.set("yes", forKey: PreferencesStore.Keys.showAccountLabels)
             defaults.set(99, forKey: PreferencesStore.Keys.activityNotificationDurationSeconds)
@@ -150,6 +221,7 @@ final class PreferencesStoreTests: XCTestCase {
             XCTAssertEqual(store.resetReminderMinutes, 5)
             XCTAssertEqual(store.enabledAccountIDs, ["C3"])
             XCTAssertEqual(store.accountDisplayOrder, ["C2", "C1", "C3", "C4"])
+            XCTAssertEqual(store.accountDisplayNames, ["C1": "팀", "C3": String(repeating: "가", count: 14)])
             XCTAssertFalse(store.launchAtLogin)
             XCTAssertFalse(store.showAccountLabels)
             XCTAssertEqual(store.activityNotificationDurationSeconds, 10)
@@ -159,6 +231,7 @@ final class PreferencesStoreTests: XCTestCase {
             XCTAssertEqual(restored.accountPaths, expectedPaths)
             XCTAssertEqual(restored.enabledAccountIDs, ["C3"])
             XCTAssertEqual(restored.accountDisplayOrder, ["C2", "C1", "C3", "C4"])
+            XCTAssertEqual(restored.accountDisplayNames, store.accountDisplayNames)
             XCTAssertEqual(restored.activityNotificationDurationSeconds, 10)
             for key in legacySettingKeys {
                 XCTAssertNil(defaults.object(forKey: key), key)
@@ -335,6 +408,7 @@ final class PreferencesStoreTests: XCTestCase {
                 store.updateResetReminder(minutes: 0)
                 store.updateEnabledAccountIDs([])
                 store.updateAccountDisplayOrder(["C4"])
+                store.updateAccountDisplayNames(["C1": "차단"])
                 store.updateLaunchAtLogin(true)
                 store.updateShowAccountLabels(true)
                 store.updateActivityNotificationDuration(seconds: 9)
@@ -344,6 +418,7 @@ final class PreferencesStoreTests: XCTestCase {
                 XCTAssertEqual(store.resetReminderMinutes, 5)
                 XCTAssertEqual(store.enabledAccountIDs, PreferencesStore.defaultEnabledAccountIDs)
                 XCTAssertEqual(store.accountDisplayOrder, PreferencesStore.defaultAccountDisplayOrder)
+                XCTAssertEqual(store.accountDisplayNames, [:])
                 XCTAssertFalse(store.launchAtLogin)
                 XCTAssertFalse(store.showAccountLabels)
                 XCTAssertEqual(store.activityNotificationDurationSeconds, 3)
@@ -507,7 +582,7 @@ final class PreferencesStoreTests: XCTestCase {
     /// 묶음 복원 이후 제거 대상인 기존 개별 설정 키 목록
     private var legacySettingKeys: [String] {
         [PreferencesStore.Keys.accountPaths, PreferencesStore.Keys.enabledAccountIDs,
-         PreferencesStore.Keys.accountDisplayOrder, PreferencesStore.Keys.refreshIntervalMinutes,
+         PreferencesStore.Keys.accountDisplayOrder, PreferencesStore.Keys.accountDisplayNames, PreferencesStore.Keys.refreshIntervalMinutes,
          PreferencesStore.Keys.resetReminderMinutes, PreferencesStore.Keys.launchAtLogin,
          PreferencesStore.Keys.showAccountLabels, PreferencesStore.Keys.activityNotificationDurationSeconds]
     }

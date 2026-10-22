@@ -242,6 +242,7 @@ public struct QuotaDonutView: View {
 
     @State private var isHovered = false
     @State private var isDetailPresented = false
+    @Environment(\.accountDisplayNames) private var accountDisplayNames
     @Environment(\.openAIServiceStatus) private var serviceStatus
 
     public init(
@@ -308,6 +309,7 @@ public struct QuotaDonutView: View {
                     },
                     serviceStatus: serviceStatus
                 )
+                .environment(\.accountDisplayNames, accountDisplayNames)
                 .id(account.configurationGeneration)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -320,22 +322,23 @@ public struct QuotaDonutView: View {
         let presentation = QuotaDonutPresentation(account: account)
         let fiveHour = account.fiveHourRemainingPercent.map(Self.percentText) ?? "—"
         let overall = presentation.ringPercent.map(Self.percentText) ?? "—"
+        let name = AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id)
         let quotaText = "5h \(fiveHour) · Overall \(overall)"
         switch state {
         case .value, .fiveHourOnly:
-            return "\(account.id) · \(quotaText)"
+            return "\(name) · \(quotaText)"
         case .timedOut:
-            return "\(account.id) · \(quotaText) · Timed out"
+            return "\(name) · \(quotaText) · Timed out"
         case .transientError:
-            return "\(account.id) · \(quotaText) · Error"
+            return "\(name) · \(quotaText) · Error"
         case .loading:
-            return "\(account.id) · Loading"
+            return "\(name) · Loading"
         case .notConfigured:
-            return "\(account.id) · Not configured"
+            return "\(name) · Not configured"
         case .loginRequired:
-            return "\(account.id) · Login required"
+            return "\(name) · Login required"
         case .error:
-            return "\(account.id) · Error"
+            return "\(name) · Error"
         }
     }
 
@@ -352,6 +355,7 @@ struct QuotaRingGraphic: View {
     /// 고정 배경에서 글자와 소진 구간에 함께 적용하는 색상 모드
     let fixedAppearance: QuotaAppearance?
 
+    @Environment(\.accountDisplayNames) private var accountDisplayNames
     @Environment(\.colorScheme) private var colorScheme
     @State private var loadingRotation = 0.0
     @State private var loadingAnimationState = QuotaLoadingAnimationState()
@@ -432,7 +436,7 @@ struct QuotaRingGraphic: View {
                 }
 
                 if showAccountLabel {
-                    Text(account.id)
+                    Text(AccountDisplayName.resolved(accountDisplayNames[account.id], slotID: account.id))
                         .font(.system(size: max(5, diameter * 0.26), weight: .semibold, design: .rounded))
                         .minimumScaleFactor(0.55)
                         .lineLimit(1)

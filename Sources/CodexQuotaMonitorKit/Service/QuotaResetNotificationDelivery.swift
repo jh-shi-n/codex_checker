@@ -155,13 +155,14 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
     }
 
     /// 조기 리셋 알림 전달 및 실패 이벤트의 노치 대체 표시
-    public func notifyReset(_ reset: EarlyQuotaReset) async {
+    public func notifyReset(_ reset: EarlyQuotaReset, displayName: String? = nil) async {
         let fallback = QuotaResetNotificationFallback(
             id: UUID().uuidString,
             accountID: reset.accountID,
             windowTitles: reset.windows.map(\.title)
         )
-        let body = "\(reset.accountID)의 \(fallback.windowTitles.joined(separator: ", "))가 예정 시각보다 일찍 초기화되었습니다."
+        let name = AccountDisplayName.resolved(displayName, slotID: reset.accountID)
+        let body = "\(name)의 \(fallback.windowTitles.joined(separator: ", "))가 예정 시각보다 일찍 초기화되었습니다."
 
         guard await isAuthorizedForDelivery() else {
             status = replacingDelivery(outcome: .fallback, error: nil)
@@ -182,14 +183,17 @@ public final class QuotaResetNotificationDelivery: ObservableObject {
     }
 
     /// 예정 시각 사전·도달 알림의 시스템 전달과 실패 상태 기록
-    public func notifyScheduled(_ alert: QuotaResetAlert) async {
+    public func notifyScheduled(_ alert: QuotaResetAlert, displayName: String? = nil) async {
         guard await isAuthorizedForDelivery() else {
             status = replacingDelivery(outcome: .failed, error: nil)
             onDiagnostic("scheduled_notification_authorization_unavailable")
             return
         }
         do {
-            try await backend?.deliver(title: alert.title, body: alert.body)
+            let name = AccountDisplayName.resolved(displayName, slotID: alert.accountID)
+            let body = alert.body.hasPrefix(alert.accountID)
+                ? name + alert.body.dropFirst(alert.accountID.count) : alert.body
+            try await backend?.deliver(title: alert.title, body: body)
             status = replacingDelivery(outcome: .delivered, error: nil)
         } catch {
             status = replacingDelivery(outcome: .failed, error: error.localizedDescription)

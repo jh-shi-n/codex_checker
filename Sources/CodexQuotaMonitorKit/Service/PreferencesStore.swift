@@ -14,6 +14,7 @@ public final class PreferencesStore: ObservableObject {
         public static let accountPaths = "CodexQuotaMonitor.accountPaths"
         public static let enabledAccountIDs = "CodexQuotaMonitor.enabledAccountIDs"
         public static let accountDisplayOrder = "CodexQuotaMonitor.accountDisplayOrder"
+        public static let accountDisplayNames = "CodexQuotaMonitor.accountDisplayNames"
         public static let launchAtLogin = "CodexQuotaMonitor.launchAtLogin"
         public static let showAccountLabels = "CodexQuotaMonitor.showAccountLabels"
         public static let activityNotificationDurationSeconds = "CodexQuotaMonitor.activityNotificationDurationSeconds"
@@ -75,6 +76,8 @@ public final class PreferencesStore: ObservableObject {
     @Published public private(set) var enabledAccountIDs: [String]
     /// C1–C4 전체 계정의 표시 순서
     @Published public private(set) var accountDisplayOrder: [String]
+    /// C1–C4 슬롯에만 연결한 사용자 표시 이름
+    @Published public private(set) var accountDisplayNames: [String: String]
     @Published public private(set) var launchAtLogin: Bool
     @Published public private(set) var showAccountLabels: Bool
     @Published public private(set) var activityNotificationDurationSeconds: Int
@@ -153,7 +156,7 @@ public final class PreferencesStore: ObservableObject {
         self.persistenceError = loadError
         self.committedBundle = bundle
         if let bundle {
-            for key in [Keys.accountPaths, Keys.enabledAccountIDs, Keys.accountDisplayOrder,
+            for key in [Keys.accountPaths, Keys.enabledAccountIDs, Keys.accountDisplayOrder, Keys.accountDisplayNames,
                         Keys.refreshIntervalMinutes, Keys.resetReminderMinutes, Keys.launchAtLogin,
                         Keys.showAccountLabels, Keys.activityNotificationDurationSeconds] {
                 userDefaults.removeObject(forKey: key)
@@ -207,6 +210,9 @@ public final class PreferencesStore: ObservableObject {
         let rawAccountDisplayOrder = readSetting(Keys.accountDisplayOrder)
         let persistedAccountDisplayOrder = rawAccountDisplayOrder as? [String]
         self.accountDisplayOrder = Self.normalizedAccountDisplayOrder(persistedAccountDisplayOrder)
+        self.accountDisplayNames = Self.normalizedAccountDisplayNames(
+            readSetting(Keys.accountDisplayNames) as? [String: String] ?? [:]
+        )
 
         let rawLaunchAtLogin = readSetting(Keys.launchAtLogin)
         self.launchAtLogin = rawLaunchAtLogin as? Bool ?? false
@@ -452,6 +458,19 @@ public final class PreferencesStore: ObservableObject {
         persist()
     }
 
+    /// 슬롯별 표시 이름의 정규화·원자적 저장과 실패 시 직전 값 복원
+    public func updateAccountDisplayNames(_ names: [String: String]) {
+        guard !settingsLoadFailed else { return }
+        let previous = accountDisplayNames
+        accountDisplayNames = Self.normalizedAccountDisplayNames(names)
+        if !persist() { accountDisplayNames = previous }
+    }
+
+    /// 사용자 이름 또는 기본 슬롯 ID 반환
+    public func displayName(for id: String) -> String {
+        AccountDisplayName.resolved(accountDisplayNames[id], slotID: id)
+    }
+
     /// 목적: 활성 계정만 저장된 표시 순서로 반환
     /// 반환: 입력 상태 중 활성화된 C1–C4 계정 상태
     public func visibleAccounts(_ states: [AccountState]) -> [AccountState] {
@@ -542,7 +561,8 @@ public final class PreferencesStore: ObservableObject {
             accountDisplayOrder: accountDisplayOrder, refreshIntervalMinutes: refreshIntervalMinutes,
             resetReminderMinutes: resetReminderMinutes,
             activityNotificationDurationSeconds: activityNotificationDurationSeconds,
-            showAccountLabels: showAccountLabels, launchAtLogin: launchAtLogin)
+            showAccountLabels: showAccountLabels, launchAtLogin: launchAtLogin,
+            accountDisplayNames: accountDisplayNames)
     }
 
     /// 인코딩 실패 시 직전 정상 설정 복원
@@ -550,6 +570,7 @@ public final class PreferencesStore: ObservableObject {
         accountPaths = value.accountPaths
         enabledAccountIDs = value.enabledAccountIDs
         accountDisplayOrder = value.accountDisplayOrder
+        accountDisplayNames = Self.normalizedAccountDisplayNames(value.accountDisplayNames ?? [:])
         refreshIntervalMinutes = value.refreshIntervalMinutes
         resetReminderMinutes = value.resetReminderMinutes
         activityNotificationDurationSeconds = value.activityNotificationDurationSeconds
@@ -592,6 +613,14 @@ public final class PreferencesStore: ObservableObject {
         let missingIDs = stableAccountIDs.filter { !normalized.contains($0) }
         normalized.append(contentsOf: missingIDs)
         return normalized
+    }
+
+    /// 안정된 슬롯 키만 유지하고 빈 표시 이름은 기본값으로 위임
+    private static func normalizedAccountDisplayNames(_ names: [String: String]) -> [String: String] {
+        stableAccountIDs.reduce(into: [:]) { result, id in
+            let value = AccountDisplayName.normalized(names[id] ?? "")
+            if !value.isEmpty { result[id] = value }
+        }
     }
 
     private struct PathNormalization: Sendable {
