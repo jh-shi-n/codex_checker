@@ -233,6 +233,9 @@ public struct SettingsView: View {
             Form {
                 Section(Self.refreshSectionTitle) {
                     Picker("새로고침 간격", selection: refreshIntervalBinding) {
+                        if !Self.refreshIntervalOptions.contains(refreshIntervalMinutes) {
+                            Text("직접 입력: \(refreshIntervalMinutes)분").tag(refreshIntervalMinutes)
+                        }
                         ForEach(Self.refreshIntervalOptions, id: \.self) { minutes in
                             Text("\(minutes)분").tag(minutes)
                         }
@@ -247,14 +250,9 @@ public struct SettingsView: View {
                             .frame(width: 64)
                             .textFieldStyle(.roundedBorder)
                             .onSubmit(commitRefreshIntervalDraft)
-                        Stepper(
-                            "",
-                            value: refreshIntervalBinding,
-                            in: Self.minimumRefreshIntervalMinutes...Self.maximumRefreshIntervalMinutes
-                        )
-                        .labelsHidden()
+
                     }
-                    Text("모든 계정에 적용됩니다. 1~1,440분을 입력한 뒤 Enter를 누르면 적용됩니다.")
+                    Text("모든 계정에 적용됩니다. 1~60분을 입력한 뒤 Enter를 누르면 적용됩니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

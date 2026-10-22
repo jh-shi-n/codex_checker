@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class RefreshServiceTests: XCTestCase {
-    func testCustomIntervalsNormalizeWithinOneToOneThousandFourHundredFortyMinutes() {
+    func testCustomIntervalsNormalizeWithinOneToSixtyMinutes() {
         XCTAssertEqual(RefreshService.normalizedIntervalMinutes(1), 1)
         XCTAssertEqual(RefreshService.normalizedIntervalMinutes(2), 2)
         XCTAssertEqual(RefreshService.normalizedIntervalMinutes(5), 5)
@@ -12,10 +12,10 @@ final class RefreshServiceTests: XCTestCase {
         XCTAssertEqual(RefreshService.normalizedIntervalMinutes(10), 10)
         XCTAssertEqual(RefreshService.normalizedIntervalMinutes(30), 30)
         XCTAssertEqual(RefreshService.normalizedIntervalMinutes(60), 60)
-        XCTAssertEqual(RefreshService.normalizedIntervalMinutes(1_440), 1_440)
+        XCTAssertEqual(RefreshService.normalizedIntervalMinutes(61), 60)
         XCTAssertEqual(RefreshService.normalizedIntervalMinutes(0), 5)
         XCTAssertEqual(RefreshService.normalizedIntervalMinutes(-1), 5)
-        XCTAssertEqual(RefreshService.normalizedIntervalMinutes(1_441), 1_440)
+        XCTAssertEqual(RefreshService.normalizedIntervalMinutes(1_441), 60)
     }
 
     func testStartRefreshesImmediatelyAndStopCancelsFutureTicks() async {

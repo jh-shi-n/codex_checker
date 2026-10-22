@@ -938,7 +938,7 @@ final class QuotaPresentationTests: XCTestCase {
         )
         XCTAssertEqual(SettingsView.refreshIntervalOptions, [1, 5, 10, 30])
         XCTAssertEqual(SettingsView.minimumRefreshIntervalMinutes, 1)
-        XCTAssertEqual(SettingsView.maximumRefreshIntervalMinutes, 1_440)
+        XCTAssertEqual(SettingsView.maximumRefreshIntervalMinutes, 60)
         XCTAssertEqual(SettingsView.accountPathCount, 4)
     }
 
@@ -952,8 +952,8 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(draft.text, "7")
 
         draft.replace(text: "1441")
-        XCTAssertEqual(draft.commit(), 1_440)
-        XCTAssertEqual(draft.text, "1440")
+        XCTAssertEqual(draft.commit(), 60)
+        XCTAssertEqual(draft.text, "60")
 
         draft.replace(text: "0")
         XCTAssertEqual(draft.commit(), 5)
