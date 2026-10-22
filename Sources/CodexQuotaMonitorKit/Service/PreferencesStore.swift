@@ -6,7 +6,7 @@ import Foundation
 /// 제한: 인증 파일 읽기 제외
 @MainActor
 public final class PreferencesStore: ObservableObject {
-    /// 목적: UserDefaults 저장 키 정의
+    /// 기존 설정 이관·호환 로드 및 조회 캐시 저장용 키
     public enum Keys {
         public static let refreshIntervalMinutes = "CodexQuotaMonitor.refreshIntervalMinutes"
         public static let resetReminderMinutes = "CodexQuotaMonitor.resetReminderMinutes"
@@ -79,8 +79,10 @@ public final class PreferencesStore: ObservableObject {
     @Published public private(set) var launchAtLogin: Bool
     @Published public private(set) var showAccountLabels: Bool
     @Published public private(set) var activityNotificationDurationSeconds: Int
+    @Published public private(set) var persistenceError: String?
 
     private let userDefaults: UserDefaults
+    private let configurationFile: AppConfigurationFile?
     private let defaultPaths: [String]
     private let homeDirectory: URL
     private let fileSystem: AccountPathFileSystem
@@ -91,23 +93,37 @@ public final class PreferencesStore: ObservableObject {
         userDefaults: UserDefaults = .standard,
         defaultPaths: [String]? = nil,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        fileSystem: AccountPathFileSystem = .live
+        fileSystem: AccountPathFileSystem = .live,
+        configurationFile: AppConfigurationFile? = nil
     ) {
         self.userDefaults = userDefaults
+        self.configurationFile = configurationFile
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.fileSystem = fileSystem
-        let requestedDefaults = defaultPaths ?? AccountConfig.defaultAccounts(homeDirectory: self.homeDirectory).map { $0.home.path }
+        let requestedDefaults = defaultPaths ?? Array(repeating: "", count: Self.accountPathCount)
         self.defaultPaths = Self.normalizedDefaultPaths(requestedDefaults, homeDirectory: self.homeDirectory)
 
-        let rawInterval = userDefaults.object(forKey: Keys.refreshIntervalMinutes)
+        var savedSettings: AppPreferencesPayload?
+        var loadError: String?
+        do { savedSettings = try configurationFile?.read()?.settings }
+        catch { loadError = "설정 파일을 읽지 못했습니다: \(error.localizedDescription)" }
+        self.persistenceError = loadError
+        let values = savedSettings?.preferenceValues
+        let readSetting: (String) -> Any? = { key in
+            if loadError != nil { return nil }
+            if let values { return values[key] }
+            return userDefaults.object(forKey: key)
+        }
+
+        let rawInterval = readSetting(Keys.refreshIntervalMinutes)
         let persistedInterval = rawInterval as? Int
         let normalizedInterval = RefreshService.normalizedIntervalMinutes(persistedInterval ?? 5)
         self.refreshIntervalMinutes = normalizedInterval
         self.resetReminderMinutes = Self.normalizedResetReminderMinutes(
-            userDefaults.object(forKey: Keys.resetReminderMinutes) as? Int ?? 5
+            readSetting(Keys.resetReminderMinutes) as? Int ?? 5
         )
 
-        let rawPaths = userDefaults.object(forKey: Keys.accountPaths)
+        let rawPaths = readSetting(Keys.accountPaths)
         let persistedPaths = rawPaths as? [String]
         let normalizedPathResult = Self.normalizedPathResult(
             persistedPaths,
@@ -124,19 +140,19 @@ public final class PreferencesStore: ObservableObject {
             self.accountPaths = normalizedPathResult.values
         }
 
-        let rawEnabledAccountIDs = userDefaults.object(forKey: Keys.enabledAccountIDs)
+        let rawEnabledAccountIDs = readSetting(Keys.enabledAccountIDs)
         let persistedEnabledAccountIDs = rawEnabledAccountIDs as? [String]
         self.enabledAccountIDs = Self.normalizedAccountIDs(persistedEnabledAccountIDs)
-        let rawAccountDisplayOrder = userDefaults.object(forKey: Keys.accountDisplayOrder)
+        let rawAccountDisplayOrder = readSetting(Keys.accountDisplayOrder)
         let persistedAccountDisplayOrder = rawAccountDisplayOrder as? [String]
         self.accountDisplayOrder = Self.normalizedAccountDisplayOrder(persistedAccountDisplayOrder)
 
-        let rawLaunchAtLogin = userDefaults.object(forKey: Keys.launchAtLogin)
+        let rawLaunchAtLogin = readSetting(Keys.launchAtLogin)
         self.launchAtLogin = rawLaunchAtLogin as? Bool ?? false
-        let rawShowAccountLabels = userDefaults.object(forKey: Keys.showAccountLabels)
+        let rawShowAccountLabels = readSetting(Keys.showAccountLabels)
         let persistedShowAccountLabels = rawShowAccountLabels as? Bool
         self.showAccountLabels = persistedShowAccountLabels ?? false
-        let rawActivityDuration = userDefaults.object(forKey: Keys.activityNotificationDurationSeconds)
+        let rawActivityDuration = readSetting(Keys.activityNotificationDurationSeconds)
         let persistedActivityDuration = rawActivityDuration as? Int
         self.activityNotificationDurationSeconds = Self.normalizedActivityNotificationDurationSeconds(
             persistedActivityDuration ?? Self.defaultActivityNotificationDurationSeconds
@@ -164,9 +180,43 @@ public final class PreferencesStore: ObservableObject {
             && Self.encodedQuotaSnapshots(quotaSnapshotsStorage) != rawQuotaSnapshots
         if intervalNeedsPersistence || pathsNeedPersistence || enabledAccountIDsNeedPersistence
             || accountDisplayOrderNeedsPersistence || launchNeedsPersistence
-            || showLabelsNeedPersistence || activityDurationNeedsPersistence || quotaSnapshotsNeedPersistence {
+            || showLabelsNeedPersistence || activityDurationNeedsPersistence || quotaSnapshotsNeedPersistence
+            || (configurationFile != nil && savedSettings == nil && loadError == nil) {
             persist()
         }
+    }
+
+    /// 계정 표시 활성화 여부와 독립적인 등록 경로 존재 여부
+    public var hasRegisteredAccounts: Bool { accountPaths.contains { !$0.isEmpty } }
+
+    /// 설정 창 재진입 시 JSON을 다시 읽고 잘못된 파일은 현재 메모리 상태로 대체하지 않는 로드
+    @discardableResult
+    public func reloadFromConfiguration() -> Bool {
+        guard let configurationFile else { return false }
+        do {
+            guard try configurationFile.read()?.settings != nil else { return false }
+        } catch {
+            persistenceError = "설정 파일을 읽지 못했습니다: \(error.localizedDescription)"
+            return false
+        }
+        let loaded = PreferencesStore(
+            userDefaults: userDefaults, defaultPaths: defaultPaths, homeDirectory: homeDirectory,
+            fileSystem: fileSystem, configurationFile: configurationFile
+        )
+        guard loaded.persistenceError == nil else {
+            persistenceError = loaded.persistenceError
+            return false
+        }
+        accountPaths = loaded.accountPaths
+        enabledAccountIDs = loaded.enabledAccountIDs
+        accountDisplayOrder = loaded.accountDisplayOrder
+        refreshIntervalMinutes = loaded.refreshIntervalMinutes
+        resetReminderMinutes = loaded.resetReminderMinutes
+        activityNotificationDurationSeconds = loaded.activityNotificationDurationSeconds
+        showAccountLabels = loaded.showAccountLabels
+        launchAtLogin = loaded.launchAtLogin
+        persistenceError = nil
+        return true
     }
 
     /// Compatibility alias for settings views that use the shorter name.
@@ -326,7 +376,7 @@ public final class PreferencesStore: ObservableObject {
     public func visibleAccounts(_ states: [AccountState]) -> [AccountState] {
         accountDisplayOrder.compactMap { id in
             guard enabledAccountIDs.contains(id) else { return nil }
-            return states.first { $0.id == id }
+            return states.first { $0.id == id && $0.status != .notConfigured }
         }
     }
 
@@ -374,19 +424,31 @@ public final class PreferencesStore: ObservableObject {
         updateActivityNotificationDuration(seconds: seconds)
     }
 
-    /// 목적: 현재 설정값 전체를 UserDefaults에 기록
+    /// 파일 연결 시 config.json에 설정 저장, 조회 캐시는 기존 로컬 저장소에 유지
     public func persist() {
-        userDefaults.set(refreshIntervalMinutes, forKey: Keys.refreshIntervalMinutes)
-        userDefaults.set(resetReminderMinutes, forKey: Keys.resetReminderMinutes)
-        userDefaults.set(accountPaths, forKey: Keys.accountPaths)
-        userDefaults.set(enabledAccountIDs, forKey: Keys.enabledAccountIDs)
-        userDefaults.set(accountDisplayOrder, forKey: Keys.accountDisplayOrder)
-        userDefaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
-        userDefaults.set(showAccountLabels, forKey: Keys.showAccountLabels)
-        userDefaults.set(
-            activityNotificationDurationSeconds,
-            forKey: Keys.activityNotificationDurationSeconds
-        )
+        if let configurationFile {
+            do {
+                try configurationFile.saveSettings(AppPreferencesPayload(
+                    accountPaths: accountPaths, enabledAccountIDs: enabledAccountIDs,
+                    accountDisplayOrder: accountDisplayOrder, refreshIntervalMinutes: refreshIntervalMinutes,
+                    resetReminderMinutes: resetReminderMinutes,
+                    activityNotificationDurationSeconds: activityNotificationDurationSeconds,
+                    showAccountLabels: showAccountLabels, launchAtLogin: launchAtLogin
+                ))
+                persistenceError = nil
+            } catch {
+                persistenceError = "설정을 저장하지 못했습니다: \(error.localizedDescription)"
+            }
+        } else {
+            userDefaults.set(refreshIntervalMinutes, forKey: Keys.refreshIntervalMinutes)
+            userDefaults.set(resetReminderMinutes, forKey: Keys.resetReminderMinutes)
+            userDefaults.set(accountPaths, forKey: Keys.accountPaths)
+            userDefaults.set(enabledAccountIDs, forKey: Keys.enabledAccountIDs)
+            userDefaults.set(accountDisplayOrder, forKey: Keys.accountDisplayOrder)
+            userDefaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
+            userDefaults.set(showAccountLabels, forKey: Keys.showAccountLabels)
+            userDefaults.set(activityNotificationDurationSeconds, forKey: Keys.activityNotificationDurationSeconds)
+        }
         if let encoded = Self.encodedQuotaSnapshots(quotaSnapshotsStorage), !quotaSnapshotsStorage.isEmpty {
             userDefaults.set(encoded, forKey: Keys.lastSuccessfulQuotaSnapshots)
         } else {
@@ -481,13 +543,10 @@ public final class PreferencesStore: ObservableObject {
         }
     }
 
+    /// 명시적 기본 경로만 정규화하고 비어 있는 초기 슬롯은 그대로 보존
     private static func normalizedDefaultPaths(_ paths: [String], homeDirectory: URL) -> [String] {
-        let fallback = AccountConfig.defaultAccounts(homeDirectory: homeDirectory).map { $0.home.path }
-        guard paths.count == accountPathCount else { return fallback }
-        return paths.enumerated().map { index, value in
-            let canonical = canonicalPath(value, homeDirectory: homeDirectory)
-            return canonical.isEmpty ? fallback[index] : canonical
-        }
+        guard paths.count == accountPathCount else { return Array(repeating: "", count: accountPathCount) }
+        return paths.map { canonicalPath($0, homeDirectory: homeDirectory) }
     }
 
     private static func canonicalPath(_ path: String, homeDirectory: URL) -> String {

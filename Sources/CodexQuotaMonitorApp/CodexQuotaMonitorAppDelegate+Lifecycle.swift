@@ -11,6 +11,7 @@ extension CodexQuotaMonitorAppDelegate {
         quotaResetNotifications.start()
         quotaResetScheduler.start()
         lifecycleCoordinator.launch()
+        openAccountSetupIfNeeded()
         Task { await sessionActivityMonitor.start() }
         tokenCleanupTask = Task { [tokenUsageCache] in
             while !Task.isCancelled {
@@ -30,6 +31,8 @@ extension CodexQuotaMonitorAppDelegate {
         quotaResetScheduler.stop()
         UsageWindowProbeStore.shared.cancelAll()
         serviceStatus.cancel()
+        emptyAccountsPopover?.performClose(nil)
+        emptyAccountsPopover = nil
         tokenCleanupTask?.cancel()
         tokenCleanupTask = nil
         if let hiddenAccountsStatusItem {
@@ -48,6 +51,8 @@ extension CodexQuotaMonitorAppDelegate {
         statesCancellable = nil
         fallbackSettingsWindow?.close()
         fallbackSettingsWindow = nil
+        accountSetupModel?.cancelCheck()
+        accountSetupWindow?.close()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

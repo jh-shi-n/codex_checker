@@ -26,6 +26,7 @@ struct CodexQuotaMonitorApp: App {
 @MainActor
 final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let preferences: PreferencesStore
+    let installationHistory: InstallationHistoryStore
     let accountStore: AccountStore
     /// 할당량 조회에 동반하여 갱신하는 네 계정 공용 서비스 상태
     let serviceStatus: OpenAIServiceStatusStore
@@ -58,15 +59,22 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     var effectiveLaunchAtLoginStatus: LaunchAtLoginStatus
     let sessionActivityDelivery: SessionActivityToastDeliveryGate
     var fallbackSettingsWindow: NSWindow?
+    var accountSetupWindow: NSWindow?
+    var accountSetupModel: AccountSetupModel?
     var statesCancellable: AnyCancellable?
     var activityToastCancellable: AnyCancellable?
     var wakeObserver: NSObjectProtocol?
     var hiddenAccountsStatusItem: NSStatusItem?
+    var emptyAccountsPopover: NSPopover?
     var tokenCleanupTask: Task<Void, Never>?
 
     /// 설정과 계정 서비스 초기화 및 표시·갱신 콜백 연결
     override init() {
-        let preferences = PreferencesStore()
+        let preferences = PreferencesStore(configurationFile: AppConfigurationFile(fileURL: AppConfigurationFile.defaultFileURL))
+        let installationHistory = InstallationHistoryStore(
+            fileURL: InstallationHistoryStore.defaultFileURL,
+            hasExistingAccount: preferences.hasRegisteredAccounts
+        )
         let serviceStatus = OpenAIServiceStatusStore()
         let accountStore = AccountStore(
             configs: Self.configs(for: preferences.accountPaths),
@@ -130,6 +138,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         let notchLayoutManager = NotchLayoutManager(serviceStatus: serviceStatus)
 
         self.preferences = preferences
+        self.installationHistory = installationHistory
         self.accountStore = accountStore
         self.serviceStatus = serviceStatus
         self.quotaResetNotifications = quotaResetNotifications
@@ -394,27 +403,55 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         })
     }
 
-    /// 전체 계정 숨김 상태에서만 메뉴 막대의 설정 버튼 제공
+    /// 표시 계정이 없을 때 메뉴 막대의 앱 안내 아이콘 제공
     private func updateHiddenAccountsSettingsAccess(isHidden: Bool) {
         guard isHidden else {
+            emptyAccountsPopover?.performClose(nil)
+            emptyAccountsPopover = nil
             if let hiddenAccountsStatusItem {
                 NSStatusBar.system.removeStatusItem(hiddenAccountsStatusItem)
                 self.hiddenAccountsStatusItem = nil
             }
             return
         }
-        guard hiddenAccountsStatusItem == nil else { return }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = AppBranding.menuBarIcon()
-        item.button?.target = self
-        item.button?.action = #selector(openHiddenAccountsSettings)
-        item.button?.toolTip = "계정 표시 설정"
-        hiddenAccountsStatusItem = item
+        if hiddenAccountsStatusItem == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            item.button?.image = AppBranding.menuBarIcon()
+            item.button?.target = self
+            item.button?.action = #selector(openEmptyAccountsInfo)
+            item.button?.toolTip = "Codex Quota Monitor"
+            hiddenAccountsStatusItem = item
+        }
+        if let controller = emptyAccountsPopover?.contentViewController as? NSHostingController<EmptyAccountsView> {
+            controller.rootView = makeEmptyAccountsView()
+        }
     }
 
-    /// 숨김 계정의 표시 복원을 위한 설정 창 열기
-    @objc private func openHiddenAccountsSettings() {
-        openSettings()
+    /// 초기 등록 전 연결 가이드 또는 등록 완료 후 계정 상태 안내 표시
+    @objc private func openEmptyAccountsInfo() {
+        if installationHistory.requiresAccountSetup && !preferences.hasRegisteredAccounts {
+            openAccountSetupIfNeeded()
+            return
+        }
+        guard let button = hiddenAccountsStatusItem?.button else { return }
+        if emptyAccountsPopover?.isShown == true {
+            emptyAccountsPopover?.performClose(nil)
+            return
+        }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: makeEmptyAccountsView())
+        popover.contentSize = EmptyAccountsView.contentSize
+        emptyAccountsPopover = popover
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    }
+
+    /// 등록 상태별 설명과 설정 버튼의 공통 구성
+    private func makeEmptyAccountsView() -> EmptyAccountsView {
+        EmptyAccountsView(hasRegisteredAccounts: preferences.hasRegisteredAccounts) { [weak self] in
+            self?.emptyAccountsPopover?.performClose(nil)
+            self?.openSettings()
+        }
     }
 
     private static func configs(for paths: [String]) -> [AccountConfig] {
