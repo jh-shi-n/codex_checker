@@ -77,7 +77,8 @@ final class AppLifecycleCoordinatorTests: XCTestCase {
         }
 
         XCTAssertEqual(preferences.refreshIntervalMinutes, 7)
-        XCTAssertEqual(defaults.object(forKey: PreferencesStore.Keys.refreshIntervalMinutes) as? Int, 7)
+        XCTAssertNotNil(defaults.data(forKey: PreferencesStore.Keys.settingsBundle))
+        XCTAssertNil(defaults.object(forKey: PreferencesStore.Keys.refreshIntervalMinutes))
         XCTAssertEqual(PreferencesStore(userDefaults: defaults).refreshIntervalMinutes, 7)
         XCTAssertEqual(probe.events, ["restartRefresh:7"])
     }

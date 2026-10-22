@@ -225,15 +225,17 @@ public struct AccountDetailView: View {
     private var accountActivity: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text("CLI 실행 세부내역")
+                Text("세션 실행 기록")
                     .font(.headline.weight(.semibold))
-                Text("(CLI 세션)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
+            Text("해당 계정의 CLI 세션 기록을 표시합니다. Codex Desktop 앱의 실행 내역은 표시되지 않을 수 있습니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             if account.status == .notConfigured {
-                Text("Configure an account path to view Codex activity.")
+                Text("계정의 CLI 폴더를 등록하면 활동 기록을 확인할 수 있습니다.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

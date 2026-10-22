@@ -1,6 +1,6 @@
-// 목적: 앱 설정과 설치 이력의 단일 config.json 저장소
-// 이용처: 앱 시작·설정 변경·최초 계정 등록
-// 사용방법: PreferencesStore와 InstallationHistoryStore에 동일 파일 경로 연결
+// 목적: config.json의 최초 실행 표식·등록 이력 저장과 이전 설정 이관
+// 이용처: 앱 시작과 최초 계정 등록·기존 설정 이관
+// 사용방법: PreferencesStore에 이관 원본 경로 전달
 import Foundation
 
 /// 인증 정보 없이 저장 가능한 앱 설정의 명시적 허용 목록
@@ -29,14 +29,14 @@ public struct AppPreferencesPayload: Codable, Equatable, Sendable {
     }
 }
 
-/// 실행 이력과 앱 설정을 분리한 버전 2 설정 파일
+/// 과거 실행 이력과 앱 설정을 읽기 위한 버전 2 호환 자료형
 public struct AppConfigurationDocument: Codable, Equatable, Sendable {
     public var schemaVersion = 2
     public var installation: InstallationHistory?
     public var settings: AppPreferencesPayload?
 }
 
-/// 서로 다른 소비자의 이력·설정 저장 시 다른 섹션을 보존하는 파일 경계
+/// 최초 실행 표식·등록 이력과 이전 설정 이관의 파일 경계
 @MainActor
 public final class AppConfigurationFile {
     public let fileURL: URL
@@ -53,6 +53,9 @@ public final class AppConfigurationFile {
         self.fileURL = fileURL
     }
 
+    /// 신규 실행 판별용 config.json 자체의 존재 여부; 이전 파일과 구분
+    public var exists: Bool { FileManager.default.fileExists(atPath: fileURL.path) }
+
     /// 이전 파일명·버전 1 이력의 복원 및 알 수 없는 버전의 저장 차단
     public func read() throws -> AppConfigurationDocument? {
         let legacy = fileURL.deletingLastPathComponent().appendingPathComponent("installation.json")
@@ -62,16 +65,32 @@ public final class AppConfigurationFile {
         guard FileManager.default.fileExists(atPath: source.path) else { return nil }
         let data = try Data(contentsOf: source)
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let text = try decoder.singleValueContainer().decode(String.self)
+            guard let date = Self.registrationDate(from: text) else { throw CocoaError(.fileReadCorruptFile) }
+            return date
+        }
         let header = try decoder.decode(VersionHeader.self, from: data)
+        if header.schemaVersion == nil {
+            let record = try decoder.decode(RegistrationRecord.self, from: data)
+            guard record.hasRegisteredAccount || record.firstAccountRegisteredAt == nil else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            return AppConfigurationDocument(installation: InstallationHistory(
+                hasRegisteredAccount: record.hasRegisteredAccount,
+                firstAccountRegisteredAt: record.firstAccountRegisteredAt
+            ), settings: record.settings)
+        }
         if header.schemaVersion == 1 {
             let history = try decoder.decode(InstallationHistory.self, from: data)
-            guard history.launchCount >= 0 else { throw CocoaError(.fileReadCorruptFile) }
+            guard history.schemaVersion == 1, history.hasRegisteredAccount || history.firstAccountRegisteredAt == nil else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
             return AppConfigurationDocument(installation: history)
         }
         guard header.schemaVersion == 2 else { throw CocoaError(.fileReadCorruptFile) }
         let document = try decoder.decode(AppConfigurationDocument.self, from: data)
-        if let history = document.installation, history.schemaVersion != 1 || history.launchCount < 0 {
+        if let history = document.installation, history.schemaVersion != 1 || (!history.hasRegisteredAccount && history.firstAccountRegisteredAt != nil) {
             throw CocoaError(.fileReadCorruptFile)
         }
         return document
@@ -85,9 +104,17 @@ public final class AppConfigurationFile {
         try write(document)
     }
 
-    /// 실행·등록 이력 변경 시 계정 경로와 다른 설정 보존
+    /// 등록 이력만 동기화하고 동일 값의 반복 기록·이전 설정의 유실 방지
     public func saveInstallation(_ history: InstallationHistory) throws {
+        guard history.schemaVersion == 1, history.hasRegisteredAccount || history.firstAccountRegisteredAt == nil,
+              history.firstAccountRegisteredAt.map({ $0.timeIntervalSince1970.isFinite }) ?? true else {
+            throw CocoaError(.coderInvalidValue)
+        }
         var document = try read() ?? AppConfigurationDocument()
+        if exists, document.installation == history,
+           try JSONDecoder().decode(VersionHeader.self, from: Data(contentsOf: fileURL)).schemaVersion == nil {
+            return
+        }
         document.installation = history
         try write(document)
     }
@@ -99,14 +126,65 @@ public final class AppConfigurationFile {
             attributes: [.posixPermissions: 0o700]
         )
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(Self.registrationDateText(date))
+        }
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(document).write(to: fileURL, options: .atomic)
+        let record = RegistrationRecord(
+            hasRegisteredAccount: document.installation?.hasRegisteredAccount ?? false,
+            firstAccountRegisteredAt: document.installation?.firstAccountRegisteredAt,
+            settings: document.settings
+        )
+        try encoder.encode(record).write(to: fileURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+    }
+
+    /// UserDefaults의 Date 정밀도를 보존한 ISO 8601 UTC 문자열 구성
+    nonisolated private static func registrationDateText(_ date: Date) -> String {
+        let reference = date.timeIntervalSinceReferenceDate
+        let integral = floor(reference)
+        let formatter = ISO8601DateFormatter()
+        let base = formatter.string(from: Date(timeIntervalSinceReferenceDate: integral))
+        let fraction = String(format: "%.9f", locale: Locale(identifier: "en_US_POSIX"), reference - integral).dropFirst()
+        return String(base.dropLast()) + fraction + "Z"
+    }
+
+    /// 기존 초 단위·새 소수 초 UTC 표현의 동일 Date 복원
+    nonisolated private static func registrationDate(from text: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if text.hasSuffix("Z"), let dot = text.lastIndex(of: ".") {
+            let base = String(text[..<dot]) + "Z"
+            let digits = text[text.index(after: dot)..<text.index(before: text.endIndex)]
+            guard !digits.isEmpty, digits.allSatisfy({ $0.isASCII && $0.isNumber }),
+                  let fraction = Double("0." + digits),
+                  let integral = formatter.date(from: base) else { return nil }
+            return Date(timeIntervalSinceReferenceDate: integral.timeIntervalSinceReferenceDate + fraction)
+        }
+        return formatter.date(from: text)
+    }
+
+    /// 등록 여부·등록일자의 새 파일 형식; 과거 설정은 이관 원본으로만 보존
+    private struct RegistrationRecord: Codable {
+        let hasRegisteredAccount: Bool
+        let firstAccountRegisteredAt: Date?
+        let settings: AppPreferencesPayload?
+
+        private enum CodingKeys: String, CodingKey {
+            case hasRegisteredAccount, firstAccountRegisteredAt, settings
+        }
+
+        /// 날짜 미상도 null로 명시하고 형식 버전·실행 횟수 저장 제외
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(hasRegisteredAccount, forKey: .hasRegisteredAccount)
+            try values.encode(firstAccountRegisteredAt, forKey: .firstAccountRegisteredAt)
+            try values.encodeIfPresent(settings, forKey: .settings)
+        }
     }
 
     /// 임의 필드 저장 없이 파일 형식 버전만 판별하는 읽기 경계
     private struct VersionHeader: Decodable {
-        let schemaVersion: Int
+        let schemaVersion: Int?
     }
 }

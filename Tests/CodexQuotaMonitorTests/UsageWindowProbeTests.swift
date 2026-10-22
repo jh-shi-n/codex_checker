@@ -53,9 +53,18 @@ final class UsageWindowProbeTests: XCTestCase {
             "--model",
             "gpt-5.6-luna",
             "-c",
-            "model_reasoning_effort=\"low\"",
+            "model_reasoning_effort=\"none\"",
+            "-c", "skills.include_instructions=false",
+            "-c", "skills.bundled.enabled=false",
+            "-c", "tools.update_plan.enabled=false",
+            "-c", "tools.experimental_request_user_input.enabled=false",
+            "--disable", "view_image",
+            "--disable", "goals",
+            "--disable", "workspace_dependencies",
+            "--disable", "default_mode_request_user_input",
+            "--disable", "tool_suggest",
             "--json",
-            "print 1",
+            ".",
         ])
         XCTAssertEqual(command.environmentOverrides, [
             "CODEX_HOME": accountHome.standardizedFileURL.path,
@@ -116,7 +125,7 @@ final class UsageWindowProbeTests: XCTestCase {
         )
         XCTAssertEqual(
             try Data(contentsOf: isolation.modelInstructionsURL),
-            Data("print 1".utf8)
+            Data("Silence".utf8)
         )
         if let permissions = try fileManager.attributesOfItem(atPath: isolation.modelInstructionsURL.path)[.posixPermissions] as? NSNumber {
             XCTAssertEqual(permissions.intValue & 0o777, 0o600)
@@ -226,8 +235,8 @@ final class UsageWindowProbeTests: XCTestCase {
         XCTAssertNil(result.usage)
     }
 
-    /// turn 완료만 있고 assistant의 기대 출력이 없으면 실패 처리
-    func testMissingAssistantOutputFailsDespiteTurnCompletion() async {
+    /// 빈 응답과 정상 완료 이벤트의 성공 처리
+    func testEmptyAssistantOutputSucceedsWithTurnCompletion() async {
         let runner = RecordingRunner(result: .init(
             exitStatus: 0,
             stdout: probeOutput(assistantText: nil)
@@ -240,11 +249,11 @@ final class UsageWindowProbeTests: XCTestCase {
 
         let result = await service.probe(config())
 
-        XCTAssertEqual(result.failureCategory, .malformedOutput)
+        XCTAssertTrue(result.isSuccess)
     }
 
-    /// assistant 출력이 `1`이 아니면 실패 처리
-    func testWrongAssistantOutputFailsDespiteTurnCompletion() async {
+    /// 응답 내용에 의존하지 않는 정상 완료 판정
+    func testArbitraryAssistantOutputSucceedsWithTurnCompletion() async {
         let runner = RecordingRunner(result: .init(
             exitStatus: 0,
             stdout: probeOutput(assistantText: "2")
@@ -257,7 +266,7 @@ final class UsageWindowProbeTests: XCTestCase {
 
         let result = await service.probe(config())
 
-        XCTAssertEqual(result.failureCategory, .malformedOutput)
+        XCTAssertTrue(result.isSuccess)
     }
 
     /// item 완료만 있고 turn 완료가 없으면 실패 처리
@@ -493,7 +502,26 @@ final class UsageWindowProbeTests: XCTestCase {
         let executable = bin.appendingPathComponent("codex")
         let interpreter = bin.appendingPathComponent("probe-runtime")
         try Data("#!/usr/bin/env probe-runtime\n".utf8).write(to: executable)
-        try Data("#!/bin/sh\nprintf '%s\\n' \"$PATH\"\nprintf '%s\\n' \"$@\"\n".utf8).write(to: interpreter)
+        try Data("""
+        #!/bin/sh
+        shift
+        if [ "$1" = "debug" ]; then
+          printf '%s\\n' '{"models":[{"slug":"gpt-5.6-luna","tool_mode":"code_mode_only","apply_patch_tool_type":"freeform","use_responses_lite":true}]}'
+          exit 0
+        fi
+        printf '%s\\n' "$PATH"
+        printf '%s\\n' "$@"
+        for argument in "$@"; do
+          case "$argument" in
+            model_catalog_json=*)
+              catalog_path="${argument#*=}"
+              catalog_path="${catalog_path#\\\"}"
+              catalog_path="${catalog_path%\\\"}"
+              /bin/cat "$catalog_path"
+              ;;
+          esac
+        done
+        """.utf8).write(to: interpreter)
         try fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o755)], ofItemAtPath: executable.path)
         try fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o755)], ofItemAtPath: interpreter.path)
 
@@ -510,6 +538,12 @@ final class UsageWindowProbeTests: XCTestCase {
         XCTAssertTrue(childPath.contains("/usr/bin:/bin"))
         XCTAssertTrue(childPath.contains("model_instructions_file=\""))
         XCTAssertTrue(childPath.contains("/ping-instructions\""))
+        XCTAssertTrue(childPath.contains("\"tool_mode\":\"direct\""))
+        XCTAssertTrue(childPath.contains("\"apply_patch_tool_type\":null"))
+        XCTAssertTrue(childPath.contains("\"use_responses_lite\":false"))
+        let catalogLine = try XCTUnwrap(childPath.split(separator: "\n").first(where: { $0.hasPrefix("model_catalog_json=") }))
+        let path = String(catalogLine.dropFirst("model_catalog_json=".count)).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        XCTAssertFalse(fileManager.fileExists(atPath: path))
     }
 
     func testLiveRunnerCancellationKillsSignalIgnoringChildPromptly() async throws {
@@ -559,6 +593,52 @@ final class UsageWindowProbeTests: XCTestCase {
             XCTAssertEqual(error as? UsageWindowProbeProcessError, .cancelled)
         }
         XCTAssertLessThan(Date().timeIntervalSince(cancellationStart), 0.75)
+    }
+
+    /// 지원되지 않는 카탈로그에서 요청 실행 없이 명시적 구성 실패 반환
+    func testUnsupportedCatalogFailsWithoutExecutingProbe() async throws {
+        try await withCatalogExecutable(body: "printf '%s\\n' '{\"models\":[]}'") { command in
+            let runner = UsageWindowProbeLiveProcessRunner()
+            do {
+                _ = try await runner.run(command: command, timeout: 2)
+                XCTFail("구성 실패 필요")
+            } catch {
+                XCTAssertEqual(error as? UsageWindowProbeProcessError, .configurationFailure)
+            }
+        }
+    }
+
+    /// 카탈로그의 무한 출력과 종료 지연에 대한 제한·정리 검증
+    func testCatalogOutputAndTimeLimits() async throws {
+        for (body, timeout, expected) in [
+            ("while :; do printf '%1024s' x; done", 3.0, UsageWindowProbeProcessError.configurationFailure),
+            ("while :; do :; done", 0.1, UsageWindowProbeProcessError.timeout),
+        ] {
+            try await withCatalogExecutable(body: body) { command in
+                let runner = UsageWindowProbeLiveProcessRunner(gracefulTerminationTimeout: 0.05, forcedTerminationTimeout: 0.1)
+                do {
+                    _ = try await runner.run(command: command, timeout: timeout)
+                    XCTFail("출력·시간 제한 실패 필요")
+                } catch {
+                    XCTAssertEqual(error as? UsageWindowProbeProcessError, expected)
+                }
+            }
+        }
+    }
+
+    /// 카탈로그 단계의 동작만 노출하는 인증정보 없는 임시 실행 파일 생성
+    private func withCatalogExecutable(
+        body: String,
+        operation: (UsageWindowProbeCommand) async throws -> Void
+    ) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("fake-codex")
+        try Data(("#!/bin/sh\n" + body + "\n").utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let command = UsageWindowProbeCommandBuilder().build(executable: executable, configuredAccountHome: root)
+        try await operation(command)
     }
 
     /// JSONL event 배열을 CLI stdout 형태의 byte stream으로 직렬화

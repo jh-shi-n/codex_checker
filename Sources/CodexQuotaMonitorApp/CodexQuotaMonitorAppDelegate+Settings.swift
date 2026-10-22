@@ -6,7 +6,6 @@ import CodexQuotaMonitorKit
 
 extension CodexQuotaMonitorAppDelegate {
     func openSettings() {
-        reloadConfigurationForSettings()
         effectiveLaunchAtLoginStatus = lifecycleCoordinator.readLaunchAtLoginStatus()
         // Accessory apps can report `showSettingsWindow:` as handled without
         // actually presenting SwiftUI's Settings scene. Ring clicks therefore
@@ -17,23 +16,6 @@ extension CodexQuotaMonitorAppDelegate {
             fallbackSettingsWindow?.makeKeyAndOrderFront(nil)
         }
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    /// 파일에서 변경된 계정·주기·표시·알림 설정을 실행 중 서비스와 설정 초안에 반영
-    private func reloadConfigurationForSettings() {
-        let oldPaths = preferences.accountPaths
-        let oldInterval = preferences.refreshIntervalMinutes
-        guard preferences.reloadFromConfiguration() else { return }
-        if oldPaths != preferences.accountPaths { applyAccountPaths(preferences.accountPaths) }
-        if oldInterval != preferences.refreshIntervalMinutes {
-            lifecycleCoordinator.restartRefresh(intervalMinutes: preferences.refreshIntervalMinutes)
-        }
-        sessionActivityToastQueue.updateDuration(seconds: preferences.activityNotificationDurationSeconds)
-        quotaResetScheduler.reconcile(states: accountStore.states, reminderMinutes: preferences.resetReminderMinutes)
-        render(states: accountStore.states)
-        if let window = fallbackSettingsWindow {
-            window.contentViewController = NSHostingController(rootView: makeSettingsView())
-        }
     }
 
     /// 한글 제목과 공통 콘텐츠 크기의 설정 창 생성
@@ -54,7 +36,7 @@ extension CodexQuotaMonitorAppDelegate {
     }
 
     /// 목적: 설정 화면과 앱 위임자 저장·렌더 콜백 연결
-    func makeSettingsView() -> SettingsView {
+    func makeSettingsView() -> some View {
         SettingsView(
             refreshIntervalMinutes: Binding(
                 get: { [weak self] in self?.preferences.refreshIntervalMinutes ?? 5 },
@@ -117,6 +99,7 @@ extension CodexQuotaMonitorAppDelegate {
                 self?.openNotificationSettings()
             }
         )
+        .safeAreaInset(edge: .top) { StorageStatusView(preferences: preferences) }
     }
 
     /// 사용자 동작 시 macOS 알림 시스템 설정 열기
@@ -136,11 +119,18 @@ extension CodexQuotaMonitorAppDelegate {
     }
 
     func applyAccountPaths(_ paths: [String]) {
-        preferences.updateAccountPaths(paths)
+        let accepted = paths.contains(where: { !$0.isEmpty })
+            ? preferences.registerAccountPaths(paths) : preferences.updateAccountPaths(paths)
+        guard accepted else {
+            let alert = NSAlert()
+            alert.messageText = "설정을 반영하지 못했습니다"
+            alert.informativeText = preferences.persistenceError ?? "계정 경로를 확인한 뒤 다시 시도해 주세요."
+            alert.runModal()
+            return
+        }
         if preferences.hasRegisteredAccounts {
-            installationHistory.markAccountRegistered()
             accountSetupWindow?.close()
-        } else if installationHistory.requiresAccountSetup {
+        } else if !preferences.hasRegisteredAccount {
             openAccountSetupIfNeeded()
         }
         Task { @MainActor [weak self] in
@@ -252,5 +242,31 @@ extension CodexQuotaMonitorAppDelegate {
             return mainWindow
         }
         return nil
+    }
+}
+
+/// 설정과 캐시 오류를 구분하고 복구 원본 위치를 안내하는 설정 화면 영역
+private struct StorageStatusView: View {
+    @ObservedObject var preferences: PreferencesStore
+
+    var body: some View {
+        if preferences.persistenceError != nil || preferences.cacheError != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                if let error = preferences.persistenceError {
+                    Text(error).foregroundStyle(.red)
+                    Text("원본 설정을 보존했습니다. 손상된 설정을 복구한 뒤 앱을 다시 실행해 주세요.")
+                }
+                if let error = preferences.cacheError {
+                    Text(error).foregroundStyle(.orange)
+                    Button("캐시 정리 재시도") { preferences.cleanupQuotaSnapshots() }
+                }
+                Button("설정 저장 위치 열기") {
+                    NSWorkspace.shared.open(AppConfigurationFile.defaultFileURL.deletingLastPathComponent())
+                }
+            }
+            .font(.caption)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }

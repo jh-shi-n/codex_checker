@@ -11,11 +11,13 @@ extension CodexQuotaMonitorAppDelegate {
         quotaResetNotifications.start()
         quotaResetScheduler.start()
         lifecycleCoordinator.launch()
-        openAccountSetupIfNeeded()
+        if preferences.persistenceError != nil { openSettings() }
+        else { openAccountSetupIfNeeded() }
         Task { await sessionActivityMonitor.start() }
-        tokenCleanupTask = Task { [tokenUsageCache] in
+        tokenCleanupTask = Task { [tokenUsageCache, preferences] in
             while !Task.isCancelled {
                 await tokenUsageCache.purgeExpired()
+                preferences.cleanupQuotaSnapshots()
                 do { try await Task.sleep(for: .seconds(60)) }
                 catch { return }
             }
@@ -69,6 +71,7 @@ extension CodexQuotaMonitorAppDelegate {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 await self?.tokenUsageCache.purgeExpired()
+                self?.preferences.cleanupQuotaSnapshots()
                 await self?.lifecycleCoordinator.wake()
                 await self?.quotaResetScheduler.tick()
             }

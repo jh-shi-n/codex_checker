@@ -9,6 +9,7 @@ public enum UsageWindowProbeFailureCategory: String, Codable, Equatable, Sendabl
     case executableUnavailable
     case alreadyRunning
     case timeout
+    case configurationFailure
     case launchFailure
     case processFailure
     case nonZeroExit
@@ -40,6 +41,8 @@ public enum UsageWindowProbeFailureCategory: String, Codable, Equatable, Sendabl
             return "이 계정의 사용량 확인이 이미 실행 중입니다."
         case .timeout:
             return "사용량 확인 시간이 초과되었습니다."
+        case .configurationFailure:
+            return "설치된 CLI의 최소 Ping 구성을 만들지 못했습니다. CLI와 모델 카탈로그 지원을 확인해 주세요."
         case .launchFailure:
             return "Codex 사용량 확인을 시작하지 못했습니다."
         case .processFailure:
@@ -270,6 +273,7 @@ public struct UsageWindowProbeFileSystem: Sendable {
 /// not carry raw OS messages that could expose local paths or CLI output.
 public enum UsageWindowProbeProcessError: Error, Equatable, Sendable {
     case timeout
+    case configurationFailure
     case launchFailure
     case processFailure
     case cancelled

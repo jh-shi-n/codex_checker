@@ -17,6 +17,19 @@ public typealias AccountStateLoader = @Sendable (AccountConfig) async throws -> 
 /// its siblings.
 @MainActor
 public final class AccountStore: ObservableObject {
+    /// 서버 조회 성공과 화면 반영 담당 여부의 분리
+    public enum RefreshOutcome: Equatable, Sendable {
+        case succeeded(applied: Bool)
+        case failed
+        case superseded
+        case notConfigured
+
+        public var isSuccess: Bool {
+            if case .succeeded = self { return true }
+            return false
+        }
+    }
+
     public static let stableAccountIDs = ["C1", "C2", "C3", "C4"]
 
     @Published public private(set) var configs: [AccountConfig]
@@ -39,6 +52,8 @@ public final class AccountStore: ObservableObject {
     private var configRevision = 0
     private var accountGenerations: [String: Int] = [:]
     private var inFlightFetches: [FetchKey: FetchHandle] = [:]
+    private var appliedRequestIDs: [String: UUID] = [:]
+    private var latestRequestIDs: [String: UUID] = [:]
     private var resetHistories: [String: ResetHistory] = [:]
 
     /// 동일 슬롯의 계정·구독 변경 시 관측 이력을 분리하는 식별 정보
@@ -90,7 +105,6 @@ public final class AccountStore: ObservableObject {
     /// state without cancelling sibling tasks.
     public func refreshAll() async {
         if configs.contains(where: \.isConfigured) { onQuotaRefreshStarted?() }
-        let revision = configRevision
         let configsSnapshot = configs
         let previousStates = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
         var generations: [String: Int] = [:]
@@ -114,13 +128,15 @@ public final class AccountStore: ObservableObject {
                         config: config,
                         previous: previous,
                         loader: loader,
-                        revision: revision
+                        revision: previous?.configurationGeneration ?? 0
                     )
                 }
             }
 
             for await result in group {
-                guard configRevision == revision,
+                guard configs.first(where: { $0.id == result.config.id }) == result.config,
+                      state(for: result.config.id)?.configurationGeneration == previousStates[result.config.id]?.configurationGeneration,
+                      latestRequestIDs[result.config.id] == result.requestID,
                       accountGenerations[result.config.id] == generations[result.config.id]
                 else { continue }
                 apply(result)
@@ -131,7 +147,12 @@ public final class AccountStore: ObservableObject {
     /// 단일 계정 갱신 및 최신 정상 결과 반영 여부 반환; forceFresh 지정 시 이전 조회 재사용 방지
     @discardableResult
     public func refresh(accountID id: String, forceFresh: Bool = false) async -> Bool {
-        guard let config = configs.first(where: { $0.id == id }) else { return false }
+        await refreshOutcome(accountID: id, forceFresh: forceFresh).isSuccess
+    }
+
+    /// 같은 조회를 공유한 호출은 화면 적용 세대가 달라도 성공 결과 공유
+    public func refreshOutcome(accountID id: String, forceFresh: Bool = false) async -> RefreshOutcome {
+        guard let config = configs.first(where: { $0.id == id }) else { return .notConfigured }
 
         guard config.isConfigured else {
             states = states.map { state in
@@ -140,13 +161,12 @@ public final class AccountStore: ObservableObject {
                 initial.configurationGeneration = state.configurationGeneration
                 return initial
             }
-            return false
+            return .notConfigured
         }
 
         onQuotaRefreshStarted?()
-        let revision = configRevision
-        let generation = (accountGenerations[id] ?? 0) + 1
-        accountGenerations[id] = generation
+        let revision = state(for: id)?.configurationGeneration ?? 0
+        accountGenerations[id, default: 0] += 1
         let previous = state(for: id)
         states = states.map { state in
             guard state.id == id else { return state }
@@ -160,9 +180,12 @@ public final class AccountStore: ObservableObject {
             revision: revision,
             forceFresh: forceFresh
         )
-        guard configRevision == revision, accountGenerations[id] == generation else { return false }
-        apply(result)
-        return result.state.status == .normal
+        guard configs.first(where: { $0.id == id }) == config,
+              state(for: id)?.configurationGeneration == revision,
+              latestRequestIDs[id] == result.requestID else { return .superseded }
+        let shouldApply = appliedRequestIDs[id] != result.requestID
+        if shouldApply { apply(result) }
+        return result.state.status == .normal ? .succeeded(applied: shouldApply) : .failed
     }
 
     /// Convenience spelling for callers holding an account configuration.
@@ -176,8 +199,6 @@ public final class AccountStore: ObservableObject {
     /// the default account configuration.
     public func reconfigure(_ newConfigs: [AccountConfig]) {
         configRevision += 1
-        for handle in inFlightFetches.values { handle.task.cancel() }
-        inFlightFetches.removeAll()
         let oldStates = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
         let oldConfigs = Dictionary(uniqueKeysWithValues: configs.map { ($0.id, $0) })
         let normalized = Self.normalizeConfigs(newConfigs)
@@ -186,6 +207,11 @@ public final class AccountStore: ObservableObject {
             if let previous = oldStates[config.id], oldConfigs[config.id] == config {
                 return previous
             }
+            for (key, handle) in inFlightFetches where key.id == config.id {
+                handle.task.cancel()
+                inFlightFetches[key] = nil
+            }
+            latestRequestIDs[config.id] = nil
             resetHistories[config.id] = nil
             var initial = Self.initialState(for: config, preferencesStore: preferencesStore)
             initial.configurationGeneration = (oldStates[config.id]?.configurationGeneration ?? 0) + 1
@@ -221,6 +247,7 @@ public final class AccountStore: ObservableObject {
     private struct AccountFetchResult: Sendable {
         let config: AccountConfig
         let state: AccountState
+        var requestID = UUID()
     }
 
     private struct FetchKey: Hashable, Sendable {
@@ -231,9 +258,11 @@ public final class AccountStore: ObservableObject {
 
     private final class FetchHandle: @unchecked Sendable {
         let task: Task<AccountFetchResult, Never>
+        let requestID: UUID
 
-        init(task: Task<AccountFetchResult, Never>) {
+        init(task: Task<AccountFetchResult, Never>, requestID: UUID) {
             self.task = task
+            self.requestID = requestID
         }
     }
 
@@ -245,19 +274,27 @@ public final class AccountStore: ObservableObject {
         revision: Int,
         forceFresh: Bool = false
     ) async -> AccountFetchResult {
+        guard configs.first(where: { $0.id == config.id }) == config,
+              state(for: config.id)?.configurationGeneration == revision else {
+            return AccountFetchResult(config: config, state: AccountState(id: config.id, status: .error))
+        }
         let key = FetchKey(id: config.id, homePath: config.home.path, revision: revision)
         let handle: FetchHandle
         if !forceFresh, let existing = inFlightFetches[key] {
             handle = existing
         } else {
+            let requestID = UUID()
             let task = Task.detached(priority: nil) {
-                await Self.fetch(config: config, previous: previous, loader: loader)
+                var result = await Self.fetch(config: config, previous: previous, loader: loader)
+                result.requestID = requestID
+                return result
             }
-            let created = FetchHandle(task: task)
+            let created = FetchHandle(task: task, requestID: requestID)
             inFlightFetches[key] = created
             handle = created
         }
 
+        latestRequestIDs[config.id] = handle.requestID
         let result = await handle.task.value
         if inFlightFetches[key] === handle {
             inFlightFetches[key] = nil
@@ -345,6 +382,8 @@ public final class AccountStore: ObservableObject {
 
     /// 최신 상태 및 정상 스냅샷 저장 후 조기 리셋 이벤트 전달
     private func apply(_ result: AccountFetchResult) {
+        guard appliedRequestIDs[result.config.id] != result.requestID else { return }
+        appliedRequestIDs[result.config.id] = result.requestID
         guard let index = states.firstIndex(where: { $0.id == result.config.id }) else { return }
         var state = result.state
         state.configurationGeneration = states[index].configurationGeneration

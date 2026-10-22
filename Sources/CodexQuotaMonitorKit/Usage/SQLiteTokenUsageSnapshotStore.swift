@@ -8,6 +8,25 @@ final class SQLiteTokenUsageSnapshotStore: @unchecked Sendable {
     /// 영속 행 상한
     private static let maximumRows = 64
     private let databaseURL: URL
+    private let errorLock = NSLock()
+    private var cleanupFailed = false
+    private var pendingAccountRemovals: Set<String> = []
+    private var pendingRemoveAll = false
+
+    /// 최근 정리 SQL 실패 상태의 동시성 보호 조회
+    var hasCleanupFailure: Bool {
+        errorLock.lock()
+        defer { errorLock.unlock() }
+        return cleanupFailed
+    }
+
+    /// 다음 정리 성공 시 해제되는 재시도 상태 기록
+    private func recordCleanup(_ succeeded: Bool) {
+        errorLock.lock()
+        cleanupFailed = !succeeded || pendingRemoveAll || !pendingAccountRemovals.isEmpty
+        errorLock.unlock()
+    }
+
 
     /// 저장소 파일 경로 초기화
     init(databaseURL: URL) {
@@ -20,7 +39,11 @@ final class SQLiteTokenUsageSnapshotStore: @unchecked Sendable {
         homeIdentity: String,
         referenceDate: Date
     ) -> StoredTokenUsageSnapshot? {
-        withDatabase { database in
+        errorLock.lock()
+        let blocked = pendingRemoveAll || pendingAccountRemovals.contains(accountID)
+        errorLock.unlock()
+        guard !blocked else { return nil }
+        return withDatabase { database in
             let sql = """
             SELECT snapshot, updated_at, expires_at
             FROM token_usage_snapshots
@@ -96,27 +119,44 @@ final class SQLiteTokenUsageSnapshotStore: @unchecked Sendable {
 
     /// 계정에 저장된 모든 홈 행 제거
     func remove(accountID: String) {
-        withDatabase { database in
+        let succeeded = withDatabase { database in
             execute(database, sql: "DELETE FROM token_usage_snapshots WHERE account_id = ?") { statement in
                 bind(accountID, to: statement, at: 1)
             }
-        }
+        } ?? false
+        errorLock.lock()
+        if succeeded { pendingAccountRemovals.remove(accountID) }
+        else { pendingAccountRemovals.insert(accountID) }
+        errorLock.unlock()
+        recordCleanup(succeeded)
     }
 
     /// 저장소 전체 스냅샷 제거
     func removeAll() {
-        withDatabase { database in
-            _ = sqlite3_exec(database, "DELETE FROM token_usage_snapshots", nil, nil, nil)
-        }
+        let succeeded = withDatabase { database in
+            sqlite3_exec(database, "DELETE FROM token_usage_snapshots", nil, nil, nil) == SQLITE_OK
+        } ?? false
+        errorLock.lock()
+        pendingRemoveAll = !succeeded
+        if succeeded { pendingAccountRemovals.removeAll() }
+        errorLock.unlock()
+        recordCleanup(succeeded)
     }
 
     /// 기준 시각까지 만료된 행 제거
     func purgeExpired(beforeOrAt referenceDate: Date) {
-        withDatabase { database in
+        errorLock.lock()
+        let retryAll = pendingRemoveAll
+        let retryAccounts = pendingAccountRemovals
+        errorLock.unlock()
+        if retryAll { removeAll() }
+        else { for accountID in retryAccounts { remove(accountID: accountID) } }
+        let succeeded = withDatabase { database in
             execute(database, sql: "DELETE FROM token_usage_snapshots WHERE expires_at <= ?") { statement in
                 sqlite3_bind_double(statement, 1, referenceDate.timeIntervalSince1970) == SQLITE_OK
             }
-        }
+        } ?? false
+        recordCleanup(succeeded)
     }
 
     private static let pruneRowsSQL = """
@@ -180,15 +220,15 @@ final class SQLiteTokenUsageSnapshotStore: @unchecked Sendable {
         _ database: OpaquePointer,
         sql: String,
         bindValues: (OpaquePointer) -> Bool
-    ) {
+    ) -> Bool {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else {
-            return
+            return false
         }
         defer { sqlite3_finalize(statement) }
-        guard bindValues(statement) else { return }
-        _ = sqlite3_step(statement)
+        guard bindValues(statement) else { return false }
+        return sqlite3_step(statement) == SQLITE_DONE
     }
 
     /// 텍스트 값의 SQLite 바인딩

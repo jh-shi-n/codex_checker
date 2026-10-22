@@ -8,6 +8,7 @@ import Foundation
 public final class PreferencesStore: ObservableObject {
     /// 기존 설정 이관·호환 로드 및 조회 캐시 저장용 키
     public enum Keys {
+        public static let settingsBundle = "CodexQuotaMonitor.settings.v1"
         public static let refreshIntervalMinutes = "CodexQuotaMonitor.refreshIntervalMinutes"
         public static let resetReminderMinutes = "CodexQuotaMonitor.resetReminderMinutes"
         public static let accountPaths = "CodexQuotaMonitor.accountPaths"
@@ -19,9 +20,7 @@ public final class PreferencesStore: ObservableObject {
         public static let lastSuccessfulQuotaSnapshots = "CodexQuotaMonitor.lastSuccessfulQuotaSnapshots"
     }
 
-    /// The small, local-only part of a successful account response that is
-    /// useful while the next refresh is in progress. It deliberately excludes
-    /// identity, credentials, and the raw app-server response.
+    /// 인증정보·원본 응답을 제외한 최근 정상 할당량의 SQLite 저장 자료형
     public struct QuotaSnapshot: Codable, Equatable, Sendable {
         public let usedPercent: Double?
         public let remainingPercent: Double?
@@ -86,6 +85,26 @@ public final class PreferencesStore: ObservableObject {
     private let defaultPaths: [String]
     private let homeDirectory: URL
     private let fileSystem: AccountPathFileSystem
+    public private(set) var hasRegisteredAccount = false
+    public private(set) var firstAccountRegisteredAt: Date?
+    /// 시작 시 config.json 부재와 기존 등록 이력 부재를 함께 확인한 최초 실행
+    public private(set) var isFirstLaunch = false
+    /// 앱 시작 시 기록한 파일 존재 여부; 시작 중 생성 이후에도 동일 값 유지
+    public private(set) var configurationFileWasPresentAtLaunch = false
+    private var committedBundle: SettingsBundle?
+    private var settingsLoadFailed = false
+
+    /// 경로·표시·등록 이력의 단일 인코딩 경계
+    private struct SettingsBundle: Codable, Equatable {
+        var schemaVersion = 1
+        var settings: AppPreferencesPayload
+        var hasRegisteredAccount: Bool
+        var firstAccountRegisteredAt: Date?
+    }
+
+    @Published public private(set) var cacheError: String?
+    private var cacheMigrationError: String?
+    private let quotaStore: SQLiteQuotaSnapshotStore?
     private var quotaSnapshotsStorage: [String: QuotaSnapshot]
 
     /// 목적: 설정값 로드, 기본값 병합, 비정규 저장값 정리
@@ -94,20 +113,67 @@ public final class PreferencesStore: ObservableObject {
         defaultPaths: [String]? = nil,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileSystem: AccountPathFileSystem = .live,
-        configurationFile: AppConfigurationFile? = nil
+        configurationFile: AppConfigurationFile? = nil,
+        quotaDatabaseURL: URL? = nil
     ) {
         self.userDefaults = userDefaults
         self.configurationFile = configurationFile
+        self.configurationFileWasPresentAtLaunch = configurationFile?.exists ?? true
+        self.quotaStore = (quotaDatabaseURL ?? (userDefaults === UserDefaults.standard ? TokenUsageSnapshotCache.defaultDatabaseURL : nil))
+            .map { SQLiteQuotaSnapshotStore(databaseURL: $0) }
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.fileSystem = fileSystem
         let requestedDefaults = defaultPaths ?? Array(repeating: "", count: Self.accountPathCount)
         self.defaultPaths = Self.normalizedDefaultPaths(requestedDefaults, homeDirectory: self.homeDirectory)
 
         var savedSettings: AppPreferencesPayload?
+        var bundle: SettingsBundle?
         var loadError: String?
-        do { savedSettings = try configurationFile?.read()?.settings }
-        catch { loadError = "설정 파일을 읽지 못했습니다: \(error.localizedDescription)" }
+        do {
+            if let raw = userDefaults.object(forKey: Keys.settingsBundle) {
+                guard let data = raw as? Data else { throw CocoaError(.coderReadCorrupt) }
+                let loaded = try JSONDecoder().decode(SettingsBundle.self, from: data)
+                guard loaded.schemaVersion == 1, loaded.settings.accountPaths.count == Self.accountPathCount,
+                      loaded.hasRegisteredAccount || loaded.firstAccountRegisteredAt == nil,
+                      loaded.hasRegisteredAccount || !loaded.settings.accountPaths.contains(where: { !$0.isEmpty }),
+                      loaded.firstAccountRegisteredAt.map({ $0.timeIntervalSince1970.isFinite }) ?? true
+                else { throw CocoaError(.coderReadCorrupt) }
+                bundle = loaded
+                savedSettings = loaded.settings
+            } else if let document = try configurationFile?.read() {
+                savedSettings = document.settings
+                self.hasRegisteredAccount = document.installation?.hasRegisteredAccount ?? false
+                self.firstAccountRegisteredAt = document.installation?.firstAccountRegisteredAt
+                guard self.hasRegisteredAccount || self.firstAccountRegisteredAt == nil else {
+                    throw CocoaError(.coderReadCorrupt)
+                }
+            }
+        } catch { loadError = "설정을 읽지 못했습니다. 원본을 보존했습니다: \(error.localizedDescription)" }
+        self.settingsLoadFailed = loadError != nil
         self.persistenceError = loadError
+        self.committedBundle = bundle
+        if let bundle {
+            for key in [Keys.accountPaths, Keys.enabledAccountIDs, Keys.accountDisplayOrder,
+                        Keys.refreshIntervalMinutes, Keys.resetReminderMinutes, Keys.launchAtLogin,
+                        Keys.showAccountLabels, Keys.activityNotificationDurationSeconds] {
+                userDefaults.removeObject(forKey: key)
+            }
+            self.hasRegisteredAccount = bundle.hasRegisteredAccount
+            self.firstAccountRegisteredAt = bundle.firstAccountRegisteredAt
+            // 파일 선행 저장 직후 중단된 경우에도 완료 이력의 false 회귀 방지
+            if let history = try? configurationFile?.read()?.installation,
+               history.hasRegisteredAccount {
+                self.hasRegisteredAccount = true
+                if self.firstAccountRegisteredAt == nil {
+                    self.firstAccountRegisteredAt = history.firstAccountRegisteredAt
+                }
+            }
+        }
+        if let savedSettings, savedSettings.accountPaths.count != Self.accountPathCount {
+            loadError = "계정 경로 설정이 손상되었습니다. 원본을 보존했습니다."
+            settingsLoadFailed = true
+            persistenceError = loadError
+        }
         let values = savedSettings?.preferenceValues
         let readSetting: (String) -> Any? = { key in
             if loadError != nil { return nil }
@@ -130,14 +196,9 @@ public final class PreferencesStore: ObservableObject {
             defaults: self.defaultPaths,
             homeDirectory: self.homeDirectory
         )
-        if let persistedPaths, persistedPaths.count == Self.accountPathCount {
-            self.accountPaths = Self.validatedPersistedPaths(
-                normalizedPathResult.values,
-                homeDirectory: self.homeDirectory,
-                fileSystem: self.fileSystem
-            )
-        } else {
-            self.accountPaths = normalizedPathResult.values
+        self.accountPaths = normalizedPathResult.values
+        if bundle == nil && loadError == nil && normalizedPathResult.values.contains(where: { !$0.isEmpty }) {
+            self.hasRegisteredAccount = true
         }
 
         let rawEnabledAccountIDs = readSetting(Keys.enabledAccountIDs)
@@ -158,65 +219,42 @@ public final class PreferencesStore: ObservableObject {
             persistedActivityDuration ?? Self.defaultActivityNotificationDurationSeconds
         )
         let rawQuotaSnapshots = userDefaults.data(forKey: Keys.lastSuccessfulQuotaSnapshots)
-        self.quotaSnapshotsStorage = Self.decodedQuotaSnapshots(
-            rawQuotaSnapshots,
-            homeDirectory: self.homeDirectory
-        )
-
-        // Missing keys are allowed to remain absent. Invalid or non-canonical
-        // raw values are written back once so subsequent launches read the
-        // canonical representation directly.
-        let intervalNeedsPersistence = rawInterval != nil && persistedInterval != normalizedInterval
-        let pathsNeedPersistence = rawPaths != nil && persistedPaths != self.accountPaths
-        let enabledAccountIDsNeedPersistence = rawEnabledAccountIDs != nil
-            && persistedEnabledAccountIDs != enabledAccountIDs
-        let accountDisplayOrderNeedsPersistence = rawAccountDisplayOrder != nil
-            && persistedAccountDisplayOrder != accountDisplayOrder
-        let launchNeedsPersistence = rawLaunchAtLogin != nil && rawLaunchAtLogin as? Bool == nil
-        let showLabelsNeedPersistence = rawShowAccountLabels != nil && persistedShowAccountLabels == nil
-        let activityDurationNeedsPersistence = rawActivityDuration != nil
-            && persistedActivityDuration != activityNotificationDurationSeconds
-        let quotaSnapshotsNeedPersistence = rawQuotaSnapshots != nil
-            && Self.encodedQuotaSnapshots(quotaSnapshotsStorage) != rawQuotaSnapshots
-        if intervalNeedsPersistence || pathsNeedPersistence || enabledAccountIDsNeedPersistence
-            || accountDisplayOrderNeedsPersistence || launchNeedsPersistence
-            || showLabelsNeedPersistence || activityDurationNeedsPersistence || quotaSnapshotsNeedPersistence
-            || (configurationFile != nil && savedSettings == nil && loadError == nil) {
-            persist()
+        self.quotaSnapshotsStorage = Self.decodedQuotaSnapshots(rawQuotaSnapshots, homeDirectory: self.homeDirectory)
+        if let quotaStore, !settingsLoadFailed {
+            do {
+                if let rawQuotaSnapshots {
+                    let decoded = try JSONDecoder().decode([String: QuotaSnapshot].self, from: rawQuotaSnapshots)
+                    let canonical = Dictionary(decoded.map { (Self.normalizedAccountPath($0.key, homeDirectory: self.homeDirectory), $0.value) }, uniquingKeysWith: { _, last in last })
+                    let existing = try quotaStore.load()
+                    let missing = canonical.filter { existing[$0.key] == nil && !$0.key.isEmpty }
+                    try quotaStore.save(missing)
+                    let restored = try quotaStore.load()
+                    guard missing.allSatisfy({ restored[$0.key] == $0.value || ($0.value.lastUpdated ?? Date()).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) <= Date() }) else {
+                        throw CocoaError(.fileReadCorruptFile)
+                    }
+                    if bundle != nil { userDefaults.removeObject(forKey: Keys.lastSuccessfulQuotaSnapshots) }
+                }
+                self.quotaSnapshotsStorage = try quotaStore.load()
+            } catch {
+                self.cacheMigrationError = "할당량 캐시를 복원하지 못했습니다: \(error.localizedDescription)"
+                self.cacheError = self.cacheMigrationError
+            }
         }
+
+        isFirstLaunch = !configurationFileWasPresentAtLaunch && !hasRegisteredAccount && !hasRegisteredAccounts
+        // 설정 인코딩 후 등록 이력 파일을 먼저 반영하고 UserDefaults 갱신
+        if loadError == nil { persist() }
     }
 
     /// 계정 표시 활성화 여부와 독립적인 등록 경로 존재 여부
     public var hasRegisteredAccounts: Bool { accountPaths.contains { !$0.isEmpty } }
 
-    /// 설정 창 재진입 시 JSON을 다시 읽고 잘못된 파일은 현재 메모리 상태로 대체하지 않는 로드
-    @discardableResult
-    public func reloadFromConfiguration() -> Bool {
-        guard let configurationFile else { return false }
-        do {
-            guard try configurationFile.read()?.settings != nil else { return false }
-        } catch {
-            persistenceError = "설정 파일을 읽지 못했습니다: \(error.localizedDescription)"
-            return false
-        }
-        let loaded = PreferencesStore(
-            userDefaults: userDefaults, defaultPaths: defaultPaths, homeDirectory: homeDirectory,
-            fileSystem: fileSystem, configurationFile: configurationFile
-        )
-        guard loaded.persistenceError == nil else {
-            persistenceError = loaded.persistenceError
-            return false
-        }
-        accountPaths = loaded.accountPaths
-        enabledAccountIDs = loaded.enabledAccountIDs
-        accountDisplayOrder = loaded.accountDisplayOrder
-        refreshIntervalMinutes = loaded.refreshIntervalMinutes
-        resetReminderMinutes = loaded.resetReminderMinutes
-        activityNotificationDurationSeconds = loaded.activityNotificationDurationSeconds
-        showAccountLabels = loaded.showAccountLabels
-        launchAtLogin = loaded.launchAtLogin
-        persistenceError = nil
-        return true
+    /// 첫 실행 또는 등록 미완료 상태의 연결 가이드 분기; 기존 등록 이력 우선
+    public var requiresAccountSetup: Bool {
+        guard !hasRegisteredAccount, !hasRegisteredAccounts else { return false }
+        if isFirstLaunch { return true }
+        // 파일은 존재하지만 등록을 마치지 않은 다음 실행의 가이드 유지
+        return configurationFileWasPresentAtLaunch || configurationFile == nil
     }
 
     /// Compatibility alias for settings views that use the shorter name.
@@ -225,9 +263,7 @@ public final class PreferencesStore: ObservableObject {
     /// Compatibility alias for hosts that refer to persisted homes as paths.
     public var paths: [String] { accountPaths }
 
-    /// Canonicalized snapshots currently retained in local settings. The
-    /// dictionary key is the normalized account home path, never an account
-    /// identifier, so changing a home cannot reuse another account's data.
+    /// 슬롯 ID 대신 정규화 경로로 구분한 정상 할당량의 메모리 사본
     public var lastSuccessfulQuotaSnapshots: [String: QuotaSnapshot] {
         quotaSnapshotsStorage
     }
@@ -235,6 +271,7 @@ public final class PreferencesStore: ObservableObject {
     public func quotaSnapshot(for accountPath: String) -> QuotaSnapshot? {
         let normalizedPath = normalizedAccountPath(accountPath)
         guard !normalizedPath.isEmpty else { return nil }
+        cleanupQuotaSnapshots()
         return quotaSnapshotsStorage[normalizedPath]
     }
 
@@ -249,7 +286,10 @@ public final class PreferencesStore: ObservableObject {
         let normalizedPath = normalizedAccountPath(accountPath)
         guard !normalizedPath.isEmpty else { return }
         quotaSnapshotsStorage[normalizedPath] = snapshot
-        persist()
+        do {
+            try quotaStore?.save([normalizedPath: snapshot])
+            cleanupQuotaSnapshots()
+        } catch { cacheError = "할당량 캐시를 저장하지 못했습니다: \(error.localizedDescription)" }
     }
 
     public func updateQuotaSnapshot(for accountPath: URL, snapshot: QuotaSnapshot) {
@@ -260,11 +300,28 @@ public final class PreferencesStore: ObservableObject {
         let normalizedPath = normalizedAccountPath(accountPath)
         guard !normalizedPath.isEmpty else { return }
         quotaSnapshotsStorage.removeValue(forKey: normalizedPath)
-        persist()
+        do {
+            try quotaStore?.remove(path: normalizedPath)
+            cacheError = cacheMigrationError
+        } catch { cacheError = "할당량 캐시를 삭제하지 못했습니다: \(error.localizedDescription)" }
     }
 
     public func removeQuotaSnapshot(for accountPath: URL) {
         removeQuotaSnapshot(for: accountPath.path)
+    }
+
+    /// 설정과 독립적인 할당량 정리 오류 기록 및 재시도
+    public func cleanupQuotaSnapshots(now: Date = Date()) {
+        guard !settingsLoadFailed, let quotaStore else { return }
+        let paths = Set(accountPaths.filter { !$0.isEmpty })
+        do {
+            try quotaStore.cleanup(registeredPaths: paths, now: now)
+            quotaSnapshotsStorage = try quotaStore.load(now: now)
+            quotaSnapshotsStorage = quotaSnapshotsStorage.filter {
+                paths.contains($0.key) && ($0.value.lastUpdated ?? now).addingTimeInterval(SQLiteQuotaSnapshotStore.lifetime) > now
+            }
+            cacheError = cacheMigrationError
+        } catch { cacheError = "할당량 캐시 정리에 실패했습니다. 다음 주기에 재시도합니다: \(error.localizedDescription)" }
     }
 
     /// Returns the normalized representation used as a snapshot key.
@@ -313,12 +370,14 @@ public final class PreferencesStore: ObservableObject {
     /// five-minute default and values above the maximum clamp before being
     /// published and persisted.
     public func updateRefreshInterval(minutes: Int) {
+        guard !settingsLoadFailed else { return }
         refreshIntervalMinutes = RefreshService.normalizedIntervalMinutes(minutes)
         persist()
     }
 
     /// 사전 알림 시점 저장; 도달 시각 재조회와 알림은 별도 유지
     public func updateResetReminder(minutes: Int) {
+        guard !settingsLoadFailed else { return }
         resetReminderMinutes = Self.normalizedResetReminderMinutes(minutes)
         persist()
     }
@@ -328,38 +387,59 @@ public final class PreferencesStore: ObservableObject {
         [0, 3, 5, 10].contains(minutes) ? minutes : 5
     }
 
-    public func updateAccountPaths(_ paths: [String]) {
-        guard paths.count == Self.accountPathCount else { return }
-
-        var updatedPaths = accountPaths
-        if updatedPaths.count != Self.accountPathCount {
-            updatedPaths = defaultPaths
-        }
-
-        for (index, path) in paths.enumerated() {
-            let normalized = AccountConfig.normalizedPath(path, homeDirectory: homeDirectory)
-            switch validateAccountPath(normalized) {
-            case .empty:
-                // Empty is an explicit, supported unconfigured state.
-                updatedPaths[index] = ""
-            case .valid:
-                updatedPaths[index] = normalized
-            case .missing, .notDirectory, .unreadable:
-                // Keep the last accepted value. This prevents an invalid
-                // binding update from being persisted or queried by a host
-                // that reacts to the published paths.
-                continue
+    /// 최초 연결 확인 후 경로·표시·등록 이력을 동일 묶음으로 반영
+    @discardableResult
+    public func registerAccountPaths(_ paths: [String], enabledIDs: [String]? = nil, now: Date = Date()) -> Bool {
+        guard !settingsLoadFailed, paths.count == Self.accountPathCount,
+              now.timeIntervalSince1970.isFinite else { return false }
+        let normalized = paths.map { normalizedAccountPath($0) }
+        guard normalized.contains(where: { !$0.isEmpty }) else { return false }
+        for (index, path) in normalized.enumerated() where path != accountPaths[index] {
+            let validation = validateAccountPath(path)
+            guard validation == .valid || validation == .empty else {
+                persistenceError = validation.userMessage ?? "계정 경로를 확인해 주세요."
+                return false
             }
         }
+        let previous = currentPayload
+        let previousRegistered = hasRegisteredAccount
+        let previousDate = firstAccountRegisteredAt
+        accountPaths = normalized
+        if let enabledIDs { enabledAccountIDs = Self.normalizedAccountIDs(enabledIDs) }
+        if !hasRegisteredAccount {
+            hasRegisteredAccount = true
+            firstAccountRegisteredAt = now
+        }
+        guard persist() else {
+            restore(previous)
+            hasRegisteredAccount = previousRegistered
+            firstAccountRegisteredAt = previousDate
+            return false
+        }
+        return true
+    }
 
-        guard updatedPaths != accountPaths else { return }
-        accountPaths = updatedPaths
-        persist()
+    /// 변경된 경로만 검증하고 모든 슬롯을 하나의 설정 묶음으로 반영
+    @discardableResult
+    public func updateAccountPaths(_ paths: [String]) -> Bool {
+        guard paths.count == Self.accountPathCount, !settingsLoadFailed else { return false }
+        let normalized = paths.map { normalizedAccountPath($0) }
+        for (index, path) in normalized.enumerated() where path != accountPaths[index] {
+            let validation = validateAccountPath(path)
+            guard validation == .empty || validation == .valid else {
+                persistenceError = validation.userMessage ?? "계정 경로를 확인해 주세요."
+                return false
+            }
+        }
+        if normalized.contains(where: { !$0.isEmpty }) { return registerAccountPaths(normalized) }
+        accountPaths = normalized
+        return persist()
     }
 
     /// 목적: 활성 계정 ID를 정규화해 게시·저장
     /// 조건: 빈 배열 허용, 유효한 C1–C4 ID만 유지
     public func updateEnabledAccountIDs(_ ids: [String]) {
+        guard !settingsLoadFailed else { return }
         enabledAccountIDs = Self.normalizedAccountIDs(ids)
         persist()
     }
@@ -367,6 +447,7 @@ public final class PreferencesStore: ObservableObject {
     /// 목적: 계정 표시 순서를 전체 ID 순열로 정규화해 게시·저장
     /// 조건: 누락 ID는 기본 순서대로 뒤에 추가
     public func updateAccountDisplayOrder(_ ids: [String]) {
+        guard !settingsLoadFailed else { return }
         accountDisplayOrder = Self.normalizedAccountDisplayOrder(ids)
         persist()
     }
@@ -381,16 +462,19 @@ public final class PreferencesStore: ObservableObject {
     }
 
     public func updateLaunchAtLogin(_ enabled: Bool) {
+        guard !settingsLoadFailed else { return }
         launchAtLogin = enabled
         persist()
     }
 
     public func updateShowAccountLabels(_ enabled: Bool) {
+        guard !settingsLoadFailed else { return }
         showAccountLabels = enabled
         persist()
     }
 
     public func updateActivityNotificationDuration(seconds: Int) {
+        guard !settingsLoadFailed else { return }
         activityNotificationDurationSeconds = Self.normalizedActivityNotificationDurationSeconds(seconds)
         persist()
     }
@@ -424,36 +508,53 @@ public final class PreferencesStore: ObservableObject {
         updateActivityNotificationDuration(seconds: seconds)
     }
 
-    /// 파일 연결 시 config.json에 설정 저장, 조회 캐시는 기존 로컬 저장소에 유지
-    public func persist() {
-        if let configurationFile {
-            do {
-                try configurationFile.saveSettings(AppPreferencesPayload(
-                    accountPaths: accountPaths, enabledAccountIDs: enabledAccountIDs,
-                    accountDisplayOrder: accountDisplayOrder, refreshIntervalMinutes: refreshIntervalMinutes,
-                    resetReminderMinutes: resetReminderMinutes,
-                    activityNotificationDurationSeconds: activityNotificationDurationSeconds,
-                    showAccountLabels: showAccountLabels, launchAtLogin: launchAtLogin
-                ))
-                persistenceError = nil
-            } catch {
-                persistenceError = "설정을 저장하지 못했습니다: \(error.localizedDescription)"
+    /// 현재 설정의 메모리 반영 완료; 디스크 저장은 UserDefaults의 비동기 처리
+    @discardableResult
+    public func persist() -> Bool {
+        guard !settingsLoadFailed else { return false }
+        let candidate = SettingsBundle(settings: currentPayload,
+            hasRegisteredAccount: hasRegisteredAccount, firstAccountRegisteredAt: firstAccountRegisteredAt)
+        do {
+            let data = try JSONEncoder().encode(candidate)
+            try configurationFile?.saveInstallation(InstallationHistory(
+                hasRegisteredAccount: candidate.hasRegisteredAccount,
+                firstAccountRegisteredAt: candidate.firstAccountRegisteredAt
+            ))
+            if candidate != committedBundle { userDefaults.set(data, forKey: Keys.settingsBundle) }
+            committedBundle = candidate
+            persistenceError = nil
+            cleanupQuotaSnapshots()
+            return true
+        } catch {
+            if let committedBundle {
+                restore(committedBundle.settings)
+                hasRegisteredAccount = committedBundle.hasRegisteredAccount
+                firstAccountRegisteredAt = committedBundle.firstAccountRegisteredAt
             }
-        } else {
-            userDefaults.set(refreshIntervalMinutes, forKey: Keys.refreshIntervalMinutes)
-            userDefaults.set(resetReminderMinutes, forKey: Keys.resetReminderMinutes)
-            userDefaults.set(accountPaths, forKey: Keys.accountPaths)
-            userDefaults.set(enabledAccountIDs, forKey: Keys.enabledAccountIDs)
-            userDefaults.set(accountDisplayOrder, forKey: Keys.accountDisplayOrder)
-            userDefaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
-            userDefaults.set(showAccountLabels, forKey: Keys.showAccountLabels)
-            userDefaults.set(activityNotificationDurationSeconds, forKey: Keys.activityNotificationDurationSeconds)
+            persistenceError = "설정을 반영하지 못했습니다: \(error.localizedDescription)"
+            return false
         }
-        if let encoded = Self.encodedQuotaSnapshots(quotaSnapshotsStorage), !quotaSnapshotsStorage.isEmpty {
-            userDefaults.set(encoded, forKey: Keys.lastSuccessfulQuotaSnapshots)
-        } else {
-            userDefaults.removeObject(forKey: Keys.lastSuccessfulQuotaSnapshots)
-        }
+    }
+
+    /// 인증정보를 제외한 운영 설정 묶음 구성
+    private var currentPayload: AppPreferencesPayload {
+        AppPreferencesPayload(accountPaths: accountPaths, enabledAccountIDs: enabledAccountIDs,
+            accountDisplayOrder: accountDisplayOrder, refreshIntervalMinutes: refreshIntervalMinutes,
+            resetReminderMinutes: resetReminderMinutes,
+            activityNotificationDurationSeconds: activityNotificationDurationSeconds,
+            showAccountLabels: showAccountLabels, launchAtLogin: launchAtLogin)
+    }
+
+    /// 인코딩 실패 시 직전 정상 설정 복원
+    private func restore(_ value: AppPreferencesPayload) {
+        accountPaths = value.accountPaths
+        enabledAccountIDs = value.enabledAccountIDs
+        accountDisplayOrder = value.accountDisplayOrder
+        refreshIntervalMinutes = value.refreshIntervalMinutes
+        resetReminderMinutes = value.resetReminderMinutes
+        activityNotificationDurationSeconds = value.activityNotificationDurationSeconds
+        showAccountLabels = value.showAccountLabels
+        launchAtLogin = value.launchAtLogin
     }
 
     nonisolated public static func normalizedActivityNotificationDurationSeconds(_ seconds: Int) -> Int {
@@ -516,31 +617,6 @@ public final class PreferencesStore: ObservableObject {
             return canonical
         }
         return PathNormalization(values: values, changed: values != paths)
-    }
-
-    private static func validatedPersistedPaths(
-        _ paths: [String],
-        homeDirectory: URL,
-        fileSystem: AccountPathFileSystem
-    ) -> [String] {
-        paths.map { path in
-            let normalized = canonicalPath(path, homeDirectory: homeDirectory)
-            switch AccountConfig.validatePath(
-                normalized,
-                homeDirectory: homeDirectory,
-                fileSystem: fileSystem
-            ) {
-            case .empty:
-                return ""
-            case .valid:
-                return normalized
-            case .missing, .notDirectory, .unreadable:
-                // A previously saved path may disappear between launches.
-                // Treat it as unconfigured rather than starting a lookup at
-                // a known-invalid location.
-                return ""
-            }
-        }
     }
 
     /// 명시적 기본 경로만 정규화하고 비어 있는 초기 슬롯은 그대로 보존

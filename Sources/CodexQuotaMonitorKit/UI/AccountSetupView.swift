@@ -54,7 +54,9 @@ public struct AccountSetupView: View {
                 Text("3. 연결 확인 후 등록")
                     .font(.headline)
                 Group {
-                    if model.phase == .checking {
+                    if let error = model.registrationError {
+                        Text(error).foregroundStyle(.red).textSelection(.enabled)
+                    } else if model.phase == .checking {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
                             Text("계정의 할당량을 확인하는 중입니다…")
