@@ -87,7 +87,7 @@ public struct AccountSetupView: View {
                 Button("등록 완료") {
                     if let path = model.registrationPath() { onComplete(path) }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.appPrimary)
                 .disabled(!model.canFinish)
                 .keyboardShortcut(.defaultAction)
             }
@@ -99,6 +99,7 @@ public struct AccountSetupView: View {
             alignment: .topLeading
         )
         .preferredColorScheme(.dark)
+        .buttonStyle(.appAction)
     }
 
     /// 입력 가능 상태에서만 비동기 연결 확인 시작

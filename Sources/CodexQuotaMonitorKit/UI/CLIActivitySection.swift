@@ -346,7 +346,7 @@ public struct CLIActivitySection: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.appDisclosure)
         .help(sessionAccessibilityLabel(for: item))
         .accessibilityLabel(sessionAccessibilityLabel(for: item))
         .accessibilityValue(isExpanded ? "펼쳐짐" : "접힘")

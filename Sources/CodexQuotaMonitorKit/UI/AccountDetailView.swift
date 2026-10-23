@@ -160,9 +160,8 @@ public struct AccountDetailView: View {
                     }
                     Button(action: onSettings) {
                         Image(systemName: "gearshape")
-                            .frame(width: 22, height: 22)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.appIcon)
                     .foregroundStyle(.secondary)
                     .help("설정 열기")
                     .accessibilityLabel("설정 열기")
@@ -195,7 +194,7 @@ public struct AccountDetailView: View {
                 Button(action: onRefresh) {
                     Label("새로고침", systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.appAction)
                 .keyboardShortcut("r", modifiers: [.command])
                 .help("이 계정만 새로고침")
                 .accessibilityLabel("계정 새로고침")
@@ -203,9 +202,8 @@ public struct AccountDetailView: View {
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .frame(width: 22, height: 22)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.appIcon)
             .help("닫기")
             .accessibilityLabel("계정 상세 닫기")
         }
@@ -226,7 +224,7 @@ public struct AccountDetailView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.appDisclosure)
             .accessibilityLabel(isTokenUsageExpanded ? "토큰 사용량 접기" : "토큰 사용량 더보기")
             .accessibilityValue(isTokenUsageExpanded ? "펼쳐짐" : "접힘")
 

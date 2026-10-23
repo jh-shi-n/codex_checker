@@ -294,7 +294,7 @@ public struct QuotaDonutView: View {
             )
             .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.appGraphic)
         .scaleEffect(isHovered ? QuotaDonutMetrics.hoverScale : 1)
         .animation(.easeOut(duration: 0.12), value: isHovered)
         .onHover { isHovered = $0 }

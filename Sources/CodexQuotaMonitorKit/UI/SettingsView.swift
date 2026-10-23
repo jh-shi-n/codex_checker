@@ -430,6 +430,7 @@ public struct SettingsView: View {
             minHeight: Self.minimumWindowSize.height,
             idealHeight: Self.defaultWindowSize.height
         )
+        .buttonStyle(.appAction)
         .onAppear {
             synchronizeAccountPathDrafts()
             synchronizeAccountDisplayDrafts()

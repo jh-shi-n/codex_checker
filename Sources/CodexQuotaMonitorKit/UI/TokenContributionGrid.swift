@@ -49,7 +49,7 @@ public struct TokenContributionGrid: View {
                             Label("업데이트", systemImage: "arrow.triangle.2.circlepath")
                         }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.appAction)
                     .disabled(isLoading)
                     .help("로컬 토큰 사용량 다시 읽기")
                     .accessibilityLabel(isLoading ? "토큰 사용량 업데이트 중" : "토큰 사용량 업데이트")
@@ -208,7 +208,7 @@ public struct TokenContributionGrid: View {
                 }
                 .frame(width: size, height: size)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.appGraphic)
         .accessibilityLabel(Self.tooltip(for: point))
         .onHover { isHovered in
             if isHovered {

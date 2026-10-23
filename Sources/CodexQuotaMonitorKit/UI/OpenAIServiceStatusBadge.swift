@@ -43,7 +43,7 @@ public struct OpenAIServiceStatusBadge: View {
             .frame(width: 24, height: 24)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.appGraphic)
         .help("OpenAI 서비스 현황")
         .accessibilityLabel(accessibilityLabel)
         .popover(isPresented: $isExpanded, arrowEdge: .bottom) {

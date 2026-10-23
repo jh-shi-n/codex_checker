@@ -284,6 +284,7 @@ private struct StorageStatusView: View {
                 if let error = preferences.cacheError {
                     Text(error).foregroundStyle(.orange)
                     Button("캐시 정리 재시도") { preferences.cleanupQuotaSnapshots() }
+                        .buttonStyle(.appAction)
                 }
                 if let error = preferences.tokenHistoryError {
                     Text(error).foregroundStyle(.orange)
@@ -291,6 +292,7 @@ private struct StorageStatusView: View {
                 Button("설정 저장 위치 열기") {
                     NSWorkspace.shared.open(AppConfigurationFile.defaultFileURL.deletingLastPathComponent())
                 }
+                .buttonStyle(.appAction)
             }
             .font(.caption)
             .padding(12)
