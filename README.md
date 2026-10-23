@@ -1,5 +1,7 @@
 # Codex Quota Checker
 
+**KOR** | [ENG](README.en.md)
+
 - macOS 메뉴 막대·노치에서 최대 4개 Codex 계정의 할당량과 로컬 활동 확인
 - Codex를 활용해 제작한 비공식 독립 앱
 
