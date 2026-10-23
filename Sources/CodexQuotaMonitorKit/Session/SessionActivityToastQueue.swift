@@ -8,9 +8,6 @@ public struct SessionActivityToast: Equatable, Identifiable, Sendable {
         case transition(SessionActivityTransition)
         case overflow(count: Int)
 
-        public static func summary(count: Int) -> Content {
-            .overflow(count: count)
-        }
     }
 
     public let content: Content
@@ -145,10 +142,6 @@ public final class SessionActivityToastQueue: ObservableObject {
         currentRight = nil
         pendingLeft.removeAll()
         pendingRight.removeAll()
-    }
-
-    public func cancelAll() {
-        cancel()
     }
 
     deinit {

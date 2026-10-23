@@ -970,20 +970,8 @@ public actor UsageWindowProbeService {
         return result
     }
 
-    public func probe(for config: AccountConfig) async -> UsageWindowProbeResult {
-        await probe(config)
-    }
-
-    public func run(for config: AccountConfig) async -> UsageWindowProbeResult {
-        await probe(config)
-    }
-
     public func state(for accountID: String) -> UsageWindowProbeState {
         states[accountID] ?? .idle(accountID: accountID)
-    }
-
-    public func latestState(for accountID: String) -> UsageWindowProbeState {
-        state(for: accountID)
     }
 
     /// 사전 점검부터 runner 완료까지 취소 상태를 유지
@@ -995,7 +983,7 @@ public actor UsageWindowProbeService {
         if Task.isCancelled {
             return cancelled(accountID: config.id, startedAt: startedAt, metadata: metadata)
         }
-        guard config.isConfigured, let configuredHome = config.configuredHome else {
+        guard let configuredHome = config.configuredHome else {
             return failure(
                 accountID: config.id,
                 startedAt: startedAt,

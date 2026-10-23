@@ -97,8 +97,4 @@ public enum QuotaColors {
             return lightTrack
         }
     }
-
-    public static func swiftUITrackColor(for appearance: QuotaAppearance) -> Color {
-        trackColor(for: appearance).swiftUIColor
-    }
 }

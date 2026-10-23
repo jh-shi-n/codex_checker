@@ -134,14 +134,4 @@ public final class LaunchAtLoginService {
     public func openSystemSettingsLoginItems() {
         settingsOpener.openLoginItems()
     }
-
-    /// Throwing spelling for callers that prefer structured error handling.
-    public func setEnabledOrThrow(_ enabled: Bool) throws -> LaunchAtLoginStatus {
-        switch setEnabled(enabled) {
-        case let .success(status):
-            return status
-        case let .failure(error):
-            throw error
-        }
-    }
 }

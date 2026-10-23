@@ -43,11 +43,11 @@ final class PreferencesStoreTests: XCTestCase {
             store.updateEnabledAccountIDs(["C3", "C1"])
             store.updateAccountDisplayOrder(["C4", "C3", "C2", "C1"])
             store.updateAccountDisplayNames(["C1": " 업무 🌟 ", "C3": "Cafe\u{301}", "C4": "  "])
-            store.setRefreshInterval(7)
+            store.updateRefreshInterval(minutes: 7)
             store.updateResetReminder(minutes: 3)
-            store.setActivityNotificationDuration(seconds: 8)
-            store.setShowAccountLabels(true)
-            store.setLaunchAtLogin(true)
+            store.updateActivityNotificationDuration(seconds: 8)
+            store.updateShowAccountLabels(true)
+            store.updateLaunchAtLogin(true)
             let registrationDate = try XCTUnwrap(store.firstAccountRegisteredAt)
 
             defaults.set(99, forKey: PreferencesStore.Keys.refreshIntervalMinutes)
@@ -196,7 +196,7 @@ final class PreferencesStoreTests: XCTestCase {
                 XCTAssertEqual(PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database).resetReminderMinutes, expected)
             }
             store.updateShowAccountLabels(true)
-            store.setShowAccountLabels(false)
+            store.updateShowAccountLabels(false)
             XCTAssertFalse(PreferencesStore(userDefaults: defaults, quotaDatabaseURL: database).showAccountLabels)
         }
     }

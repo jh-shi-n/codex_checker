@@ -407,11 +407,4 @@ public enum NotchGeometry {
         guard !displayIDs.isEmpty else { return nil }
         return displayIDs.firstIndex(where: { $0 == mainDisplayID }) ?? 0
     }
-
-    /// Returns a screen suitable for production notch UI, never a centered
-    /// fallback display. The caller owns the resulting `NSScreen`.
-    @available(macOS 14.0, *)
-    public static func preferredNotchScreen(from screens: [NSScreen]) -> NSScreen? {
-        screens.first(where: isNotchScreen)
-    }
 }

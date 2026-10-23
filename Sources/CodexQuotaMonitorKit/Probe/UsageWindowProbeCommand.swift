@@ -75,20 +75,6 @@ public struct UsageWindowProbeCommandBuilder: Sendable {
         build(executable: executable, configuredAccountHome: home)
     }
 
-    public func makeCommand(
-        executable: URL,
-        configuredAccountHome: URL
-    ) -> UsageWindowProbeCommand {
-        build(executable: executable, configuredAccountHome: configuredAccountHome)
-    }
-
-    public func makeCommand(
-        executable: URL,
-        home: URL
-    ) -> UsageWindowProbeCommand {
-        build(executable: executable, configuredAccountHome: home)
-    }
-
     public static let arguments: [String] = [
         "exec",
         "--ephemeral",
