@@ -80,6 +80,7 @@ final class SessionActivityToastQueueTests: XCTestCase {
         queue.cancel()
     }
 
+    /// 대기열 제한 도달 시 교체된 알림까지 초과 요약에 포함하는지 검증
     func testPendingEntriesAreCappedAndOverflowBecomesDeterministicSummary() async {
         let sleeper = ToastSleeperGate()
         let queue = makeQueue(sleeper: sleeper)
@@ -92,10 +93,11 @@ final class SessionActivityToastQueueTests: XCTestCase {
         XCTAssertEqual(queue.pendingLeft.count, 3)
         XCTAssertEqual(queue.pendingLeft.dropLast().count, 2)
         XCTAssertTrue(queue.pendingLeft.last?.isOverflowSummary == true)
-        XCTAssertEqual(queue.pendingLeft.last?.overflowCount, 2)
+        XCTAssertEqual(queue.pendingLeft.last?.overflowCount, 3)
         queue.cancel()
     }
 
+    /// 최초 요약의 두 알림 집계와 표시 시간 변경 이후 추가 건수 보존 검증
     func testOverflowSummaryKeepsItsCapturedDurationAfterQueueDurationChanges() async {
         let sleeper = ToastSleeperGate()
         let queue = makeQueue(sleeper: sleeper)
@@ -105,12 +107,13 @@ final class SessionActivityToastQueueTests: XCTestCase {
             queue.enqueue(transition(accountID: "C1", side: .left, status: status(for: index)))
         }
 
+        XCTAssertEqual(queue.pendingLeft.last?.overflowCount, 2)
         XCTAssertEqual(queue.pendingLeft.last?.durationSeconds, 3)
         queue.updateDuration(seconds: 8)
         queue.enqueue(transition(accountID: "C1", side: .left, status: .inactive))
 
         XCTAssertTrue(queue.pendingLeft.last?.isOverflowSummary == true)
-        XCTAssertEqual(queue.pendingLeft.last?.overflowCount, 2)
+        XCTAssertEqual(queue.pendingLeft.last?.overflowCount, 3)
         XCTAssertEqual(queue.pendingLeft.last?.durationSeconds, 3)
         queue.cancel()
     }

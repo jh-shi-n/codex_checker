@@ -204,8 +204,9 @@ public final class SessionActivityToastQueue: ObservableObject {
                 durationSeconds: capturedDuration
             )
         } else {
+            // 교체되는 기존 알림과 새 알림을 모두 요약 건수에 포함
             pending[pending.count - 1] = SessionActivityToast(
-                content: .overflow(count: 1),
+                content: .overflow(count: 2),
                 durationSeconds: durationSeconds
             )
         }

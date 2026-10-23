@@ -136,6 +136,8 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
         }
 
         let today = calendar.startOfDay(for: referenceDate)
+        // UTC 폴더가 로컬 날짜보다 하루 앞서는 경우도 실제 이벤트 날짜로 집계
+        let latestDirectoryDay = calendar.date(byAdding: .day, value: 1, to: today) ?? today
         let firstDay = calendar.date(
             byAdding: .day,
             value: -(aggregator.dayCount - 1),
@@ -158,7 +160,7 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
             )
             if let directoryDate {
                 let day = calendar.startOfDay(for: directoryDate)
-                guard day <= today else { continue }
+                guard day <= latestDirectoryDay else { continue }
                 // 과거 디렉터리에서 최근 재개된 세션의 집계 포함
                 if day < firstDay, (values.contentModificationDate ?? .distantPast) < firstDay {
                     continue

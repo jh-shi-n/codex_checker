@@ -19,6 +19,30 @@ final class TokenUsageTests: XCTestCase {
         ))!
     }
 
+    /// UTC 날짜 폴더와 로컬 날짜가 다른 경우의 당일 집계 및 미래 이벤트 제외 검증
+    func testProviderUsesEventDatesAcrossUTCFolderBoundaries() async throws {
+        for offset in [-12, -7, 9, 14] {
+            for timestamp in ["2026-10-23T00:30:00Z", "2026-10-23T23:30:00Z"] {
+                let home = try makeHome()
+                defer { try? FileManager.default.removeItem(at: home) }
+                let reference = try XCTUnwrap(ISO8601DateFormatter().date(from: timestamp))
+                var localCalendar = calendar
+                localCalendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: offset * 3600))
+                try writeRollout(in: home, date: reference, name: "utc-folder.jsonl", lines: [
+                    "{\"timestamp\":\"\(timestamp)\",\"type\":\"token_count\",\"usage\":{\"input_tokens\":100,\"output_tokens\":20}}",
+                    #"{"timestamp":"2026-10-25T00:30:00Z","type":"token_count","usage":{"input_tokens":200,"output_tokens":40}}"#,
+                ])
+
+                let snapshot = await LocalTokenUsageProvider(calendar: localCalendar, now: { reference })
+                    .snapshot(home: home)
+
+                XCTAssertEqual(snapshot.availability, .available)
+                XCTAssertEqual(snapshot.today.totalTokens, 120, "UTC\(offset), \(timestamp)")
+                XCTAssertEqual(snapshot.last7Days.totalTokens, 120)
+            }
+        }
+    }
+
     /// 자정 증가분·감소·중복 캐시의 날짜 배분 및 합계 중복 가산 제외 검증
     @MainActor
     func testProviderAggregatesCachedInputAcrossMidnightWithoutDoubleCounting() async throws {
