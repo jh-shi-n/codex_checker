@@ -27,12 +27,11 @@ public final class TokenUsageRefreshStore: ObservableObject {
         let task: Task<Void, Never>
     }
 
-    @Published private var running: Set<Key> = []
     @Published private var results: [Key: TokenUsageSnapshot] = [:]
-    private var operations: [Key: Operation] = [:]
+    @Published private var operations: [Key: Operation] = [:]
 
     /// 현재 계정 설정의 집계·저장 진행 여부 조회
-    func isRunning(for account: AccountState) -> Bool { running.contains(Key(account)) }
+    func isRunning(for account: AccountState) -> Bool { operations[Key(account)] != nil }
 
     /// 재진입 시 현재 설정 세대의 마지막 완료 결과 조회
     func result(for account: AccountState) -> TokenUsageSnapshot? { results[Key(account)] }
@@ -41,15 +40,13 @@ public final class TokenUsageRefreshStore: ObservableObject {
     @discardableResult
     func start(for account: AccountState, runner: @escaping TokenUsageSnapshotRefresh) -> Task<Void, Never>? {
         let key = Key(account)
-        guard !running.contains(key) else { return nil }
+        guard operations[key] == nil else { return nil }
         let operationID = UUID()
-        running.insert(key)
         let task = Task { @MainActor in
             let snapshot = await runner(account)
             guard !Task.isCancelled, operations[key]?.id == operationID else { return }
             results[key] = snapshot
             operations[key] = nil
-            running.remove(key)
         }
         operations[key] = Operation(id: operationID, task: task)
         return task
@@ -59,6 +56,5 @@ public final class TokenUsageRefreshStore: ObservableObject {
     public func cancelAll() {
         for operation in operations.values { operation.task.cancel() }
         operations.removeAll()
-        running.removeAll()
     }
 }

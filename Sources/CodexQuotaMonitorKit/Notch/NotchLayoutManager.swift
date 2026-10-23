@@ -159,13 +159,6 @@ public final class NotchLayoutManager: NSObject {
         _ = relayout()
     }
 
-    public func setActivityToasts(
-        left: SessionActivityToast?,
-        right: SessionActivityToast?
-    ) {
-        updateActivityToasts(left: left, right: right)
-    }
-
     /// Installs dashboard data/action contracts on both side panels. Keeping
     /// this as a host setter prevents a quota render from replacing the
     /// closures when the SwiftUI root is rebuilt.

@@ -83,10 +83,6 @@ public enum SessionActivitySource: String, Equatable, Sendable {
         }
     }
 
-    public static func from(threadSource raw: String?) -> SessionActivitySource? {
-        normalize(raw: raw)
-    }
-
     public var badgeText: String? {
         // Sources remain useful for internal filtering and compatibility, but
         // are never rendered as badges in the activity cards.
@@ -325,22 +321,23 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
     }
 }
 
-public typealias SessionActivitySession = SessionActivityMainSession
-
 public extension SessionActivityMainSession {
     /// Stable card ordering: active work first, then waiting work, then all
     /// remaining states by most recent safe metadata activity.
     static func ordered(_ sessions: [SessionActivityMainSession]) -> [SessionActivityMainSession] {
-        sessions.sorted { lhs, rhs in
-            let lhsRank = orderingRank(for: lhs)
-            let rhsRank = orderingRank(for: rhs)
-            if lhsRank != rhsRank { return lhsRank < rhsRank }
+        sessions.sorted(by: precedes)
+    }
 
-            let lhsDate = lhs.lastActivityAt ?? .distantPast
-            let rhsDate = rhs.lastActivityAt ?? .distantPast
-            if lhsDate != rhsDate { return lhsDate > rhsDate }
-            return lhs.threadID < rhs.threadID
-        }
+    /// 중간 배열 없이 작업 상태·최근 시각·번호 순서 직접 비교
+    static func precedes(_ lhs: SessionActivityMainSession, _ rhs: SessionActivityMainSession) -> Bool {
+        let lhsRank = orderingRank(for: lhs)
+        let rhsRank = orderingRank(for: rhs)
+        if lhsRank != rhsRank { return lhsRank < rhsRank }
+
+        let lhsDate = lhs.lastActivityAt ?? .distantPast
+        let rhsDate = rhs.lastActivityAt ?? .distantPast
+        if lhsDate != rhsDate { return lhsDate > rhsDate }
+        return lhs.threadID < rhs.threadID
     }
 
     static func orderingRank(for session: SessionActivityMainSession) -> Int {
@@ -446,38 +443,6 @@ public struct SessionActivitySnapshot: Equatable, Sendable {
     }
 }
 
-/// Collection-shaped compatibility view for callers that do not need the
-/// legacy scalar fields on `SessionActivitySnapshot`.
-public struct SessionActivityCollectionSnapshot: Equatable, Sendable {
-    public let accountID: String
-    public let state: SessionActivitySnapshotState
-    public let sessions: [SessionActivityMainSession]
-
-    public init(
-        accountID: String,
-        state: SessionActivitySnapshotState,
-        sessions: [SessionActivityMainSession]
-    ) {
-        self.accountID = accountID
-        self.state = state
-        self.sessions = sessions
-    }
-
-    public init(snapshot: SessionActivitySnapshot) {
-        self.init(accountID: snapshot.accountID, state: snapshot.state, sessions: snapshot.sessions)
-    }
-}
-
 public protocol SessionActivityProvider: Sendable {
     func snapshot(accountID: String, home: URL) async -> SessionActivitySnapshot
-}
-
-public extension SessionActivityProvider {
-    func collectionSnapshot(accountID: String, home: URL) async -> SessionActivityCollectionSnapshot {
-        SessionActivityCollectionSnapshot(snapshot: await snapshot(accountID: accountID, home: home))
-    }
-
-    func sessions(accountID: String, home: URL) async -> [SessionActivityMainSession] {
-        (await snapshot(accountID: accountID, home: home)).sessions
-    }
 }

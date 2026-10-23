@@ -209,12 +209,12 @@ final class TokenUsageTests: XCTestCase {
         let reference = referenceDate
         let provider = LocalTokenUsageProvider(calendar: calendar, now: { reference }, maxFileCount: 1)
         let cache = TokenUsageSnapshotCache(provider: provider, now: { reference }, calendar: calendar)
-        let valid = await cache.update(accountID: "C1", home: home)
+        let valid = await cache.refresh(accountID: "C1", home: home)
         XCTAssertEqual(valid.today.totalTokens, 12)
         try writeRollout(in: home, date: referenceDate, name: "two.jsonl", lines: [
             #"{"type":"token_count","usage":{"input_tokens":20,"output_tokens":3}}"#,
         ])
-        let failed = await cache.update(accountID: "C1", home: home)
+        let failed = await cache.refresh(accountID: "C1", home: home)
         let preserved = await cache.cachedSnapshot(for: "C1")
         XCTAssertEqual(failed.availability, .unavailable)
         XCTAssertEqual(failed.error, .fileLimitExceeded)
@@ -405,7 +405,7 @@ final class TokenUsageTests: XCTestCase {
             calendar: calendar
         )
 
-        let updated = await firstCache.update(accountID: "C1", home: home)
+        let updated = await firstCache.refresh(accountID: "C1", home: home)
         XCTAssertEqual(updated, snapshot)
 
         let restartProvider = MutableTokenUsageProvider(
@@ -441,7 +441,7 @@ final class TokenUsageTests: XCTestCase {
         ], generatedAt: reference)
         let cache = TokenUsageSnapshotCache(provider: FixedTokenUsageProvider(snapshot: snapshot),
             databaseURL: databaseURL, accountHomes: ["C1": home], now: { clock.now() }, calendar: calendar)
-        _ = await cache.update(accountID: "C1", home: home)
+        _ = await cache.refresh(accountID: "C1", home: home)
         clock.set(reference.addingTimeInterval(24 * 60 * 60))
         let cached = await cache.cachedSnapshot(for: "C1")
         let memory = try XCTUnwrap(cached)
@@ -476,7 +476,7 @@ final class TokenUsageTests: XCTestCase {
             now: { clock.now() },
             calendar: calendar
         )
-        _ = await cache.update(accountID: "C1", home: home)
+        _ = await cache.refresh(accountID: "C1", home: home)
 
         clock.set(referenceDate.addingTimeInterval(TokenUsageSnapshotCache.snapshotLifetime))
         let expired = await cache.cachedSnapshot(for: "C1")
@@ -509,11 +509,11 @@ final class TokenUsageTests: XCTestCase {
             now: { clock.now() },
             calendar: calendar
         )
-        _ = await cache.update(accountID: "C1", home: home)
+        _ = await cache.refresh(accountID: "C1", home: home)
 
         clock.set(referenceDate.addingTimeInterval(13 * 24 * 60 * 60))
         await provider.set(renewed)
-        _ = await cache.update(accountID: "C1", home: home)
+        _ = await cache.refresh(accountID: "C1", home: home)
         clock.set(referenceDate.addingTimeInterval(14 * 24 * 60 * 60 + 1))
         let stillValid = await cache.cachedSnapshot(for: "C1")
 
@@ -537,11 +537,11 @@ final class TokenUsageTests: XCTestCase {
             now: { clock.now() },
             calendar: calendar
         )
-        _ = await cache.update(accountID: "C1", home: home)
+        _ = await cache.refresh(accountID: "C1", home: home)
 
         clock.set(referenceDate.addingTimeInterval(12 * 24 * 60 * 60))
         await provider.set(unavailable)
-        let failedRefresh = await cache.update(accountID: "C1", home: home)
+        let failedRefresh = await cache.refresh(accountID: "C1", home: home)
         let preserved = await cache.cachedSnapshot(for: "C1")
         clock.set(referenceDate.addingTimeInterval(TokenUsageSnapshotCache.snapshotLifetime))
         let atOriginalExpiry = await cache.cachedSnapshot(for: "C1")
@@ -569,9 +569,9 @@ final class TokenUsageTests: XCTestCase {
             now: { reference }
         )
 
-        let firstTask = Task { await cache.update(accountID: "C1", home: home) }
+        let firstTask = Task { await cache.refresh(accountID: "C1", home: home) }
         await provider.waitForRequestCount(1)
-        let laterTask = Task { await cache.update(accountID: "C1", home: home) }
+        let laterTask = Task { await cache.refresh(accountID: "C1", home: home) }
         await provider.waitForRequestCount(2)
         await provider.complete(request: 2, with: later)
         let laterResult = await laterTask.value
@@ -608,13 +608,13 @@ final class TokenUsageTests: XCTestCase {
             now: { clock.now() },
             calendar: calendar
         )
-        _ = await cache.update(accountID: "C1", home: home)
+        _ = await cache.refresh(accountID: "C1", home: home)
         try FileManager.default.removeItem(at: databaseURL)
         try FileManager.default.createDirectory(at: databaseURL, withIntermediateDirectories: false)
 
         clock.set(referenceDate.addingTimeInterval(5 * 24 * 60 * 60))
         await provider.set(replacement)
-        let failedUpdate = await cache.update(accountID: "C1", home: home)
+        let failedUpdate = await cache.refresh(accountID: "C1", home: home)
         let preserved = await cache.cachedSnapshot(for: "C1")
         clock.set(referenceDate.addingTimeInterval(TokenUsageSnapshotCache.snapshotLifetime))
         let atOriginalExpiry = await cache.cachedSnapshot(for: "C1")
@@ -642,7 +642,7 @@ final class TokenUsageTests: XCTestCase {
             accountHomes: ["C1": oldHome],
             now: { reference }
         )
-        _ = await cache.update(accountID: "C1", home: oldHome)
+        _ = await cache.refresh(accountID: "C1", home: oldHome)
 
         await cache.configureAccountHomes(["C1": newHome])
         let currentHomeValue = await cache.cachedSnapshot(for: "C1")
@@ -672,8 +672,8 @@ final class TokenUsageTests: XCTestCase {
             accountHomes: ["C1": oldHome, "C2": otherHome],
             now: { reference }
         )
-        _ = await cache.update(accountID: "C1", home: oldHome)
-        _ = await cache.update(accountID: "C2", home: otherHome)
+        _ = await cache.refresh(accountID: "C1", home: oldHome)
+        _ = await cache.refresh(accountID: "C2", home: otherHome)
 
         cache.invalidate(accountID: "C1")
         await cache.configureAccountHomes(["C1": newHome, "C2": otherHome])

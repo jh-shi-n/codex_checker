@@ -516,35 +516,6 @@ public final class PreferencesStore: ObservableObject {
         persist()
     }
 
-    public func setRefreshInterval(_ minutes: Int) {
-        updateRefreshInterval(minutes: minutes)
-    }
-
-    public func setAccountPaths(_ paths: [String]) {
-        updateAccountPaths(paths)
-    }
-
-    public func setLaunchAtLogin(_ enabled: Bool) {
-        updateLaunchAtLogin(enabled)
-    }
-
-    public func setShowAccountLabels(_ enabled: Bool) {
-        updateShowAccountLabels(enabled)
-    }
-
-    public func setActivityNotificationDuration(seconds: Int) {
-        updateActivityNotificationDuration(seconds: seconds)
-    }
-
-    /// Compatibility aliases for hosts that spell out the persisted unit.
-    public func updateActivityNotificationDurationSeconds(_ seconds: Int) {
-        updateActivityNotificationDuration(seconds: seconds)
-    }
-
-    public func setActivityNotificationDurationSeconds(_ seconds: Int) {
-        updateActivityNotificationDuration(seconds: seconds)
-    }
-
     /// 현재 설정의 메모리 반영 완료; 디스크 저장은 UserDefaults의 비동기 처리
     @discardableResult
     public func persist() -> Bool {
@@ -692,12 +663,5 @@ public final class PreferencesStore: ObservableObject {
             guard !normalizedPath.isEmpty else { return }
             snapshots[normalizedPath] = entry.value
         }
-    }
-
-    private static func encodedQuotaSnapshots(_ snapshots: [String: QuotaSnapshot]) -> Data? {
-        guard !snapshots.isEmpty else { return Data() }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return try? encoder.encode(snapshots)
     }
 }

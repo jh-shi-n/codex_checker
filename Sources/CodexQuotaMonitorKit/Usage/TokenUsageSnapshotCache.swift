@@ -128,11 +128,6 @@ public actor TokenUsageSnapshotCache {
         return restored.rebased(to: referenceDate, calendar: calendar)
     }
 
-    /// 호환용 스냅샷 조회 이름
-    public func snapshot(for accountID: String) -> TokenUsageSnapshot? {
-        cachedSnapshot(for: accountID)
-    }
-
     /// 호출자가 보유한 스냅샷의 메모리 교체
     public func replace(_ snapshot: TokenUsageSnapshot, for accountID: String) {
         let completedAt = now()
@@ -294,11 +289,6 @@ public actor TokenUsageSnapshotCache {
             recordedDates: coverage)
         let saved = commitSnapshot(source, accountID: accountID, homeIdentity: Self.homeIdentity(home), token: token)
         return saved.availability == .available ? saved : previous
-    }
-
-    /// 명시적 업데이트 호출 이름
-    public func update(accountID: String, home: URL) async -> TokenUsageSnapshot {
-        await refresh(accountID: accountID, home: home)
     }
 
     /// 계정 캐시와 영속 스냅샷 제거

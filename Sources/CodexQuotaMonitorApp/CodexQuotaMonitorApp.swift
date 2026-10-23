@@ -48,7 +48,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     )
     let refreshService: RefreshService
     let launchAtLoginService: LaunchAtLoginService
-    let sessionActivityProvider: AppServerSessionActivityProvider
+    let sessionActivityProvider: SQLiteSessionActivityProvider
     /// One local-only token reader is shared by all dashboard instances.
     let tokenUsageProvider: LocalTokenUsageProvider
     /// 명시적 업데이트 집계의 메모리·SQLite 보관 및 14일 만료 관리
@@ -78,7 +78,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         let preferences = PreferencesStore(configurationFile: AppConfigurationFile(fileURL: AppConfigurationFile.defaultFileURL))
         let serviceStatus = OpenAIServiceStatusStore()
         let accountStore = AccountStore(
-            configs: Self.configs(for: preferences.accountPaths),
+            configs: AccountConfig.accounts(for: preferences.accountPaths),
             preferencesStore: preferences
         )
         let refreshService = RefreshService(
@@ -88,10 +88,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             }
         )
         let launchAtLoginService = LaunchAtLoginService()
-        let sessionActivityProvider = AppServerSessionActivityProvider(
-            fallback: SQLiteSessionActivityProvider(),
-            capability: .installedProtocol
-        )
+        let sessionActivityProvider = SQLiteSessionActivityProvider()
         let tokenUsageProvider = LocalTokenUsageProvider(maxFileCount: 4096)
         let tokenUsageCache = TokenUsageSnapshotCache(
             provider: tokenUsageProvider,
@@ -202,7 +199,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                     let generation = sessionActivityDelivery.pause()
                     // 경로가 달라진 슬롯만 동기 무효화하여 다른 계정의 기록 보존
                     let previousHomes = Self.tokenHomes(for: accountStore.configs)
-                    let nextHomes = Self.tokenHomes(for: Self.configs(for: paths))
+                    let nextHomes = Self.tokenHomes(for: AccountConfig.accounts(for: paths))
                     for accountID in Set(previousHomes.keys).union(nextHomes.keys) {
                         if previousHomes[accountID] != nextHomes[accountID] {
                             tokenUsageCache.invalidate(accountID: accountID)
@@ -345,16 +342,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadSessionActivity(_ account: AccountState) async -> SessionActivitySnapshot {
-        guard let config = accountStore.configs.first(where: { $0.id == account.id }) else {
+        guard let home = accountStore.configs.first(where: { $0.id == account.id })?.configuredHome else {
             return .unavailable(accountID: account.id)
         }
-        guard config.isConfigured else {
-            return .unavailable(accountID: account.id)
-        }
-        return await sessionActivityProvider.snapshot(
-            accountID: account.id,
-            home: config.home
-        )
+        return await sessionActivityProvider.snapshot(accountID: account.id, home: home)
     }
 
     /// 설정된 계정 홈에서 당일 증분을 반영하고 마지막 성공 그래프 반환
@@ -365,9 +356,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
     /// 현재 계정의 명시적 토큰 집계 및 설정 변경 중 이전 결과 배제
     private func refreshTokenUsage(_ account: AccountState) async -> TokenUsageSnapshot {
-        guard let config = accountStore.configs.first(where: { $0.id == account.id }),
-              config.isConfigured,
-              let home = config.configuredHome
+        guard let home = accountStore.configs.first(where: { $0.id == account.id })?.configuredHome
         else {
             return AccountDashboardDefaults.unavailableTokenUsageSnapshot()
         }
@@ -505,9 +494,5 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             self?.emptyAccountsPopover?.performClose(nil)
             self?.openSettings()
         }
-    }
-
-    private static func configs(for paths: [String]) -> [AccountConfig] {
-        AccountConfig.accounts(for: paths)
     }
 }

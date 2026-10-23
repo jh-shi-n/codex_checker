@@ -119,11 +119,6 @@ public actor SessionActivityMonitor {
         needsRecoveryBaseline.removeAll()
     }
 
-    public func restart() {
-        stop()
-        start()
-    }
-
     /// Replaces configured homes while retaining baselines only for accounts
     /// whose standardized home is unchanged. In-flight old results are
     /// discarded by the configuration revision check.
@@ -168,10 +163,6 @@ public actor SessionActivityMonitor {
 
     public func snapshot(for accountID: String) -> SessionActivitySnapshot? {
         currentSnapshots[accountID]
-    }
-
-    public func sessions(for accountID: String) -> [SessionActivityMainSession] {
-        currentSnapshots[accountID]?.sessions ?? []
     }
 
     private func runLoop(token: Int) async {

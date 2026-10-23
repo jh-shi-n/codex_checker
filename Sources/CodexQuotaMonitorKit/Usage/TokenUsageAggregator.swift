@@ -49,20 +49,6 @@ public struct TokenUsageAggregator: Sendable {
         )
     }
 
-    public func aggregate(
-        _ sessions: [TokenUsageSessionUsage],
-        generatedAt: Date,
-        availability: TokenUsageAvailability = .available,
-        error: TokenUsageSnapshotError? = nil
-    ) -> TokenUsageSnapshot {
-        aggregate(
-            sessions: sessions,
-            generatedAt: generatedAt,
-            availability: availability,
-            error: error
-        )
-    }
-
     /// Aggregates pre-bucketed values. This is useful for deterministic hosts
     /// that already have one `TokenUsageDailyPoint` per source.
     public func aggregate(
@@ -96,20 +82,6 @@ public struct TokenUsageAggregator: Sendable {
             generatedAt: generatedAt,
             today: today,
             values: byDay,
-            availability: availability,
-            error: error
-        )
-    }
-
-    public func snapshot(
-        sessions: [TokenUsageSessionUsage],
-        generatedAt: Date,
-        availability: TokenUsageAvailability = .available,
-        error: TokenUsageSnapshotError? = nil
-    ) -> TokenUsageSnapshot {
-        aggregate(
-            sessions: sessions,
-            generatedAt: generatedAt,
             availability: availability,
             error: error
         )

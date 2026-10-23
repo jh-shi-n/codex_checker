@@ -156,10 +156,6 @@ public enum AccountDashboardFormatting {
         return "\(sign)\(rounded)\(suffix)"
     }
 
-    public static func tokenCountText(_ value: Int64) -> String {
-        numberText(max(0, value))
-    }
-
     public static func dateText(
         _ date: Date?,
         dateStyle: DateFormatter.Style = .medium,
@@ -239,14 +235,6 @@ public enum AccountDashboardFormatting {
         guard minutes != 0 else { return "\(beforeText) → \(afterText)" }
         let arrow = minutes < 0 ? "▼" : "▲"
         return "\(beforeText) → \(afterText) (\(arrow)\(abs(minutes))분)"
-    }
-
-    public static func dateDeltaText(
-        before: Date?,
-        after: Date?,
-        calendar: Calendar = .autoupdatingCurrent
-    ) -> String {
-        resetDeltaText(before: before, after: after, calendar: calendar)
     }
 }
 

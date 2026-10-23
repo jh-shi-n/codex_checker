@@ -54,16 +54,6 @@ public final class SessionActivityPresentationModel: ObservableObject {
     public var items: [SessionActivityPresentationItem] { sessions }
     public var presentedSessions: [SessionActivityPresentationItem] { sessions }
 
-    public static func orderedSessions(
-        _ sessions: [SessionActivityMainSession]
-    ) -> [SessionActivityMainSession] {
-        SessionActivityMainSession.ordered(sessions)
-    }
-
-    public func apply(_ snapshot: SessionActivitySnapshot) {
-        update(snapshot: snapshot)
-    }
-
     public func update(snapshot: SessionActivitySnapshot) {
         switch snapshot.state {
         case .unavailable:
@@ -82,8 +72,7 @@ public final class SessionActivityPresentationModel: ObservableObject {
             uniqueIncoming.append(session)
         }
         let incomingByID = Dictionary(
-            uniqueIncoming.map { ($0.threadID, $0) },
-            uniquingKeysWith: { first, _ in first }
+            uniqueKeysWithValues: uniqueIncoming.map { ($0.threadID, $0) }
         )
         var updated: [SessionActivityPresentationItem] = []
         var seenIDs: Set<String> = []
@@ -113,12 +102,7 @@ public final class SessionActivityPresentationModel: ObservableObject {
         }
 
         self.sessions = updated.sorted { lhs, rhs in
-            let ordered = Self.orderedSessions([lhs.session, rhs.session])
-            guard let first = ordered.first else { return false }
-            if first.threadID != lhs.session.threadID {
-                return false
-            }
-            return lhs.session.threadID != rhs.session.threadID
+            SessionActivityMainSession.precedes(lhs.session, rhs.session)
         }
     }
 

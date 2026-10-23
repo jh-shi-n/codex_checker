@@ -180,21 +180,11 @@ public final class RefreshService {
         start()
     }
 
-    /// Updates the stored interval without starting the loop.
-    public func setInterval(minutes: Int) {
-        intervalMinutes = Self.normalizedIntervalMinutes(minutes)
-    }
-
     /// Performs an immediate manual refresh. A request arriving during an
     /// in-flight refresh is coalesced and runs once after the current request;
     /// no refresh callbacks overlap.
     public func refreshNow() async {
         _ = await loopGate.requestManual(generation: generation)
-    }
-
-    /// Alias retained for hosts that describe this action as a manual refresh.
-    public func manualRefresh() async {
-        await refreshNow()
     }
 
     public static func defaultSleep(_ seconds: TimeInterval) async {
