@@ -474,7 +474,7 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
 }
 
 /// 원문을 보관하지 않는 파일별 누적 토큰·날짜 상태
-struct TokenRolloutAccumulator: Sendable {
+struct TokenRolloutAccumulator: Codable, Sendable {
     var safeDate: Date?
     var highestTotals = TokenUsageTotals.zero
     var byDay: [Date: TokenUsageTotals] = [:]

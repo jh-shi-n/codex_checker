@@ -65,6 +65,10 @@ public struct AccountDetailView: View {
 
                 AccountQuotaSection(account: displayedAccount)
 
+                AccountTokenUsageView(account: account, store: .shared)
+
+                Text("이 Mac의 로컬 토큰 기록").font(.headline)
+
                 if let tokenUsagePreferences {
                     TokenUsageDisplaySection(preferences: tokenUsagePreferences,
                         snapshot: tokenUsageSnapshot, isLoading: isTokenUsageLoading,

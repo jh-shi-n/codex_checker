@@ -50,7 +50,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let launchAtLoginService: LaunchAtLoginService
     let sessionActivityProvider: SQLiteSessionActivityProvider
     /// One local-only token reader is shared by all dashboard instances.
-    let tokenUsageProvider: LocalTokenUsageProvider
+    let tokenUsageProvider: IncrementalTokenUsageProvider
     /// 명시적 업데이트 집계의 메모리·SQLite 보관 및 14일 만료 관리
     let tokenUsageCache: TokenUsageSnapshotCache
     /// The probe service owns process lifetime and the per-account running gate.
@@ -89,7 +89,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
         let launchAtLoginService = LaunchAtLoginService()
         let sessionActivityProvider = SQLiteSessionActivityProvider()
-        let tokenUsageProvider = LocalTokenUsageProvider(maxFileCount: 4096)
+        let tokenUsageProvider = IncrementalTokenUsageProvider(
+            cacheDirectory: TokenUsageSnapshotCache.defaultDatabaseURL.deletingLastPathComponent()
+                .appendingPathComponent("token-checkpoints", isDirectory: true)
+        )
         let tokenUsageCache = TokenUsageSnapshotCache(
             provider: tokenUsageProvider,
             databaseURL: TokenUsageSnapshotCache.defaultDatabaseURL,
@@ -204,6 +207,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                     for accountID in Set(previousHomes.keys).union(nextHomes.keys) {
                         if previousHomes[accountID] != nextHomes[accountID] {
                             tokenUsageCache.invalidate(accountID: accountID)
+                            AccountTokenUsageStore.shared.invalidate(accountID: accountID)
                         }
                     }
                     accountStore.reconfigure(pathStrings: paths)
@@ -236,6 +240,21 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] left, right in
                 self?.notchLayoutManager.updateActivityToasts(left: left, right: right)
             }
+
+        AccountTokenUsageStore.shared.loader = { [weak self] account in
+            guard let self,
+                  let config = self.accountStore.configs.first(where: { $0.id == account.id }),
+                  self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
+            else { return .failure(.notConfigured) }
+            let result = await CodexQuotaService().fetchTokenUsage(for: config)
+            guard self.accountStore.configs.first(where: { $0.id == account.id }) == config,
+                  self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration,
+                  self.accountStore.state(for: account.id)?.email == account.email else { return .failure(.cancelled) }
+            if case let .success(snapshot) = result, let email = account.email, snapshot.accountEmail != email {
+                return .failure(.protocolError("Account identity changed"))
+            }
+            return result
+        }
 
         let loadSessionActivity: SessionActivityLoader = { [weak self] account in
             guard let self else {

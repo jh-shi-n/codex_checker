@@ -267,6 +267,58 @@ public struct CodexQuotaService: Sendable {
         }
     }
 
+    /// 할당량 조회와 독립된 읽기 전용 계정 토큰 요청 및 취소 전파
+    public func fetchTokenUsage(for config: AccountConfig) async -> Result<AccountTokenUsage, CodexQuotaServiceError> {
+        if Task.isCancelled { return .failure(.cancelled) }
+        let cancellation = CodexQuotaFetchCancellation()
+        let execution = Task.detached { self.fetchTokenUsageSync(for: config, cancellation: cancellation) }
+        return await withTaskCancellationHandler {
+            let result = await execution.value
+            return Task.isCancelled ? .failure(.cancelled) : result
+        } onCancel: {
+            execution.cancel()
+            cancellation.cancel()
+        }
+    }
+
+    /// 초기화 완료 후 토큰 RPC 한 번만 전송; 기존 할당량 경로와 수명 분리
+    func fetchTokenUsageSync(
+        for config: AccountConfig, cancellation: CodexQuotaFetchCancellation? = nil
+    ) -> Result<AccountTokenUsage, CodexQuotaServiceError> {
+        guard cancellation?.isCancelled != true else { return .failure(.cancelled) }
+        guard config.isConfigured else { return .failure(.notConfigured) }
+        guard FileManager.default.fileExists(atPath: config.authFile.path) else { return .failure(.loginRequired) }
+        guard let executable = locator.locate() else { return .failure(.codexNotFound) }
+        let deadline = Date().addingTimeInterval(Self.overallTimeout)
+        let process = processFactory()
+        cancellation?.install(process)
+        defer { process.terminate(until: deadline) }
+        do {
+            guard cancellation?.isCancelled != true else { throw CodexProcessError.cancelled }
+            try process.launch(executable: executable, home: config.home)
+            try process.send(CodexProtocol.initializeRequest)
+            guard let response = try process.readResponses(for: [0], until: deadline)[0] else {
+                throw CodexQuotaServiceError.timeout
+            }
+            try validateResponse(response, requestName: "initialize")
+            try process.send(CodexRequest(method: "initialized", params: .object([:])))
+            try process.send(CodexRequest(id: 1, method: "account/read", params: .object(["refreshToken": .bool(false)])))
+            try process.send(CodexRequest(id: 4, method: "account/usage/read"))
+            let responses = try process.readResponses(for: [1, 4], until: deadline)
+            guard let accountResponse = responses[1], let response = responses[4] else {
+                throw CodexQuotaServiceError.timeout
+            }
+            try validateResponse(accountResponse, requestName: "account/read")
+            try validateResponse(response, requestName: "account/usage/read")
+            guard cancellation?.isCancelled != true else { throw CodexProcessError.cancelled }
+            guard let result = response.result else { throw CodexQuotaServiceError.malformedResponse("Missing usage result") }
+            let email = accountResponse.result?.objectValue?["account"]?.objectValue?["email"]?.stringValue
+            return .success(try AccountTokenUsage(result: result, accountEmail: email))
+        } catch let error as CodexQuotaServiceError { return .failure(error) }
+        catch let error as CodexProcessError { return .failure(map(error)) }
+        catch { return .failure(.transport(error.localizedDescription)) }
+    }
+
     /// 계정 상태 조회와 호출자 취소 전파
     public func state(for config: AccountConfig) async -> AccountState {
         let result = await fetch(for: config)
@@ -474,7 +526,7 @@ public struct CodexQuotaService: Sendable {
     }
 }
 
-private final class CodexQuotaFetchCancellation: @unchecked Sendable {
+final class CodexQuotaFetchCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
     private var transport: (any CodexProcessTransport)?

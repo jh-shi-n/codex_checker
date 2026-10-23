@@ -159,6 +159,7 @@ extension CodexQuotaMonitorAppDelegate {
         guard previous.retentionMonths != accepted.retentionMonths else { return }
         Task { [weak self] in
             guard let self else { return }
+            await self.tokenUsageProvider.invalidateAll()
             await self.tokenUsageCache.setHistoryRetention(months: accepted.retentionMonths)
             self.preferences.reportTokenHistoryError(await self.tokenUsageCache.historyError)
         }

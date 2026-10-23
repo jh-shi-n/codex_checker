@@ -42,6 +42,7 @@ extension CodexQuotaMonitorAppDelegate {
         quotaResetScheduler.stop()
         UsageWindowProbeStore.shared.cancelAll()
         TokenUsageRefreshStore.shared.cancelAll()
+        AccountTokenUsageStore.shared.invalidateAll()
         serviceStatus.cancel()
         emptyAccountsPopover?.performClose(nil)
         emptyAccountsPopover = nil
