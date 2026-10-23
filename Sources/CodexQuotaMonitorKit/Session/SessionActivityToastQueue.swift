@@ -117,6 +117,7 @@ public final class SessionActivityToastQueue: ObservableObject {
 
     /// 현재 표시 위치로 알림 전달 및 숨김 계정 알림 제외
     public func enqueue(_ transition: SessionActivityTransition) {
+        guard transition.status != .unknown else { return }
         let side: AccountPosition
         if let displayedAccountIDs {
             guard let index = displayedAccountIDs.firstIndex(of: transition.accountID) else { return }

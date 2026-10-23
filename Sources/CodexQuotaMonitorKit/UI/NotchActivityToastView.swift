@@ -222,9 +222,7 @@ public final class NotchActivityPresentationModel: ObservableObject {
     }
 }
 
-/// Sanitized copy used by the compact, notch-adjacent activity toast. The
-/// model intentionally exposes only the short session identifier and the
-/// privacy-filtered transition labels supplied by the session monitor.
+/// 세션 번호 대신 검증된 제목과 작업 상태를 표시하는 활동 알림 문구
 public struct NotchActivityToastCopy: Equatable, Sendable {
     public let firstLine: String
     public let secondLine: String?
@@ -245,32 +243,27 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
         if let transition = toast.transition {
             let account = normalized(AccountDisplayName.resolved(names[transition.accountID], slotID: transition.accountID), fallback: "Account") ?? "Account"
             let firstLine: String
-            if let sessionID = transition.sessionID,
-               !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                firstLine = "\(account) · Session \(shortSessionID(sessionID))"
+            if let title = normalized(transition.sessionTitle, fallback: nil), title != "Codex session" {
+                firstLine = "\(account) · \(title)"
             } else {
                 firstLine = account
             }
 
-            let agent = normalized(transition.agentLabel, fallback: "Agent") ?? "Agent"
+            let agent = normalized(transition.agentLabel, fallback: nil)
             let task = normalized(transition.taskName, fallback: nil)
             let status = statusText(transition.status)
             let secondLine = [agent, task, status]
                 .compactMap { $0 }
                 .joined(separator: " · ")
-            return NotchActivityToastCopy(firstLine: firstLine, secondLine: secondLine)
+            return NotchActivityToastCopy(firstLine: firstLine, secondLine: secondLine.isEmpty ? nil : secondLine)
         }
 
         let count = max(0, toast.overflowCount ?? 0)
         return NotchActivityToastCopy(firstLine: "\(count) more activity updates")
     }
 
-    private static func shortSessionID(_ sessionID: String) -> String {
-        let prefix = String(sessionID.prefix(8))
-        return sessionID.count > prefix.count ? "\(prefix)..." : prefix
-    }
-
-    private static func statusText(_ status: SessionActivityStatus) -> String {
+    /// 확인 불가 상태의 문구를 제외한 상태 표시
+    private static func statusText(_ status: SessionActivityStatus) -> String? {
         switch status {
         case .working: return "Working"
         case .waiting: return "Waiting"
@@ -278,7 +271,7 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
         case .completed: return "Completed"
         case .stopped: return "Stopped"
         case .error: return "Error"
-        case .unknown: return "Unknown"
+        case .unknown: return nil
         }
     }
 
@@ -291,7 +284,7 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.isEmpty { return fallback }
+        if cleaned.isEmpty || cleaned.lowercased() == "unknown" { return fallback }
         return String(cleaned.prefix(80))
     }
 }

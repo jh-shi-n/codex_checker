@@ -1098,14 +1098,16 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(AccountOrderEditor.moving(order, slotID: "C1", toInsertionIndex: 5), order)
     }
 
-    func testNotchActivityToastUsesSafeTwoLineCopyAndShortSessionID() {
+    /// 제목을 알림에 표시하고 원본 세션 번호를 노출하지 않는지 검증
+    func testNotchActivityToastUsesSafeTwoLineCopyAndSessionTitle() {
         let transition = SessionActivityTransition(
             accountID: "C4",
             side: .right,
             sessionID: "019fe59b123456",
             agentLabel: "Worker",
             taskName: "Settings window fix",
-            status: .working
+            status: .working,
+            sessionTitle: "버튼 동작 개선"
         )
         let toast = SessionActivityToast(
             content: .transition(transition),
@@ -1113,13 +1115,24 @@ final class QuotaPresentationTests: XCTestCase {
         )
 
         let copy = NotchActivityToastCopy.make(for: toast)
-        XCTAssertEqual(copy.firstLine, "C4 · Session 019fe59b...")
+        XCTAssertEqual(copy.firstLine, "C4 · 버튼 동작 개선")
         XCTAssertEqual(NotchActivityToastCopy.make(for: toast, names: ["C4": "업무 계정"]).firstLine,
-                       "업무 계정 · Session 019fe59b...")
+                       "업무 계정 · 버튼 동작 개선")
         XCTAssertEqual(toast.transition?.accountID, "C4")
         XCTAssertEqual(copy.secondLine, "Worker · Settings window fix · Working")
         XCTAssertEqual(copy.lines.count, 2)
         XCTAssertFalse(copy.lines.joined(separator: " ").contains(transition.sessionID!))
+    }
+
+    /// 알 수 없는 제목은 번호로 대체하지 않고 알림 문구에서도 제외하는지 검증
+    func testUnknownSessionTitleDoesNotFallBackToSessionID() {
+        let transition = SessionActivityTransition(accountID: "C1", side: .left, sessionID: "private-session-id",
+            agentLabel: "unknown", taskName: " Unknown ", status: .working, sessionTitle: "Unknown")
+        let copy = NotchActivityToastCopy.make(for: SessionActivityToast(content: .transition(transition), durationSeconds: 3))
+        XCTAssertEqual(copy.firstLine, "C1")
+        XCTAssertEqual(copy.secondLine, "Working")
+        XCTAssertFalse(copy.lines.joined().contains("private-session-id"))
+        XCTAssertFalse(copy.lines.joined().lowercased().contains("unknown"))
     }
 
     func testNotchActivityToastUsesFallbacksAndCountOnlyOverflowCopy() {
@@ -1135,7 +1148,7 @@ final class QuotaPresentationTests: XCTestCase {
             for: SessionActivityToast(content: .transition(transition), durationSeconds: 5)
         )
         XCTAssertEqual(fallback.firstLine, "C1")
-        XCTAssertEqual(fallback.secondLine, "Agent · Unknown")
+        XCTAssertNil(fallback.secondLine)
 
         let overflow = NotchActivityToastCopy.make(
             for: SessionActivityToast(content: .overflow(count: 3), durationSeconds: 5)

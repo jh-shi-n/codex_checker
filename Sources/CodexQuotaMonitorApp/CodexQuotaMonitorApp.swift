@@ -98,7 +98,8 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             databaseURL: TokenUsageSnapshotCache.defaultDatabaseURL,
             accountHomes: Self.tokenHomes(for: accountStore.configs),
             historyDatabaseURL: TokenUsageSnapshotCache.defaultDatabaseURL.deletingLastPathComponent().appendingPathComponent("token-history.sqlite"),
-            retentionMonths: preferences.tokenUsageOptions.retentionMonths
+            retentionMonths: preferences.tokenUsageOptions.retentionMonths,
+            todayProvider: TodayTokenUsageProvider()
         )
         let usageWindowProbeService = UsageWindowProbeService()
         let sessionActivityToastQueue = SessionActivityToastQueue(
@@ -134,7 +135,8 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                     sessionID: transition.sessionID,
                     agentLabel: transition.agentLabel,
                     taskName: transition.taskName,
-                    status: transition.status
+                    status: transition.status,
+                    sessionTitle: transition.sessionTitle
                 ))
             }
         )
@@ -355,11 +357,10 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    /// Resolves the stable account ID before reading local rollout metadata.
-    /// Unconfigured/missing IDs receive a safe unavailable snapshot and never
-    /// cause the compatibility `home` URL to be opened as a filesystem path.
+    /// 설정된 계정 홈에서 당일 증분을 반영하고 마지막 성공 그래프 반환
     private func cachedTokenUsage(accountID: String) async -> TokenUsageSnapshot? {
-        await tokenUsageCache.cachedSnapshot(for: accountID)
+        guard let home = accountStore.configs.first(where: { $0.id == accountID })?.configuredHome else { return nil }
+        return await tokenUsageCache.refreshToday(accountID: accountID, home: home)
     }
 
     /// 현재 계정의 명시적 토큰 집계 및 설정 변경 중 이전 결과 배제
