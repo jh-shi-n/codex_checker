@@ -1,4 +1,4 @@
-// 목적: 메인 세션의 명시적 턴 시작·완료·중단 이벤트만 읽기
+// 목적: 메인 세션의 명시적 턴 시작·완료·오류·중단 이벤트만 읽기
 // 이용처: SQLite 세션 수집 결과의 메인 상태 보완
 // 사용방법: 계정 홈 내부 JSONL 경로 전달, 미지원·읽기 실패 시 nil 유지
 import Foundation
@@ -36,10 +36,23 @@ actor MainSessionTurnReader {
         let timestamp: String?
         let payload: Payload?
 
-        /// 실제 턴 이벤트의 종류와 번호만 추출
+        /// 턴 종류·번호·종료 오류 유무만 추출하며 답변·오류 본문 보관 제외
         struct Payload: Decodable {
             let type: String?
             let turn_id: String?
+            let hasTerminalError: Bool
+
+            private enum CodingKeys: String, CodingKey {
+                case type, turn_id, error
+            }
+
+            /// 오류 필드 누락·null은 정상 종료로 유지하고 오류 내용 디코딩 제외
+            init(from decoder: any Decoder) throws {
+                let values = try decoder.container(keyedBy: CodingKeys.self)
+                type = try values.decodeIfPresent(String.self, forKey: .type)
+                turn_id = try values.decodeIfPresent(String.self, forKey: .turn_id)
+                hasTerminalError = try values.contains(.error) && !values.decodeNil(forKey: .error)
+            }
         }
     }
 
@@ -89,7 +102,7 @@ actor MainSessionTurnReader {
                 let status: SessionActivityStatus
                 switch payload.type {
                 case "task_started": status = .working
-                case "task_complete": status = .completed
+                case "task_complete": status = payload.hasTerminalError ? .error : .completed
                 case "turn_aborted": status = .stopped
                 default: continue
                 }
