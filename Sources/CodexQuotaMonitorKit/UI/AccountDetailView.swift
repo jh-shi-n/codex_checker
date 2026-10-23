@@ -20,12 +20,9 @@ public struct AccountDetailView: View {
 
     @Environment(\.accountDisplayNames) private var accountDisplayNames
     @State private var tokenUsageSnapshot: TokenUsageSnapshot?
-    @State private var isTokenUsageLoading = false
-    @State private var tokenUsageRefreshFailed = false
-    @State private var tokenUsageRefreshError: TokenUsageSnapshotError?
     @State private var isTokenUsageExpanded = false
     @ObservedObject private var probeStore = UsageWindowProbeStore.shared
-    @State private var tokenUsageRefreshTask: Task<Void, Never>?
+    @ObservedObject private var tokenUsageRefreshStore: TokenUsageRefreshStore
 
     public init(
         account: AccountState,
@@ -40,7 +37,8 @@ public struct AccountDetailView: View {
         runUsageWindowProbe: @escaping UsageWindowProbeRunner = AccountDetailView.defaultProbeRunner,
         onClose: @escaping () -> Void = {},
         serviceStatus: OpenAIServiceStatusStore? = nil,
-        tokenUsagePreferences: PreferencesStore? = nil
+        tokenUsagePreferences: PreferencesStore? = nil,
+        tokenUsageRefreshStore: TokenUsageRefreshStore = .shared
     ) {
         self.account = account
         self.onRefresh = onRefresh
@@ -53,6 +51,7 @@ public struct AccountDetailView: View {
         self.onClose = onClose
         self.serviceStatus = serviceStatus
         self.tokenUsagePreferences = tokenUsagePreferences
+        self._tokenUsageRefreshStore = ObservedObject(wrappedValue: tokenUsageRefreshStore)
     }
 
     public var tokenUsageCacheLookup: TokenUsageSnapshotLookup { loadCachedTokenUsage }
@@ -124,9 +123,8 @@ public struct AccountDetailView: View {
                 await loadCachedTokenUsageSnapshot()
             }
         }
-        .onDisappear {
-            tokenUsageRefreshTask?.cancel()
-            isTokenUsageLoading = false
+        .onChange(of: tokenUsageRefreshStore.result(for: account)) { _, snapshot in
+            if let snapshot { applyCachedTokenUsageSnapshot(snapshot) }
         }
     }
 
@@ -311,8 +309,7 @@ public struct AccountDetailView: View {
         if let snapshot {
             applyCachedTokenUsageSnapshot(snapshot)
         } else {
-            tokenUsageSnapshot = nil
-            tokenUsageRefreshFailed = false
+            tokenUsageSnapshot = tokenUsageRefreshStore.result(for: account)
         }
     }
 
@@ -320,31 +317,25 @@ public struct AccountDetailView: View {
     private func applyCachedTokenUsageSnapshot(_ snapshot: TokenUsageSnapshot) {
         if snapshot.availability == .available || tokenUsageSnapshot?.availability != .available {
             tokenUsageSnapshot = snapshot
-            if snapshot.availability == .available {
-                tokenUsageRefreshFailed = false
-            }
         }
     }
 
-    /// 실패 응답으로 마지막 정상 스냅샷을 대체하지 않는 수동 갱신
+    /// 화면 수명 밖에서 계정별 로컬 집계·저장 실행
     private func updateTokenUsage() {
-        guard !isTokenUsageLoading else { return }
-        isTokenUsageLoading = true
-        tokenUsageRefreshTask = Task { @MainActor in
-            let snapshot = await refreshTokenUsage(account)
-            guard !Task.isCancelled else { return }
-            if snapshot.availability == .available {
-                tokenUsageSnapshot = snapshot
-                tokenUsageRefreshFailed = false
-            } else {
-                if tokenUsageSnapshot?.availability != .available {
-                    tokenUsageSnapshot = snapshot
-                }
-                tokenUsageRefreshFailed = true
-                tokenUsageRefreshError = snapshot.error
-            }
-            isTokenUsageLoading = false
-        }
+        tokenUsageRefreshStore.start(for: account, runner: refreshTokenUsage)
+    }
+
+    /// 팝오버 재진입 시에도 유지되는 현재 계정의 실행 상태
+    private var isTokenUsageLoading: Bool { tokenUsageRefreshStore.isRunning(for: account) }
+
+    /// 성공 캐시와 별도로 유지하는 마지막 명시적 갱신 실패 여부
+    private var tokenUsageRefreshFailed: Bool {
+        tokenUsageRefreshStore.result(for: account)?.availability == .unavailable
+    }
+
+    /// 다른 계정·다른 경로의 실패와 분리한 현재 요청 오류
+    private var tokenUsageRefreshError: TokenUsageSnapshotError? {
+        tokenUsageRefreshStore.result(for: account)?.error
     }
 
     /// 계정별 공용 저장소의 실행 상태 조회
