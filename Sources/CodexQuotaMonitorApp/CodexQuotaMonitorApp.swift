@@ -133,7 +133,8 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                     agentLabel: transition.agentLabel,
                     taskName: transition.taskName,
                     status: transition.status,
-                    sessionTitle: transition.sessionTitle
+                    sessionTitle: transition.sessionTitle,
+                    turnID: transition.turnID
                 ))
             }
         )

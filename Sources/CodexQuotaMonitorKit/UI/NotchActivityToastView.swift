@@ -259,7 +259,9 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
                 let name = normalized(transition.taskName, fallback: nil)
                 task = name == "Agent" ? nil : name
             }
-            let status = transition.status == .unknown ? nil : transition.status.displayText
+            let status = transition.status == .unknown ? nil
+                : (agent == nil && transition.turnID != nil && transition.status == .completed
+                   ? "답변 완료" : transition.status.displayText)
             let secondLine = [agent, task, status]
                 .compactMap { $0 }
                 .joined(separator: " · ")
