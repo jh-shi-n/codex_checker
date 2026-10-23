@@ -9,6 +9,56 @@ import XCTest
 /// 명시적 메인 턴 이벤트만 알림으로 이어지는지 확인
 @MainActor
 final class MainSessionTurnTests: XCTestCase {
+    /// 답변 도중 모델 용량 초과로 끝난 턴의 오류 표시·1회 알림과 다음 턴 정상 복구 검증
+    func testCapacityFailureIsReportedAsErrorAndNextTurnCanComplete() async throws {
+        let (home, log) = try fixture(contents: event("task_started", turn: "failed-turn"))
+        defer { try? FileManager.default.removeItem(at: home) }
+        var events: [SessionActivityTransition] = []
+        let provider = SQLiteSessionActivityProvider(now: { Date(timeIntervalSince1970: 2_000_000) })
+        let monitor = SessionActivityMonitor(accounts: [AccountConfig(id: "C1", home: home, position: .left)],
+            provider: provider, now: { Date(timeIntervalSince1970: 1_999_999) }, onTransition: { events.append($0) })
+        await monitor.pollNow()
+        try append(terminalEvent(turn: "failed-turn", error: [
+            "message": "Selected model is at capacity. Please try a different model.",
+            "codex_error_info": "server_overloaded",
+        ]), to: log)
+        await monitor.pollNow()
+        await monitor.pollNow()
+        XCTAssertEqual(events.map(\.status), [.error])
+        XCTAssertEqual(events.map(\.turnID), ["failed-turn"])
+        let failed = await monitor.snapshot(for: "C1")
+        XCTAssertEqual(failed?.status, .error)
+        let toast = SessionActivityToast(content: .transition(try XCTUnwrap(events.first)), durationSeconds: 3)
+        XCTAssertEqual(NotchActivityToastCopy.make(for: toast).secondLine?.contains("오류"), true)
+
+        try append(event("task_started", turn: "recovered-turn"), to: log)
+        await monitor.pollNow()
+        try append(terminalEvent(turn: "recovered-turn", error: NSNull()), to: log)
+        await monitor.pollNow()
+        XCTAssertEqual(events.map(\.status), [.error, .working, .completed])
+    }
+
+    /// 오류 문구의 본문 인용은 완료 상태 유지, 과거 종료 오류의 신규 알림 제외 검증
+    func testQuotedCapacityMessageDoesNotFailAndHistoricalErrorDoesNotNotify() async throws {
+        let (home, log) = try fixture(contents: terminalEvent(turn: "old-error", error: [
+            "message": "Selected model is at capacity. Please try a different model.",
+        ], at: 1_998_000))
+        defer { try? FileManager.default.removeItem(at: home) }
+        var events: [SessionActivityTransition] = []
+        let provider = SQLiteSessionActivityProvider(now: { Date(timeIntervalSince1970: 2_000_000) })
+        let monitor = SessionActivityMonitor(accounts: [AccountConfig(id: "C1", home: home, position: .left)],
+            provider: provider, now: { Date(timeIntervalSince1970: 1_999_999) }, onTransition: { events.append($0) })
+        await monitor.pollNow()
+        let old = await monitor.snapshot(for: "C1")
+        XCTAssertNotEqual(old?.status, .error)
+        XCTAssertTrue(events.isEmpty)
+
+        try append(terminalEvent(turn: "success", error: NSNull(), lastMessage:
+            "Selected model is at capacity. Please try a different model."), to: log)
+        await monitor.pollNow()
+        XCTAssertEqual(events.map(\.status), [.completed])
+    }
+
     /// 답변 완료·빠른 다음 답변의 각 1회 전달 및 알림 큐 구분 검증
     func testMainRepliesDeliverOncePerTurnIncludingFastNextReply() async throws {
         let (home, log) = try fixture(contents: event("task_started", turn: "turn-1"))
@@ -165,6 +215,19 @@ final class MainSessionTurnTests: XCTestCase {
     private func event(_ type: String, turn: String, at time: TimeInterval = 2_000_000) -> String {
         let timestamp = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: time))
         return "{\"timestamp\":\"\(timestamp)\",\"type\":\"event_msg\",\"payload\":{\"type\":\"\(type)\",\"turn_id\":\"\(turn)\"}}\n"
+    }
+
+    /// 실제 종료 오류 필드와 마지막 답변을 구분하는 합성 완료 이벤트 생성
+    private func terminalEvent(
+        turn: String, error: Any, at time: TimeInterval = 2_000_000, lastMessage: String = ""
+    ) throws -> String {
+        let value: [String: Any] = [
+            "timestamp": ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: time)),
+            "type": "event_msg",
+            "payload": ["type": "task_complete", "turn_id": turn,
+                        "error": error, "last_agent_message": lastMessage],
+        ]
+        return String(decoding: try JSONSerialization.data(withJSONObject: value), as: UTF8.self) + "\n"
     }
 
     /// 파일 교체 없이 실행 중 로그의 추가 기록 재현
