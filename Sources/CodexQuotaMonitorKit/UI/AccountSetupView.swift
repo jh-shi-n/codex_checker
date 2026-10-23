@@ -93,7 +93,11 @@ public struct AccountSetupView: View {
             }
         }
         .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(
+            minWidth: Self.windowSize.width, maxWidth: .infinity,
+            minHeight: Self.windowSize.height, maxHeight: .infinity,
+            alignment: .topLeading
+        )
         .preferredColorScheme(.dark)
     }
 

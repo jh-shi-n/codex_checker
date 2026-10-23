@@ -25,6 +25,8 @@ extension CodexQuotaMonitorAppDelegate: NSWindowDelegate {
             onComplete: { [weak self] path in self?.registerInitialAccount(path: path) },
             onLater: { [weak self] in self?.accountSetupWindow?.close() }
         ))
+        window.contentMinSize = AccountSetupView.windowSize
+        window.setContentSize(AccountSetupView.windowSize)
         accountSetupModel = model
         accountSetupWindow = window
         window.center()
