@@ -48,3 +48,30 @@
 - B3: 완료 — 설정 초기화 전 설치 경로와 독립적인 비차단 파일 잠금 확보, 중복 실행의 기존 앱 활성화 및 종료. 중복·별도 프로세스·해제 후 재획득·접근 오류 4개 테스트 통과
 - B4: 완료 — 탐색·파일·청크 경계의 취소 확인, 파일 수 초과 즉시 중단, 집계당 256MiB 읽기 상한과 실패 원인 구분. 취소·읽기량 경계·여러 파일 합산·정상 입력·캐시 보존 관련 8개 테스트 통과
 - B5: 완료 — 앱·테스트 공용 NSWindow 생성 경계 분리. 표시·본문 갱신·재표시 후 최소 크기·콘텐츠 영역 일치 2개 테스트 통과, 실제 호스팅 화면 이미지에서 하단 동작 영역의 창 내부 배치 확인
+
+## 최종 검증 결과
+
+- 관련 현상 선택 테스트: 22개 통과, 실패 0개
+- 최종 실행 명령:
+
+```bash
+swift test --filter 'TokenCacheInvalidationTests|SettingsDisplayPersistenceTests|AppInstanceLockTests|TokenScanCancellationTests|AccountSetupWindowTests|AccountSetupTests.testSetupViewPreservesMinimumSize|TokenUsageTests.test(AccountHome|LaterStarted|SnapshotCacheMiss|FileLimit|UnavailableRefresh)'
+```
+
+- 실제 설치 경로: `/Applications/CodexQuotaChecker.app`
+- 배포용 빌드: 리소스 번들 포함 패키징 및 임시 서명 검증 통과
+- 실제 앱 중복 실행: 초기화 완료 후 잠금 유지 확인, 연속 2회 중복 진입의 종료 코드 0 및 기존 PID 유지
+- 배포 후 정리: 이전 설치 앱 백업·임시 패키지·로컬 `.build/` 제거, 사용자 데이터 및 로컬 지침 보존
+- 하단 조작 영역: 실제 NSHostingView 화면 이미지에서 창 내부 배치 확인, 접근성 요소 좌표의 자동 검사는 미실시
+- 검증 범위: 지적한 다섯 항목과 직접 관련된 동작으로 한정, 전체 테스트 묶음 실행 제외
+- PR 상태: 생성·병합 전 사용자 동의 대기
+
+## 오류별 커밋
+
+| ID | 커밋 | 변경 내용 |
+| --- | --- | --- |
+| B1 | `3cb7779` | DB 잠금 중 토큰 캐시 무효화 응답성 |
+| B2 | `1612a1f` | 저장 실패 후 표시 설정 초안 복원 |
+| B3 | `575f810` | 프로세스 간 앱 단일 실행 잠금 |
+| B4 | `f18d4d2` | 토큰 집계 취소·작업량 상한 |
+| B5 | `7bc3255` | 실제 튜토리얼 창 호스트 통합 검증 |
