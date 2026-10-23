@@ -204,7 +204,7 @@ public actor TokenUsageSnapshotCache {
     /// 계정 경로 변경 전에 진행 중 조회와 해당 계정의 영속 기록 무효화
     public nonisolated func invalidate(accountID: String) {
         invalidationState.invalidate(accountID: accountID) {
-            persistence?.remove(accountID: accountID)
+            self.persistence?.remove(accountID: accountID)
         }
         Task { await self.purgeExpired() }
     }
@@ -218,7 +218,7 @@ public actor TokenUsageSnapshotCache {
     /// 모든 기존 조회를 무효화하고 오래된 영속 행 제거
     public nonisolated func invalidateAll() {
         let generation = invalidationState.invalidateAll {
-            persistence?.removeAll()
+            self.persistence?.removeAll()
         }
         Task { await self.removeEntries(olderThan: generation) }
     }
@@ -314,6 +314,7 @@ public actor TokenUsageSnapshotCache {
     }
 }
 
+/// 세대 상태의 짧은 잠금과 디스크 작업의 직렬 큐를 분리한 캐시 격리 경계
 private final class InvalidationState: @unchecked Sendable {
     /// 전체·계정 무효화 버전 조합
     struct Token: Equatable, Sendable {
@@ -321,58 +322,49 @@ private final class InvalidationState: @unchecked Sendable {
         let accountRevision: UInt64
     }
 
-    private let queue = DispatchQueue(label: "CodexQuotaMonitor.TokenUsageCacheInvalidation")
+    private let stateLock = NSLock()
+    private let queue = DispatchQueue(label: "CodexQuotaMonitor.TokenUsageCachePersistence")
     private var generation: UInt64 = 0
     private var accountRevisions: [String: UInt64] = [:]
 
-    /// 현재 전체·계정 무효화 버전 조회
+    /// 디스크 작업을 기다리지 않는 현재 세대 조회
     func current(for accountID: String) -> Token {
-        queue.sync {
-            Token(
-                generation: generation,
-                accountRevision: accountRevisions[accountID, default: 0]
-            )
+        stateLock.withLock {
+            Token(generation: generation, accountRevision: accountRevisions[accountID, default: 0])
         }
     }
 
     /// 새 계정 갱신 요청의 이전 응답 무효화
     func beginRefresh(accountID: String) -> Token {
-        queue.sync {
+        stateLock.withLock {
             accountRevisions[accountID, default: 0] &+= 1
-            return Token(
-                generation: generation,
-                accountRevision: accountRevisions[accountID, default: 0]
-            )
+            return Token(generation: generation, accountRevision: accountRevisions[accountID, default: 0])
         }
     }
 
-    /// 무효화가 없을 때 optional 저장소 결과 반환
+    /// 무효화 전후의 동일 세대에서만 디스크 조회 결과 반환
     func optionalValueIfCurrent<T>(
         _ token: Token,
         accountID: String,
         _ body: () -> T?
     ) -> T? {
         queue.sync {
-            guard generation == token.generation,
-                  accountRevisions[accountID, default: 0] == token.accountRevision else {
-                return nil
-            }
-            return body()
+            guard current(for: accountID) == token else { return nil }
+            let result = body()
+            return current(for: accountID) == token ? result : nil
         }
     }
 
-    /// 무효화가 없을 때 저장소 작업 실행
+    /// 저장 중 발생한 무효화의 결과 반영 차단; 후속 정리는 동일 큐에서 실행
     func valueIfCurrent<T>(
         _ token: Token,
         accountID: String,
         _ body: () -> T
     ) -> T? {
         queue.sync {
-            guard generation == token.generation,
-                  accountRevisions[accountID, default: 0] == token.accountRevision else {
-                return nil
-            }
-            return body()
+            guard current(for: accountID) == token else { return nil }
+            let result = body()
+            return current(for: accountID) == token ? result : nil
         }
     }
 
@@ -381,20 +373,20 @@ private final class InvalidationState: @unchecked Sendable {
         queue.sync(execute: body)
     }
 
-    /// 계정 단위 무효화와 해당 계정 저장소 정리
-    func invalidate(accountID: String, _ body: () -> Void) {
-        queue.sync {
+    /// 즉시 세대 변경과 후속 갱신보다 앞선 비동기 디스크 정리 예약
+    func invalidate(accountID: String, _ body: @escaping @Sendable () -> Void) {
+        stateLock.withLock {
             accountRevisions[accountID, default: 0] &+= 1
-            body()
+            queue.async(execute: body)
         }
     }
 
-    /// 전체 무효화와 저장소 정리의 원자적 순서
-    func invalidateAll(_ body: () -> Void) -> UInt64 {
-        queue.sync {
+    /// 전체 세대 변경과 비동기 삭제 예약의 원자적 순서
+    func invalidateAll(_ body: @escaping @Sendable () -> Void) -> UInt64 {
+        stateLock.withLock {
             generation &+= 1
             accountRevisions.removeAll(keepingCapacity: true)
-            body()
+            queue.async(execute: body)
             return generation
         }
     }
