@@ -248,6 +248,8 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
     public let status: SessionActivityStatus
     /// 명시적 메인 응답 이벤트의 중복 판별용 턴 번호
     public let turnID: String?
+    /// 완료 알림의 신규 발생 여부를 판단하는 원본 이벤트 시각
+    public let turnEventAt: Date?
     public let agents: [SessionActivityAgent]
     public let isActive: Bool
     /// Safe public progress metadata. SQLite fallback leaves these values nil.
@@ -273,13 +275,15 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
         planStep: String? = nil,
         activeOperation: String? = nil,
         lastActivityAt: Date? = nil,
-        turnID: String? = nil
+        turnID: String? = nil,
+        turnEventAt: Date? = nil
     ) {
         self.threadID = threadID
         self.source = source
         self.taskName = SessionActivityMetadataSanitizer.text(taskName) ?? "Codex session"
         self.status = status
         self.turnID = turnID
+        self.turnEventAt = turnEventAt
         self.agents = agents
         self.isActive = isActive
         self.planStep = SessionActivityMetadataSanitizer.text(planStep)
@@ -297,7 +301,8 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
         planStep: String? = nil,
         activeOperation: String? = nil,
         lastActivityAt: Date? = nil,
-        turnID: String? = nil
+        turnID: String? = nil,
+        turnEventAt: Date? = nil
     ) {
         self.init(
             threadID: sessionID,
@@ -309,7 +314,8 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
             planStep: planStep,
             activeOperation: activeOperation,
             lastActivityAt: lastActivityAt,
-            turnID: turnID
+            turnID: turnID,
+            turnEventAt: turnEventAt
         )
     }
 
@@ -325,7 +331,8 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
         planStep: String? = nil,
         activeOperation: String? = nil,
         lastActivityAt: Date? = nil,
-        turnID: String? = nil
+        turnID: String? = nil,
+        turnEventAt: Date? = nil
     ) {
         self.init(
             threadID: threadID,
@@ -337,7 +344,8 @@ public struct SessionActivityMainSession: Identifiable, Equatable, Sendable {
             planStep: planStep,
             activeOperation: activeOperation,
             lastActivityAt: lastActivityAt,
-            turnID: turnID
+            turnID: turnID,
+            turnEventAt: turnEventAt
         )
     }
 }

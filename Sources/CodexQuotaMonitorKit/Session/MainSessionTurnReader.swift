@@ -7,11 +7,18 @@ import Foundation
 struct MainSessionTurnState: Equatable, Sendable {
     let status: SessionActivityStatus
     let turnID: String
+    let occurredAt: Date
 }
 
 /// 파일별 마지막 64KiB와 최대 64개 메타데이터 캐시를 사용하는 읽기 전용 수집기
 actor MainSessionTurnReader {
     static let maximumReadBytes = 64 * 1024
+    private let dateParser: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private let wholeSecondParser = ISO8601DateFormatter()
     private var files: [URL: Cursor] = [:]
 
     /// 파일 교체·절단·추가 기록 판별용 메타데이터와 마지막 명시적 상태
@@ -26,6 +33,7 @@ actor MainSessionTurnReader {
     /// 답변·도구 본문을 디코딩하지 않는 이벤트 메타데이터 투영
     private struct Event: Decodable {
         let type: String?
+        let timestamp: String?
         let payload: Payload?
 
         /// 실제 턴 이벤트의 종류와 번호만 추출
@@ -74,7 +82,10 @@ actor MainSessionTurnReader {
                 guard !Task.isCancelled else { return nil }
                 guard let event = try? decoder.decode(Event.self, from: Data(line)),
                       event.type == "event_msg", let payload = event.payload,
-                      let turnID = payload.turn_id, !turnID.isEmpty else { continue }
+                      let turnID = payload.turn_id, !turnID.isEmpty,
+                      let timestamp = event.timestamp,
+                      let occurredAt = dateParser.date(from: timestamp) ?? wholeSecondParser.date(from: timestamp)
+                else { continue }
                 let status: SessionActivityStatus
                 switch payload.type {
                 case "task_started": status = .working
@@ -82,7 +93,7 @@ actor MainSessionTurnReader {
                 case "turn_aborted": status = .stopped
                 default: continue
                 }
-                state = MainSessionTurnState(status: status, turnID: turnID)
+                state = MainSessionTurnState(status: status, turnID: turnID, occurredAt: occurredAt)
             }
             if files[url] == nil, files.count >= 64,
                let oldest = files.min(by: { $0.value.accessedAt < $1.value.accessedAt })?.key {

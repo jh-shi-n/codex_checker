@@ -183,12 +183,17 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
                 sessions.append(session)
                 continue
             }
+            let age = referenceDate.timeIntervalSince(turn.occurredAt)
+            if turn.status != .working && (age < 0 || age > Self.agentActivityFreshnessWindow) {
+                sessions.append(session)
+                continue
+            }
             sessions.append(SessionActivityMainSession(
                 threadID: session.threadID, source: session.source, taskName: session.taskName,
                 // 시작 이벤트가 오래 남아도 기존 메타데이터의 활동 만료 기준 유지
                 status: turn.status == .working ? session.status : turn.status,
                 agents: session.agents, isActive: session.isActive,
-                lastActivityAt: session.lastActivityAt, turnID: turn.turnID
+                lastActivityAt: session.lastActivityAt, turnID: turn.turnID, turnEventAt: turn.occurredAt
             ))
         }
         return SessionActivitySnapshot(accountID: accountID, state: snapshot.state,

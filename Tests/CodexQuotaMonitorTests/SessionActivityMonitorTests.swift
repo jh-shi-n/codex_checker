@@ -23,6 +23,24 @@ final class SessionActivityMonitorTests: XCTestCase {
         XCTAssertEqual(recorder.events.map(\.sessionTitle), ["그래프 개선", "그래프 개선"])
         XCTAssertEqual(recorder.events.map(\.sessionID), ["root", "root"])
     }
+    /// 오래된 시작 시각이 있는 메인 세션도 활동 만료 알림을 유지하는지 검증
+    func testOldTurnStartDoesNotSuppressInactivityTransition() async {
+        let account = makeAccount(id: "C2", home: "/tmp/monitor-inactive-turn", side: .left)
+        let sessions = [SessionActivityStatus.working, .inactive].map { status in
+            SessionActivitySnapshot(accountID: "C2", state: .available, sessions: [
+                SessionActivityMainSession(threadID: "root", source: .localActivity,
+                    taskName: "세션", status: status, agents: [], turnID: "old-turn",
+                    turnEventAt: Date(timeIntervalSince1970: 1))
+            ])
+        }
+        let queue = SnapshotQueue(values: ["C2": sessions])
+        let recorder = TransitionRecorder()
+        let monitor = makeMonitor(accounts: [account], queue: queue, recorder: recorder)
+        await monitor.pollNow()
+        await monitor.pollNow()
+        XCTAssertEqual(recorder.events.map(\.status), [.inactive])
+    }
+
     func testFirstPollEstablishesBaselineWithoutEmittingTransition() async {
         let account = makeAccount(id: "C1", home: "/tmp/monitor-c1", side: .left)
         let baseline = snapshot(
