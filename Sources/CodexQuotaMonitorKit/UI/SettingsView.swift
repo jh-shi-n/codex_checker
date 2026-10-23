@@ -443,7 +443,7 @@ public struct SettingsView: View {
 
     /// 설치 앱의 번들 버전 표시 및 소스 미리보기의 현재 릴리스 기본값
     private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.6"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.7"
     }
 
     private var refreshIntervalBinding: Binding<Int> {
