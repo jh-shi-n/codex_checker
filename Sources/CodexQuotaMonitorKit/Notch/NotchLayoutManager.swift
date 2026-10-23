@@ -69,7 +69,8 @@ public final class NotchLayoutManager: NSObject {
             AccountDashboardDefaults.unavailableProbe(accountID: account.id)
         },
         onClose: @escaping () -> Void = {},
-        serviceStatus: OpenAIServiceStatusStore? = nil
+        serviceStatus: OpenAIServiceStatusStore? = nil,
+        tokenUsagePreferences: PreferencesStore? = nil
     ) {
         self.screenProvider = screenProvider
         self.showAccountLabels = showAccountLabels
@@ -82,7 +83,7 @@ public final class NotchLayoutManager: NSObject {
             consumeResetCredit: consumeResetCredit,
             runUsageWindowProbe: runUsageWindowProbe,
             onClose: onClose,
-            serviceStatus: serviceStatus
+            serviceStatus: serviceStatus, tokenUsagePreferences: tokenUsagePreferences
         )
         self.centerPanel = CenterBridgePanel()
         self.rightPanel = RightQuotaPanel(
@@ -94,7 +95,7 @@ public final class NotchLayoutManager: NSObject {
             consumeResetCredit: consumeResetCredit,
             runUsageWindowProbe: runUsageWindowProbe,
             onClose: onClose,
-            serviceStatus: serviceStatus
+            serviceStatus: serviceStatus, tokenUsagePreferences: tokenUsagePreferences
         )
         super.init()
         self.leftPanel.activityPresentation.onPresentationChange = { [weak self] in

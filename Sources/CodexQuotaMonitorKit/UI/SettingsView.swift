@@ -100,6 +100,7 @@ public struct SettingsView: View {
         }
     }
 
+    @Binding public var tokenUsageOptions: TokenUsageOptions
     @Binding public var refreshIntervalMinutes: Int
     @Binding public var resetReminderMinutes: Int
     @Binding public var accountPaths: [String]
@@ -143,8 +144,10 @@ public struct SettingsView: View {
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
-        onOpenNotificationSettings: @escaping () -> Void = {}
+        onOpenNotificationSettings: @escaping () -> Void = {},
+        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions())
     ) {
+        self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._resetReminderMinutes = resetReminderMinutes
         self._accountPaths = accountPaths
@@ -192,8 +195,10 @@ public struct SettingsView: View {
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
-        onOpenNotificationSettings: @escaping () -> Void = {}
+        onOpenNotificationSettings: @escaping () -> Void = {},
+        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions())
     ) {
+        self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._resetReminderMinutes = resetReminderMinutes
         self._accountPaths = Binding(
@@ -331,6 +336,8 @@ public struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                TokenUsageSettingsSection(options: $tokenUsageOptions)
+
                 Section(Self.activitySectionTitle) {
                     Picker(Self.activityNotificationDurationLabel, selection: activityNotificationDurationBinding) {
                         ForEach(Self.minimumActivityNotificationDurationSeconds...Self.maximumActivityNotificationDurationSeconds, id: \.self) { seconds in
@@ -423,6 +430,7 @@ public struct SettingsView: View {
             minHeight: Self.minimumWindowSize.height,
             idealHeight: Self.defaultWindowSize.height
         )
+        .buttonStyle(.appAction)
         .onAppear {
             synchronizeAccountPathDrafts()
             synchronizeAccountDisplayDrafts()
@@ -435,7 +443,7 @@ public struct SettingsView: View {
 
     /// 설치 앱의 번들 버전 표시 및 소스 미리보기의 현재 릴리스 기본값
     private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.6"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.7"
     }
 
     private var refreshIntervalBinding: Binding<Int> {

@@ -4,7 +4,7 @@ import CoreFoundation
 /// Reads only token counters from rollout JSONL files below one configured
 /// CODEX_HOME. Authentication, configuration, databases, prompts, messages,
 /// tool content, and file contents are never returned by this type.
-public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
+public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
     /// 전체 집계 대상 파일 수 상한; 초과 확인 즉시 탐색 종료
     public static let defaultMaximumFileCount = 512
     /// Maximum UTF-8 bytes accepted for one JSONL line. Oversized lines are
@@ -29,16 +29,24 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         now: @escaping @Sendable () -> Date = { Date() },
         maxFileCount: Int = LocalTokenUsageProvider.defaultMaximumFileCount,
         maxLineBytes: Int = LocalTokenUsageProvider.defaultMaximumLineBytes,
-        maxReadBytes: Int = LocalTokenUsageProvider.defaultMaximumReadBytes
+        maxReadBytes: Int = LocalTokenUsageProvider.defaultMaximumReadBytes,
+        historyDayCount: Int = TokenUsageSnapshot.historyDayCount
     ) {
         self.calendar = calendar
         self.maxFileCount = max(0, maxFileCount)
         self.maxLineBytes = max(1, maxLineBytes)
         self.maxReadBytes = max(0, maxReadBytes)
         self.now = now
-        self.aggregator = TokenUsageAggregator(calendar: calendar)
+        self.aggregator = TokenUsageAggregator(calendar: calendar, dayCount: historyDayCount)
     }
 
+    /// 보관 정책의 날짜 수에 맞춘 동일 검증·취소·읽기 상한 적용
+    public func snapshot(home: URL, historyDayCount: Int) async -> TokenUsageSnapshot {
+        await LocalTokenUsageProvider(calendar: calendar, now: now, maxFileCount: maxFileCount,
+            maxLineBytes: maxLineBytes, maxReadBytes: maxReadBytes, historyDayCount: historyDayCount).snapshot(home: home)
+    }
+
+    /// 명시한 범위의 로컬 세션 집계와 완전한 성공 결과 반환
     public func snapshot(home: URL) async -> TokenUsageSnapshot {
         let generatedAt = now()
         guard !Task.isCancelled else {
@@ -130,7 +138,7 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         let today = calendar.startOfDay(for: referenceDate)
         let firstDay = calendar.date(
             byAdding: .day,
-            value: -(TokenUsageSnapshot.historyDayCount - 1),
+            value: -(aggregator.dayCount - 1),
             to: today
         ) ?? today
         var candidates: [RolloutCandidate] = []
