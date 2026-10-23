@@ -363,7 +363,7 @@ public struct TokenContributionGrid: View {
 }
 
 /// 가용 너비 2:1 배분 및 오른쪽 상세 높이에 맞춘 잔디 레이아웃
-private struct ContributionColumnsLayout: Layout {
+struct ContributionColumnsLayout: Layout {
     private let spacing: CGFloat = 12
 
     /// 상세 카드의 자연 높이와 부모 가용 너비 사용

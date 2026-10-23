@@ -4,7 +4,7 @@
 import Foundation
 
 /// 음수 정규화가 적용된 토큰 집계; 캐시는 입력의 일부이며 nil은 기록 미제공
-public struct TokenUsageTotals: Codable, Equatable, Sendable {
+public struct TokenUsageTotals: Equatable, Sendable {
     public let inputTokens: Int64
     public let outputTokens: Int64
     public let cachedInputTokens: Int64?
