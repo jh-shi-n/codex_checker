@@ -176,7 +176,7 @@ extension CodexQuotaMonitorAppDelegate {
             }
         case let .failure(error):
             effectiveLaunchAtLoginStatus = launchAtLoginService.status
-            presentLaunchAtLoginFailure(error)
+            presentLaunchAtLoginFailureMessage(error.localizedDescription)
         }
     }
 
@@ -238,10 +238,6 @@ extension CodexQuotaMonitorAppDelegate {
         } else if alert.runModal() == .alertFirstButtonReturn {
             launchAtLoginService.openSystemSettingsLoginItems()
         }
-    }
-
-    private func presentLaunchAtLoginFailure(_ error: LaunchAtLoginError) {
-        presentLaunchAtLoginFailureMessage(error.localizedDescription)
     }
 
     private func presentLaunchAtLoginFailureMessage(_ message: String) {

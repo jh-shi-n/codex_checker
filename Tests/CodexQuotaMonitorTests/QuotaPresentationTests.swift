@@ -4,6 +4,60 @@ import SwiftUI
 
 @MainActor
 final class QuotaPresentationTests: XCTestCase {
+    /// 현행 세션 목록의 작업·대기·최근 시각 순서와 하위 에이전트 보존 검증
+    func testCardsSortWorkingThenWaitingThenMostRecentAndKeepInactiveAgents() {
+        let sessions = [
+            SessionActivityMainSession(
+                threadID: "waiting",
+                source: .localActivity,
+                taskName: "Waiting",
+                status: .waiting,
+                agents: [],
+                isActive: true,
+                lastActivityAt: Date(timeIntervalSince1970: 2_000_100)
+            ),
+            SessionActivityMainSession(
+                threadID: "working",
+                source: .localActivity,
+                taskName: "Working",
+                status: .working,
+                agents: [
+                    SessionActivityAgent(
+                        threadID: "done-agent",
+                        parentThreadID: "working",
+                        taskName: "Completed subtask",
+                        status: .completed,
+                        displayName: "Worker"
+                    ),
+                ],
+                isActive: true,
+                lastActivityAt: Date(timeIntervalSince1970: 1_000)
+            ),
+            SessionActivityMainSession(
+                threadID: "recent-complete",
+                source: .localActivity,
+                taskName: "Recent",
+                status: .completed,
+                agents: [],
+                isActive: true,
+                lastActivityAt: Date(timeIntervalSince1970: 2_000_200)
+            ),
+        ]
+
+        let ordered = SessionActivityMainSession.ordered(sessions)
+
+        XCTAssertEqual(ordered.map(\.threadID), ["working", "waiting", "recent-complete"])
+        XCTAssertEqual(ordered[0].agents.map(\.displayName), ["Worker"])
+    }
+
+    /// 현행 세션 목록의 배지 생략과 스크롤 영역 제한 검증
+    func testActivitySectionIsBadgeFreeAndBoundsCardList() {
+        XCTAssertNil(SessionActivitySource.cli.badgeText)
+        XCTAssertNil(SessionActivitySource.codexApp.badgeText)
+        XCTAssertGreaterThan(CLIActivitySection.cardListMaxHeight, 0)
+        XCTAssertEqual(CLIActivitySection.cardListAxis, .vertical)
+    }
+
     /// 취소한 Ping 결과의 일반 실패 문구 노출 방지 검증
     func testProbeCancellationIsDisplayedSeparatelyFromFailure() {
         let now = Date()

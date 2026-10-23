@@ -21,10 +21,9 @@ public final class UsageWindowProbeStore: ObservableObject {
         }
     }
 
-    @Published private var running: Set<Key> = []
     @Published private var results: [Key: UsageWindowProbePresentationResult] = [:]
     @Published private var lastStartedAtByAccount: [Key: Date] = [:]
-    private var tasks: [Key: Operation] = [:]
+    @Published private var tasks: [Key: Operation] = [:]
 
     /// 취소 후 재시작된 동일 계정 작업의 완료 처리 격리
     private struct Operation {
@@ -36,7 +35,7 @@ public final class UsageWindowProbeStore: ObservableObject {
 
     /// 현재 계정 설정에 속한 실행 상태 반환
     func isRunning(for account: AccountState) -> Bool {
-        running.contains(Key(account))
+        tasks[Key(account)] != nil
     }
 
     /// 팝오버 재진입에도 유지되는 현재 요청의 시작 시각 조회
@@ -63,20 +62,18 @@ public final class UsageWindowProbeStore: ObservableObject {
         var initialFields = DiagnosticLogContext.resetFields(before: account)
         initialFields[.generation] = .integer(key.generation)
         logger.record(.probeRequested, operationID: operationID, accountID: account.id, fields: initialFields)
-        guard AccountDashboardActionState.canRunProbe(account: account, isRunning: running.contains(key)) else {
+        guard AccountDashboardActionState.canRunProbe(account: account, isRunning: tasks[key] != nil) else {
             logger.record(.probeRejected, operationID: operationID, accountID: account.id,
-                          fields: [.reason: .identifier(running.contains(key) ? "already_running" : "not_configured")])
+                          fields: [.reason: .identifier(tasks[key] != nil ? "already_running" : "not_configured")])
             return nil
         }
         let startedAt = Date()
         lastStartedAtByAccount = lastStartedAtByAccount.filter { $0.key.id != key.id || $0.key == key }
         lastStartedAtByAccount[key] = startedAt
-        running.insert(key)
         let task = Task { @MainActor in
             defer {
                 if tasks[key]?.id == operationID {
                     tasks[key] = nil
-                    running.remove(key)
                 }
             }
             let presentation = await DiagnosticLogContext.$operationID.withValue(operationID) {
@@ -129,6 +126,5 @@ public final class UsageWindowProbeStore: ObservableObject {
             operation.task.cancel()
         }
         tasks.removeAll()
-        running.removeAll()
     }
 }
