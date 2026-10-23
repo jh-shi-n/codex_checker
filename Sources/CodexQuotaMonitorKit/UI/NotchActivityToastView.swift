@@ -250,7 +250,13 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
             }
 
             let agent = normalized(transition.agentLabel, fallback: nil)
-            let task = normalized(transition.taskName, fallback: nil)
+            // 비활성·종료 에이전트 알림에서 긴 작업 설명 제외
+            let task: String?
+            if agent != nil, [.inactive, .completed, .stopped].contains(transition.status) {
+                task = nil
+            } else {
+                task = normalized(transition.taskName, fallback: nil)
+            }
             let status = statusText(transition.status)
             let secondLine = [agent, task, status]
                 .compactMap { $0 }
@@ -307,6 +313,8 @@ public enum NotchActivityToastMetrics {
     public static let horizontalPadding: CGFloat = 16
     public static let characterAdvance: CGFloat = 6.2
     public static let minimumWidth: CGFloat = 72
+    /// 긴 세션 제목·작업명에 의한 과도한 알림 확장 제한
+    public static let maximumWidth: CGFloat = 240
 
     public static func requiredWidth(for toast: SessionActivityToast?, names: [String: String] = [:]) -> CGFloat {
         guard let toast else { return 0 }
@@ -314,7 +322,7 @@ public enum NotchActivityToastMetrics {
         let longestLine = copy.lines.map(\.count).max() ?? 0
         let estimated = CGFloat(longestLine) * characterAdvance + horizontalPadding
         guard estimated.isFinite else { return minimumWidth }
-        return max(minimumWidth, estimated)
+        return min(maximumWidth, max(minimumWidth, estimated))
     }
 }
 
@@ -359,14 +367,12 @@ public struct NotchActivityToastView: View {
             Text(copy.firstLine)
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .lineLimit(1)
-                .minimumScaleFactor(0.65)
                 .truncationMode(.tail)
 
             if let secondLine = copy.secondLine {
                 ShimmerText(secondLine, status: status)
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.6)
                     .truncationMode(.tail)
             }
         }

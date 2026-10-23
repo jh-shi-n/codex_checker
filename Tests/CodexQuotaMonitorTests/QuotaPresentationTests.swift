@@ -1178,6 +1178,36 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertFalse(copy.lines.joined(separator: " ").contains(transition.sessionID!))
     }
 
+    /// 비활성·완료·중단 에이전트 알림의 긴 작업 설명 제외 검증
+    func testFinishedAgentToastOmitsTaskDescription() {
+        let statuses: [(SessionActivityStatus, String)] = [
+            (.inactive, "Inactive"), (.completed, "Completed"), (.stopped, "Stopped"),
+        ]
+        for (status, label) in statuses {
+            let toast = SessionActivityToast(content: .transition(SessionActivityTransition(
+                accountID: "C1", side: .left, sessionID: "parent-session",
+                agentLabel: "Worker", taskName: String(repeating: "긴 작업 설명 ", count: 30),
+                status: status, sessionTitle: "부모 세션"
+            )), durationSeconds: 3)
+            let copy = NotchActivityToastCopy.make(for: toast)
+            XCTAssertEqual(copy.firstLine, "C1 · 부모 세션")
+            XCTAssertEqual(copy.secondLine, "Worker · \(label)")
+        }
+    }
+
+    /// 긴 제목·에이전트명에서도 알림 최대 폭 제한 및 짧은 알림 폭 보존 검증
+    func testToastWidthCapsLongCopyAndPreservesShortCopy() {
+        let longToast = SessionActivityToast(content: .transition(SessionActivityTransition(
+            accountID: "C1", side: .right, sessionID: "parent-session",
+            agentLabel: String(repeating: "Worker", count: 20), taskName: "Task",
+            status: .inactive, sessionTitle: String(repeating: "긴 세션 제목 ", count: 30)
+        )), durationSeconds: 3)
+        XCTAssertEqual(NotchActivityToastMetrics.requiredWidth(for: longToast), 240)
+        XCTAssertEqual(NotchActivityToastMetrics.requiredWidth(for: nil), 0)
+        let shortToast = SessionActivityToast(content: .overflow(count: 1), durationSeconds: 3)
+        XCTAssertLessThan(NotchActivityToastMetrics.requiredWidth(for: shortToast), 240)
+    }
+
     /// 알 수 없는 제목은 번호로 대체하지 않고 알림 문구에서도 제외하는지 검증
     func testUnknownSessionTitleDoesNotFallBackToSessionID() {
         let transition = SessionActivityTransition(accountID: "C1", side: .left, sessionID: "private-session-id",
