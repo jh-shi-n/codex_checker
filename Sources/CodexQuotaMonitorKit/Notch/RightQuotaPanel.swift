@@ -10,6 +10,7 @@ public final class RightQuotaPanel: NotchQuotaPanel {
     public private(set) var accounts: [AccountState]
     public private(set) var accountDisplayNames: [String: String] = [:]
     public let serviceStatus: OpenAIServiceStatusStore?
+    public let tokenUsagePreferences: PreferencesStore?
     public private(set) var menuBarHeight: CGFloat
     public private(set) var diameterOverride: CGFloat?
     public private(set) var showAccountLabels: Bool
@@ -50,10 +51,12 @@ public final class RightQuotaPanel: NotchQuotaPanel {
         activityToast: SessionActivityToast? = nil,
         activityToastWidth: CGFloat? = nil,
         activityPresentation: NotchActivityPresentationModel? = nil,
-        serviceStatus: OpenAIServiceStatusStore? = nil
+        serviceStatus: OpenAIServiceStatusStore? = nil,
+        tokenUsagePreferences: PreferencesStore? = nil
     ) {
         self.accounts = accounts
         self.serviceStatus = serviceStatus
+        self.tokenUsagePreferences = tokenUsagePreferences
         self.menuBarHeight = menuBarHeight
         self.diameterOverride = diameterOverride
         self.showAccountLabels = showAccountLabels
@@ -181,7 +184,7 @@ public final class RightQuotaPanel: NotchQuotaPanel {
             onClose: onClose,
             activityPresentation: activityPresentation,
             serviceStatus: serviceStatus,
-            accountDisplayNames: accountDisplayNames
+            accountDisplayNames: accountDisplayNames, tokenUsagePreferences: tokenUsagePreferences
         )
         if let activityHostingView {
             activityHostingView.rootView = root

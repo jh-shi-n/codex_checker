@@ -227,7 +227,7 @@ final class AppConfigurationFileTests: XCTestCase {
             let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
             XCTAssertEqual(Set(object.keys), ["settings", "hasRegisteredAccount", "firstAccountRegisteredAt"])
             let savedSettings = try XCTUnwrap(object["settings"] as? [String: Any])
-            XCTAssertEqual(Set(savedSettings.keys), allowedSettingFields)
+            XCTAssertEqual(Set(savedSettings.keys), allowedSettingFields.subtracting(["tokenUsageOptions"]))
             XCTAssertEqual(savedSettings["accountDisplayNames"] as? [String: String], settings.accountDisplayNames)
             XCTAssertEqual(object["hasRegisteredAccount"] as? Bool, true)
             XCTAssertNotNil(object["firstAccountRegisteredAt"] as? String)
@@ -433,7 +433,7 @@ final class AppConfigurationFileTests: XCTestCase {
     /// 저장 허용 목록의 명시적 외부 계약
     private var allowedSettingFields: Set<String> {
         ["accountPaths", "enabledAccountIDs", "accountDisplayOrder", "refreshIntervalMinutes",
-         "resetReminderMinutes", "activityNotificationDurationSeconds", "showAccountLabels", "launchAtLogin", "accountDisplayNames"]
+         "resetReminderMinutes", "activityNotificationDurationSeconds", "showAccountLabels", "launchAtLogin", "accountDisplayNames", "tokenUsageOptions"]
     }
 
     /// 인증정보 없는 이전 설정 파일의 기본 테스트 자료 생성

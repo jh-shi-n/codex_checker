@@ -26,6 +26,10 @@ public actor TokenUsageSnapshotCache {
     private let provider: any TokenUsageProvider
     private let invalidationState: InvalidationState
     private let persistence: SQLiteTokenUsageSnapshotStore?
+    private let history: SQLiteTokenUsageHistoryStore?
+    private var historyOptions: TokenUsageOptions
+    private var historyPolicyRevision = 0
+    public private(set) var historyError: String?
     private let now: @Sendable () -> Date
     private let calendar: Calendar
     private var accountHomes: [String: URL]
@@ -46,11 +50,15 @@ public actor TokenUsageSnapshotCache {
         databaseURL: URL? = nil,
         accountHomes: [String: URL] = [:],
         now: @escaping @Sendable () -> Date = { Date() },
-        calendar: Calendar = .autoupdatingCurrent
+        calendar: Calendar = .autoupdatingCurrent,
+        historyDatabaseURL: URL? = nil,
+        retentionMonths: Int = 12
     ) {
         self.provider = provider
         self.invalidationState = InvalidationState()
         self.persistence = databaseURL.map { SQLiteTokenUsageSnapshotStore(databaseURL: $0) }
+        self.history = historyDatabaseURL.map { SQLiteTokenUsageHistoryStore(databaseURL: $0) }
+        self.historyOptions = TokenUsageOptions(retentionMonths: retentionMonths)
         self.now = now
         self.calendar = calendar
         self.accountHomes = Self.normalizedHomes(accountHomes)
@@ -67,9 +75,22 @@ public actor TokenUsageSnapshotCache {
            entry.token == token,
            entry.expiresAt > referenceDate,
            expectedIdentity == nil || entry.homeIdentity == expectedIdentity {
-            return entry.snapshot.rebased(to: referenceDate, calendar: calendar)
+            return history == nil ? entry.snapshot.rebased(to: referenceDate, calendar: calendar)
+                : entry.snapshot.retained(months: historyOptions.retentionMonths, at: referenceDate, calendar: calendar)
         }
         snapshots.removeValue(forKey: accountID)
+
+        if let history, let expectedIdentity {
+            do {
+                if let archived = try invalidationState.optionalValueIfCurrent(token, accountID: accountID, {
+                    try history.load(accountID: accountID, homeIdentity: expectedIdentity,
+                        options: historyOptions, now: referenceDate, calendar: calendar)
+                }) {
+                    historyError = nil
+                    return archived
+                }
+            } catch { historyError = "토큰 일별 집계를 복원하지 못했습니다. 저장소 접근 권한을 확인해 주세요." }
+        }
 
         guard let expectedIdentity,
               let record = invalidationState.optionalValueIfCurrent(token, accountID: accountID, {
@@ -83,14 +104,23 @@ public actor TokenUsageSnapshotCache {
             return nil
         }
 
+        let restored: TokenUsageSnapshot
+        if let history {
+            do {
+                restored = try invalidationState.valueIfCurrent(token, accountID: accountID) {
+                    try history.merge(snapshot, accountID: accountID, homeIdentity: expectedIdentity,
+                        options: historyOptions, now: referenceDate, calendar: calendar)
+                } ?? snapshot
+            } catch { historyError = "기존 토큰 캐시를 일별 집계로 이관하지 못했습니다."; return nil }
+        } else { restored = snapshot }
         snapshots[accountID] = Entry(
             token: token,
-            snapshot: snapshot,
+            snapshot: restored,
             updatedAt: record.updatedAt,
             expiresAt: record.expiresAt,
             homeIdentity: expectedIdentity
         )
-        return snapshot.rebased(to: referenceDate, calendar: calendar)
+        return restored.rebased(to: referenceDate, calendar: calendar)
     }
 
     /// 호환용 스냅샷 조회 이름
@@ -142,13 +172,36 @@ public actor TokenUsageSnapshotCache {
             )
         }
 
-        let snapshot = await provider.snapshot(home: home)
+        let policyRevision = historyPolicyRevision
+        var snapshot: TokenUsageSnapshot
+        if history != nil, let ranged = provider as? any TokenUsageRangeProvider {
+            let cutoff = historyOptions.cutoff(at: requestDate, calendar: calendar)
+            let count = (calendar.dateComponents([.day], from: cutoff, to: calendar.startOfDay(for: requestDate)).day ?? 0) + 1
+            snapshot = await ranged.snapshot(home: home, historyDayCount: count)
+        } else { snapshot = await provider.snapshot(home: home) }
+        guard policyRevision == historyPolicyRevision else {
+            return cachedSnapshot(for: accountID) ?? Self.supersededSnapshot(generatedAt: now())
+        }
         guard invalidationState.current(for: accountID) == token else {
             return cachedSnapshot(for: accountID)
                 ?? Self.supersededSnapshot(generatedAt: now())
         }
         guard snapshot.availability == .available else {
             return snapshot
+        }
+
+        if let history {
+            do {
+                guard let archived = try invalidationState.valueIfCurrent(token, accountID: accountID, {
+                    try history.merge(snapshot, accountID: accountID, homeIdentity: homeIdentity,
+                        options: historyOptions, now: now(), calendar: calendar)
+                }) else { return cachedSnapshot(for: accountID) ?? Self.supersededSnapshot(generatedAt: now()) }
+                snapshot = archived
+                historyError = nil
+            } catch {
+                historyError = "토큰 일별 집계를 저장하지 못했습니다. 저장 공간과 접근 권한을 확인해 주세요."
+                return Self.storageUnavailableSnapshot(from: snapshot, generatedAt: now())
+            }
         }
 
         let completedAt = now()
@@ -197,6 +250,7 @@ public actor TokenUsageSnapshotCache {
     public func remove(accountID: String) {
         invalidationState.invalidate(accountID: accountID) {
             self.persistence?.remove(accountID: accountID)
+            try? self.history?.remove(accountID: accountID)
         }
         snapshots.removeValue(forKey: accountID)
     }
@@ -205,6 +259,7 @@ public actor TokenUsageSnapshotCache {
     public nonisolated func invalidate(accountID: String) {
         invalidationState.invalidate(accountID: accountID) {
             self.persistence?.remove(accountID: accountID)
+            try? self.history?.remove(accountID: accountID)
         }
         Task { await self.purgeExpired() }
     }
@@ -219,6 +274,7 @@ public actor TokenUsageSnapshotCache {
     public nonisolated func invalidateAll() {
         let generation = invalidationState.invalidateAll {
             self.persistence?.removeAll()
+            try? self.history?.removeAll()
         }
         Task { await self.removeEntries(olderThan: generation) }
     }
@@ -245,6 +301,25 @@ public actor TokenUsageSnapshotCache {
         purgeExpired(at: now())
     }
 
+    /// 기간 변경 전 진행 중 집계 무효화와 오래된 기록·스냅샷 정리
+    @discardableResult
+    public func setHistoryRetention(months: Int) -> Bool {
+        historyOptions = TokenUsageOptions(retentionMonths: months)
+        historyPolicyRevision += 1
+        snapshots.removeAll()
+        do {
+            try invalidationState.perform {
+                try history?.prune(options: historyOptions, now: now(), calendar: calendar)
+                persistence?.removeAll()
+            }
+            historyError = nil
+            return true
+        } catch {
+            historyError = "보관 기간이 지난 토큰 집계를 정리하지 못했습니다. 다시 시도해 주세요."
+            return false
+        }
+    }
+
     /// 기준 시각까지 만료된 메모리·SQLite 행 제거
     private func purgeExpired(at referenceDate: Date) {
         snapshots = snapshots.filter { accountID, entry in
@@ -253,6 +328,8 @@ public actor TokenUsageSnapshotCache {
         }
         invalidationState.perform {
             persistence?.purgeExpired(beforeOrAt: referenceDate)
+            do { try history?.prune(options: historyOptions, now: referenceDate, calendar: calendar) }
+            catch { historyError = "보관 기간이 지난 토큰 집계를 정리하지 못했습니다." }
         }
     }
 
@@ -346,11 +423,11 @@ private final class InvalidationState: @unchecked Sendable {
     func optionalValueIfCurrent<T>(
         _ token: Token,
         accountID: String,
-        _ body: () -> T?
-    ) -> T? {
-        queue.sync {
+        _ body: () throws -> T?
+    ) rethrows -> T? {
+        try queue.sync {
             guard current(for: accountID) == token else { return nil }
-            let result = body()
+            let result = try body()
             return current(for: accountID) == token ? result : nil
         }
     }
@@ -359,18 +436,18 @@ private final class InvalidationState: @unchecked Sendable {
     func valueIfCurrent<T>(
         _ token: Token,
         accountID: String,
-        _ body: () -> T
-    ) -> T? {
-        queue.sync {
+        _ body: () throws -> T
+    ) rethrows -> T? {
+        try queue.sync {
             guard current(for: accountID) == token else { return nil }
-            let result = body()
+            let result = try body()
             return current(for: accountID) == token ? result : nil
         }
     }
 
     /// 저장소 정리와 동시 접근 직렬화
-    func perform<T>(_ body: () -> T) -> T {
-        queue.sync(execute: body)
+    func perform<T>(_ body: () throws -> T) rethrows -> T {
+        try queue.sync(execute: body)
     }
 
     /// 즉시 세대 변경과 후속 갱신보다 앞선 비동기 디스크 정리 예약

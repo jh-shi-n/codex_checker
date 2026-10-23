@@ -5,11 +5,12 @@ import Foundation
 /// 제외 범위: 세션 내용, 인증 정보, 홈 경로
 struct TokenUsageSnapshotPayload: Codable {
     /// 일별 집계 저장 상한
-    private static let maximumDailyPoints = TokenUsageSnapshot.historyDayCount
+    private static let maximumDailyPoints = TokenUsageOptions.maximumHistoryDays
 
     /// 캐시 토큰 저장 버전; 이전 일별 증가분 집계 버전 2 복원 지원
     private static let currentAggregationVersion = 3
     private let aggregationVersion: Int
+    private let recordedDates: [Double]?
     private let generatedAt: Double
     private let dailyPoints: [DailyPoint]
     private let today: Totals
@@ -24,6 +25,7 @@ struct TokenUsageSnapshotPayload: Codable {
     init(snapshot: TokenUsageSnapshot) {
         aggregationVersion = Self.currentAggregationVersion
         generatedAt = snapshot.generatedAt.timeIntervalSince1970
+        recordedDates = snapshot.recordedDates?.suffix(Self.maximumDailyPoints).map { $0.timeIntervalSince1970 }
         dailyPoints = snapshot.dailyPoints
             .suffix(Self.maximumDailyPoints)
             .map(DailyPoint.init)
@@ -60,7 +62,8 @@ struct TokenUsageSnapshotPayload: Codable {
             totalSessions: payload.totalSessions,
             averageTokensPerSession: payload.averageTokensPerSession,
             availability: payload.availability,
-            error: payload.error
+            error: payload.error,
+            recordedDates: payload.recordedDates?.map { Date(timeIntervalSince1970: $0) }
         )
     }
 

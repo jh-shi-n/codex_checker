@@ -149,6 +149,7 @@ public struct QuotaClusterView: View {
     public let accounts: [AccountState]
     public let accountDisplayNames: [String: String]
     public let serviceStatus: OpenAIServiceStatusStore?
+    public let tokenUsagePreferences: PreferencesStore?
     public let side: NotchSide
     public let menuBarHeight: CGFloat
     public let diameterOverride: CGFloat?
@@ -195,8 +196,10 @@ public struct QuotaClusterView: View {
         activityToastWidth: CGFloat? = nil,
         activityPresentation: NotchActivityPresentationModel? = nil,
         serviceStatus: OpenAIServiceStatusStore? = nil,
-        accountDisplayNames: [String: String] = [:]
+        accountDisplayNames: [String: String] = [:],
+        tokenUsagePreferences: PreferencesStore? = nil
     ) {
+        self.tokenUsagePreferences = tokenUsagePreferences
         self.accounts = accounts
         self.accountDisplayNames = accountDisplayNames
         self.serviceStatus = serviceStatus
@@ -251,7 +254,7 @@ public struct QuotaClusterView: View {
                         refreshTokenUsage: refreshTokenUsage,
                         consumeResetCredit: consumeResetCredit,
                         runUsageWindowProbe: runUsageWindowProbe,
-                        onClose: onClose
+                        onClose: onClose, tokenUsagePreferences: tokenUsagePreferences
                     )
                     .environment(\.openAIServiceStatus, serviceStatus)
                 }

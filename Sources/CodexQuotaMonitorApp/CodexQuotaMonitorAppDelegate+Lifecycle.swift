@@ -23,6 +23,7 @@ extension CodexQuotaMonitorAppDelegate {
         tokenCleanupTask = Task { [tokenUsageCache, preferences] in
             while !Task.isCancelled {
                 await tokenUsageCache.purgeExpired()
+                preferences.reportTokenHistoryError(await tokenUsageCache.historyError)
                 preferences.cleanupQuotaSnapshots()
                 do { try await Task.sleep(for: .seconds(60)) }
                 catch { return }

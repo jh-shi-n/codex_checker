@@ -8,6 +8,7 @@ import Foundation
 public final class PreferencesStore: ObservableObject {
     /// 기존 설정 이관·호환 로드 및 조회 캐시 저장용 키
     public enum Keys {
+        public static let tokenUsageOptions = "CodexQuotaMonitor.tokenUsageOptions"
         public static let settingsBundle = "CodexQuotaMonitor.settings.v1"
         public static let refreshIntervalMinutes = "CodexQuotaMonitor.refreshIntervalMinutes"
         public static let resetReminderMinutes = "CodexQuotaMonitor.resetReminderMinutes"
@@ -68,6 +69,8 @@ public final class PreferencesStore: ObservableObject {
     nonisolated public static let minimumActivityNotificationDurationSeconds = 1
     nonisolated public static let maximumActivityNotificationDurationSeconds = 10
 
+    @Published public private(set) var tokenUsageOptions: TokenUsageOptions
+    @Published public private(set) var tokenHistoryError: String?
     @Published public private(set) var refreshIntervalMinutes: Int
     /// 초기화 사전 알림 시점; 0은 사전 알림만 해제
     @Published public private(set) var resetReminderMinutes: Int
@@ -183,6 +186,8 @@ public final class PreferencesStore: ObservableObject {
             if let values { return values[key] }
             return userDefaults.object(forKey: key)
         }
+
+        self.tokenUsageOptions = readSetting(Keys.tokenUsageOptions) as? TokenUsageOptions ?? TokenUsageOptions()
 
         let rawInterval = readSetting(Keys.refreshIntervalMinutes)
         let persistedInterval = rawInterval as? Int
@@ -480,6 +485,19 @@ public final class PreferencesStore: ObservableObject {
         }
     }
 
+    /// 차트 옵션의 정규화·일괄 저장과 실패 시 이전 설정 복원
+    public func updateTokenUsageOptions(_ value: TokenUsageOptions) {
+        guard !settingsLoadFailed else { return }
+        tokenUsageOptions = TokenUsageOptions(weeklyChartEnabled: value.weeklyChartEnabled,
+            chartStyle: value.chartStyle, retentionMonths: value.retentionMonths)
+        persist()
+    }
+
+    /// 비동기 장기 저장소 오류를 설정 화면에 전달
+    public func reportTokenHistoryError(_ message: String?) {
+        if tokenHistoryError != message { tokenHistoryError = message }
+    }
+
     public func updateLaunchAtLogin(_ enabled: Bool) {
         guard !settingsLoadFailed else { return }
         launchAtLogin = enabled
@@ -562,11 +580,12 @@ public final class PreferencesStore: ObservableObject {
             resetReminderMinutes: resetReminderMinutes,
             activityNotificationDurationSeconds: activityNotificationDurationSeconds,
             showAccountLabels: showAccountLabels, launchAtLogin: launchAtLogin,
-            accountDisplayNames: accountDisplayNames)
+            accountDisplayNames: accountDisplayNames, tokenUsageOptions: tokenUsageOptions)
     }
 
     /// 인코딩 실패 시 직전 정상 설정 복원
     private func restore(_ value: AppPreferencesPayload) {
+        tokenUsageOptions = value.tokenUsageOptions ?? TokenUsageOptions()
         accountPaths = value.accountPaths
         enabledAccountIDs = value.enabledAccountIDs
         accountDisplayOrder = value.accountDisplayOrder
