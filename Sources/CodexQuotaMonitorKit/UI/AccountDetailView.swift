@@ -16,6 +16,7 @@ public struct AccountDetailView: View {
     public let runUsageWindowProbe: UsageWindowProbeRunner
     public let onClose: () -> Void
     public let serviceStatus: OpenAIServiceStatusStore?
+    public let tokenUsagePreferences: PreferencesStore?
 
     @Environment(\.accountDisplayNames) private var accountDisplayNames
     @State private var tokenUsageSnapshot: TokenUsageSnapshot?
@@ -38,7 +39,8 @@ public struct AccountDetailView: View {
         consumeResetCredit: @escaping ResetCreditRunner = ResetCreditDefaults.unavailable,
         runUsageWindowProbe: @escaping UsageWindowProbeRunner = AccountDetailView.defaultProbeRunner,
         onClose: @escaping () -> Void = {},
-        serviceStatus: OpenAIServiceStatusStore? = nil
+        serviceStatus: OpenAIServiceStatusStore? = nil,
+        tokenUsagePreferences: PreferencesStore? = nil
     ) {
         self.account = account
         self.onRefresh = onRefresh
@@ -50,6 +52,7 @@ public struct AccountDetailView: View {
         self.runUsageWindowProbe = runUsageWindowProbe
         self.onClose = onClose
         self.serviceStatus = serviceStatus
+        self.tokenUsagePreferences = tokenUsagePreferences
     }
 
     public var tokenUsageCacheLookup: TokenUsageSnapshotLookup { loadCachedTokenUsage }
@@ -63,11 +66,14 @@ public struct AccountDetailView: View {
 
                 AccountQuotaSection(account: displayedAccount)
 
-                TokenContributionGrid(
-                    snapshot: tokenUsageSnapshot,
-                    isLoading: isTokenUsageLoading,
-                    onUpdate: updateTokenUsage
-                )
+                if let tokenUsagePreferences {
+                    TokenUsageDisplaySection(preferences: tokenUsagePreferences,
+                        snapshot: tokenUsageSnapshot, isLoading: isTokenUsageLoading,
+                        onUpdate: updateTokenUsage, onReload: loadCachedTokenUsageSnapshot)
+                } else {
+                    TokenContributionGrid(snapshot: tokenUsageSnapshot,
+                        isLoading: isTokenUsageLoading, onUpdate: updateTokenUsage)
+                }
 
                 if tokenUsageRefreshFailed {
                     Text(tokenUsageRefreshError?.userMessage ?? "토큰 사용량 업데이트 실패")

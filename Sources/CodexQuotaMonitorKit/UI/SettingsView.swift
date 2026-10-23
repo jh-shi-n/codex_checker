@@ -100,6 +100,7 @@ public struct SettingsView: View {
         }
     }
 
+    @Binding public var tokenUsageOptions: TokenUsageOptions
     @Binding public var refreshIntervalMinutes: Int
     @Binding public var resetReminderMinutes: Int
     @Binding public var accountPaths: [String]
@@ -143,8 +144,10 @@ public struct SettingsView: View {
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
-        onOpenNotificationSettings: @escaping () -> Void = {}
+        onOpenNotificationSettings: @escaping () -> Void = {},
+        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions())
     ) {
+        self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._resetReminderMinutes = resetReminderMinutes
         self._accountPaths = accountPaths
@@ -192,8 +195,10 @@ public struct SettingsView: View {
         notificationDelivery: QuotaResetNotificationDelivery = .unavailable,
         onRetryNotificationAuthorization: @escaping () -> Void = {},
         onSendNotificationTest: @escaping () -> Void = {},
-        onOpenNotificationSettings: @escaping () -> Void = {}
+        onOpenNotificationSettings: @escaping () -> Void = {},
+        tokenUsageOptions: Binding<TokenUsageOptions> = .constant(TokenUsageOptions())
     ) {
+        self._tokenUsageOptions = tokenUsageOptions
         self._refreshIntervalMinutes = refreshIntervalMinutes
         self._resetReminderMinutes = resetReminderMinutes
         self._accountPaths = Binding(
@@ -330,6 +335,8 @@ public struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                TokenUsageSettingsSection(options: $tokenUsageOptions)
 
                 Section(Self.activitySectionTitle) {
                     Picker(Self.activityNotificationDurationLabel, selection: activityNotificationDurationBinding) {
