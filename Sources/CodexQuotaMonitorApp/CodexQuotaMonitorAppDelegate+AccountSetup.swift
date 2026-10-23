@@ -13,20 +13,12 @@ extension CodexQuotaMonitorAppDelegate: NSWindowDelegate {
             return
         }
         let model = AccountSetupModel()
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: AccountSetupView.windowSize),
-            styleMask: [.titled, .closable], backing: .buffered, defer: false
-        )
-        window.title = "Codex Quota Checker 시작하기"
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        window.contentViewController = NSHostingController(rootView: AccountSetupView(
+        let window = AccountSetupWindow.make(
             model: model,
             onComplete: { [weak self] path in self?.registerInitialAccount(path: path) },
             onLater: { [weak self] in self?.accountSetupWindow?.close() }
-        ))
-        window.contentMinSize = AccountSetupView.windowSize
-        window.setContentSize(AccountSetupView.windowSize)
+        )
+        window.delegate = self
         accountSetupModel = model
         accountSetupWindow = window
         window.center()
