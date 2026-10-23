@@ -7,6 +7,7 @@ public struct SessionActivityTransition: Equatable, Sendable, Identifiable {
     public let accountID: String
     public let side: AccountPosition
     public let sessionID: String?
+    public let sessionTitle: String?
     public let agentLabel: String?
     public let taskName: String?
     public let status: SessionActivityStatus
@@ -28,11 +29,13 @@ public struct SessionActivityTransition: Equatable, Sendable, Identifiable {
         sessionID: String?,
         agentLabel: String?,
         taskName: String?,
-        status: SessionActivityStatus
+        status: SessionActivityStatus,
+        sessionTitle: String? = nil
     ) {
         self.accountID = accountID
         self.side = side
         self.sessionID = sessionID
+        self.sessionTitle = SessionActivityMetadataSanitizer.text(sessionTitle)
         self.agentLabel = agentLabel
         self.taskName = taskName
         self.status = status
@@ -336,6 +339,7 @@ public actor SessionActivityMonitor {
                     sessionTransition(
                         account: account,
                         sessionID: session.threadID,
+                        sessionTitle: session.title,
                         status: session.status
                     )
                 )
@@ -347,6 +351,7 @@ public actor SessionActivityMonitor {
                     sessionTransition(
                         account: account,
                         sessionID: session.threadID,
+                        sessionTitle: session.title,
                         status: session.status
                     )
                 )
@@ -356,7 +361,8 @@ public actor SessionActivityMonitor {
                 previous: old.agents,
                 current: session.agents,
                 account: account,
-                sessionID: session.threadID
+                sessionID: session.threadID,
+                sessionTitle: session.title
             ))
         }
 
@@ -365,6 +371,7 @@ public actor SessionActivityMonitor {
                 sessionTransition(
                     account: account,
                     sessionID: session.threadID,
+                    sessionTitle: session.title,
                     status: .unknown
                 )
             )
@@ -373,9 +380,11 @@ public actor SessionActivityMonitor {
         return transitions
     }
 
+    /// 세션 상태 변화와 검증된 제목을 알림 전달 모델로 변환
     private static func sessionTransition(
         account: AccountConfig,
         sessionID: String?,
+        sessionTitle: String?,
         status: SessionActivityStatus
     ) -> SessionActivityTransition {
         SessionActivityTransition(
@@ -384,15 +393,18 @@ public actor SessionActivityMonitor {
             sessionID: sessionID,
             agentLabel: nil,
             taskName: nil,
-            status: status
+            status: status,
+            sessionTitle: sessionTitle
         )
     }
 
+    /// 에이전트 상태 변화에 부모 세션 제목을 결합한 알림 목록 구성
     private static func agentTransitions(
         previous: [SessionActivityAgent],
         current: [SessionActivityAgent],
         account: AccountConfig,
-        sessionID: String?
+        sessionID: String?,
+        sessionTitle: String?
     ) -> [SessionActivityTransition] {
         let previousByID = Dictionary(previous.map { ($0.threadID, $0) }, uniquingKeysWith: { first, _ in first })
         let currentByID = Dictionary(current.map { ($0.threadID, $0) }, uniquingKeysWith: { first, _ in first })
@@ -407,6 +419,7 @@ public actor SessionActivityMonitor {
                     agentTransition(
                         account: account,
                         sessionID: sessionID,
+                        sessionTitle: sessionTitle,
                         agentLabel: agent.displayName,
                         taskName: agent.taskName,
                         status: agent.status
@@ -421,6 +434,7 @@ public actor SessionActivityMonitor {
                 agentTransition(
                     account: account,
                     sessionID: sessionID,
+                    sessionTitle: sessionTitle,
                     agentLabel: agent.displayName,
                     taskName: agent.taskName,
                     status: .unknown
@@ -430,9 +444,11 @@ public actor SessionActivityMonitor {
         return transitions
     }
 
+    /// 원본 대화 없이 에이전트의 제목·작업·상태만 전달
     private static func agentTransition(
         account: AccountConfig,
         sessionID: String?,
+        sessionTitle: String?,
         agentLabel: String,
         taskName: String,
         status: SessionActivityStatus
@@ -443,7 +459,8 @@ public actor SessionActivityMonitor {
             sessionID: sessionID,
             agentLabel: agentLabel,
             taskName: taskName,
-            status: status
+            status: status,
+            sessionTitle: sessionTitle
         )
     }
 

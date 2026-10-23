@@ -4,6 +4,21 @@ import XCTest
 
 @MainActor
 final class SessionActivityToastQueueTests: XCTestCase {
+    /// 확인 불가 상태는 현재 알림·대기열·초과 요약에 추가하지 않는지 검증
+    func testUnknownTransitionIsNotDisplayedOrQueued() async {
+        let sleeper = ToastSleeperGate()
+        let queue = makeQueue(sleeper: sleeper)
+        queue.enqueue(transition(accountID: "C1", side: .left, status: .unknown))
+        XCTAssertNil(queue.currentLeft)
+        XCTAssertTrue(queue.pendingLeft.isEmpty)
+        queue.enqueue(transition(accountID: "C1", side: .left, status: .working))
+        await sleeper.waitUntilCount(atLeast: 1)
+        queue.enqueue(transition(accountID: "C2", side: .left, status: .unknown))
+        XCTAssertEqual(queue.currentLeft?.transition?.accountID, "C1")
+        XCTAssertTrue(queue.pendingLeft.isEmpty)
+        queue.cancel()
+        await sleeper.releaseAll()
+    }
     func testLeftAndRightLanesAreIndependentAndFIFO() async {
         let sleeper = ToastSleeperGate()
         let queue = makeQueue(sleeper: sleeper)
@@ -92,7 +107,7 @@ final class SessionActivityToastQueueTests: XCTestCase {
 
         XCTAssertEqual(queue.pendingLeft.last?.durationSeconds, 3)
         queue.updateDuration(seconds: 8)
-        queue.enqueue(transition(accountID: "C1", side: .left, status: .unknown))
+        queue.enqueue(transition(accountID: "C1", side: .left, status: .inactive))
 
         XCTAssertTrue(queue.pendingLeft.last?.isOverflowSummary == true)
         XCTAssertEqual(queue.pendingLeft.last?.overflowCount, 2)

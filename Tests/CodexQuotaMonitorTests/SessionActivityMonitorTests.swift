@@ -4,6 +4,25 @@ import XCTest
 
 @MainActor
 final class SessionActivityMonitorTests: XCTestCase {
+    /// 세션·하위 에이전트 상태 변화에 부모 세션 제목이 함께 전달되는지 검증
+    func testTransitionsCarrySessionTitleForRootAndAgent() async {
+        let account = makeAccount(id: "C1", home: "/tmp/monitor-title", side: .left)
+        let waiting = SessionActivityMainSession(threadID: "root", source: .localActivity,
+            taskName: "그래프 개선", status: .waiting, agents: [agent(id: "worker", taskName: "Worker", status: .waiting)])
+        let working = SessionActivityMainSession(threadID: "root", source: .localActivity,
+            taskName: "그래프 개선", status: .working, agents: [agent(id: "worker", taskName: "Worker", status: .working)])
+        let queue = SnapshotQueue(values: ["C1": [
+            SessionActivitySnapshot(accountID: "C1", state: .available, sessions: [waiting]),
+            SessionActivitySnapshot(accountID: "C1", state: .available, sessions: [working])
+        ]])
+        let recorder = TransitionRecorder()
+        let monitor = makeMonitor(accounts: [account], queue: queue, recorder: recorder)
+        await monitor.pollNow()
+        await monitor.pollNow()
+        XCTAssertEqual(recorder.events.count, 2)
+        XCTAssertEqual(recorder.events.map(\.sessionTitle), ["그래프 개선", "그래프 개선"])
+        XCTAssertEqual(recorder.events.map(\.sessionID), ["root", "root"])
+    }
     func testFirstPollEstablishesBaselineWithoutEmittingTransition() async {
         let account = makeAccount(id: "C1", home: "/tmp/monitor-c1", side: .left)
         let baseline = snapshot(
