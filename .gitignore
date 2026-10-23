@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+/AGENTS.md
 *.zip
 
 # Local records and account data

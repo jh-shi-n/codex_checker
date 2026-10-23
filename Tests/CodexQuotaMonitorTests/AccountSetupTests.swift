@@ -1,10 +1,22 @@
 // 목적: 초기 연결의 검증·취소·등록 조건과 빈 계정 처리 검증
 import Foundation
+import SwiftUI
 import XCTest
 @testable import CodexQuotaMonitorKit
 
 @MainActor
 final class AccountSetupTests: XCTestCase {
+    /// 호스트 크기 제안 없이도 안내 본문의 최소 크기 유지 검증
+    func testSetupViewPreservesMinimumSize() throws {
+        let renderer = ImageRenderer(content: AccountSetupView(
+            model: AccountSetupModel(), onComplete: { _ in }, onLater: {}
+        ))
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        XCTAssertGreaterThanOrEqual(image.width, Int(AccountSetupView.windowSize.width))
+        XCTAssertGreaterThanOrEqual(image.height, Int(AccountSetupView.windowSize.height))
+    }
+
     /// 존재하지 않는 경로의 네트워크 조회·등록 방지 검증
     func testInvalidPathNeverChecksOrRegisters() async {
         let model = AccountSetupModel(checker: { _ in
