@@ -5,16 +5,18 @@ import CoreFoundation
 /// CODEX_HOME. Authentication, configuration, databases, prompts, messages,
 /// tool content, and file contents are never returned by this type.
 public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
-    /// Maximum number of rollout files examined for one snapshot. Candidates
-    /// are ordered by their sessions-directory date before this cap applies.
+    /// 전체 집계 대상 파일 수 상한; 초과 확인 즉시 탐색 종료
     public static let defaultMaximumFileCount = 512
     /// Maximum UTF-8 bytes accepted for one JSONL line. Oversized lines are
     /// discarded without attempting to parse or retain their content.
     public static let defaultMaximumLineBytes = 1_048_576
+    /// 한 번의 집계에서 읽는 전체 파일 바이트 상한
+    public static let defaultMaximumReadBytes = 256 * 1024 * 1024
 
     public let calendar: Calendar
     public let maxFileCount: Int
     public let maxLineBytes: Int
+    public let maxReadBytes: Int
 
     public static let defaultMaxFileCount = defaultMaximumFileCount
     public static let defaultMaxLineBytes = defaultMaximumLineBytes
@@ -26,17 +28,22 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         calendar: Calendar = .autoupdatingCurrent,
         now: @escaping @Sendable () -> Date = { Date() },
         maxFileCount: Int = LocalTokenUsageProvider.defaultMaximumFileCount,
-        maxLineBytes: Int = LocalTokenUsageProvider.defaultMaximumLineBytes
+        maxLineBytes: Int = LocalTokenUsageProvider.defaultMaximumLineBytes,
+        maxReadBytes: Int = LocalTokenUsageProvider.defaultMaximumReadBytes
     ) {
         self.calendar = calendar
         self.maxFileCount = max(0, maxFileCount)
         self.maxLineBytes = max(1, maxLineBytes)
+        self.maxReadBytes = max(0, maxReadBytes)
         self.now = now
         self.aggregator = TokenUsageAggregator(calendar: calendar)
     }
 
     public func snapshot(home: URL) async -> TokenUsageSnapshot {
         let generatedAt = now()
+        guard !Task.isCancelled else {
+            return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: .cancelled)
+        }
         guard home.isFileURL else {
             return aggregator.emptySnapshot(
                 generatedAt: generatedAt,
@@ -73,13 +80,18 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
             return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: error)
         }
         var dailyPoints: [TokenUsageDailyPoint] = []
-        for candidate in scan.files {
-            guard let parsed = parseRollout(candidate, fileManager: fileManager) else {
-                return aggregator.emptySnapshot(
-                    generatedAt: generatedAt, availability: .unavailable, error: .rolloutReadFailed
-                )
+        var remainingBytes = maxReadBytes
+        do {
+            for candidate in scan.files {
+                try Task.checkCancellation()
+                let parsed = try parseRollout(candidate, fileManager: fileManager, remainingBytes: &remainingBytes)
+                dailyPoints.append(contentsOf: parsed)
             }
-            dailyPoints.append(contentsOf: parsed)
+            try Task.checkCancellation()
+        } catch {
+            let failure: TokenUsageSnapshotError = error is CancellationError ? .cancelled
+                : (error as? RolloutReadError == .byteLimitExceeded ? .readLimitExceeded : .rolloutReadFailed)
+            return aggregator.emptySnapshot(generatedAt: generatedAt, availability: .unavailable, error: failure)
         }
 
         return aggregator.aggregate(dailyPoints: dailyPoints, generatedAt: generatedAt)
@@ -124,6 +136,7 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         var candidates: [RolloutCandidate] = []
 
         for case let url as URL in enumerator {
+            if Task.isCancelled { return RolloutScan(files: [], error: .cancelled) }
             guard url.pathExtension.lowercased() == "jsonl" else { continue }
             guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]) else {
                 scanError = .rolloutReadFailed
@@ -144,6 +157,9 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
                 }
             }
             candidates.append(RolloutCandidate(url: url, directoryDate: directoryDate))
+            if candidates.count > maxFileCount {
+                return RolloutScan(files: [], error: .fileLimitExceeded)
+            }
         }
 
         candidates.sort { lhs, rhs in
@@ -153,24 +169,22 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
             // This ordering is internal only; no path is exposed in a model.
             return lhs.url.path < rhs.url.path
         }
-        if candidates.count > maxFileCount {
-            return RolloutScan(files: [], error: .fileLimitExceeded)
-        }
         return RolloutScan(files: candidates, error: scanError)
     }
 
     /// 누적 증가분의 날짜별 배분 및 마지막 사용일 기준 세션 중복 제거
     private func parseRollout(
         _ candidate: RolloutCandidate,
-        fileManager: FileManager
-    ) -> [TokenUsageDailyPoint]? {
-        guard fileManager.isReadableFile(atPath: candidate.url.path) else { return nil }
+        fileManager: FileManager,
+        remainingBytes: inout Int
+    ) throws -> [TokenUsageDailyPoint] {
+        guard fileManager.isReadableFile(atPath: candidate.url.path) else { throw CocoaError(.fileReadNoPermission) }
         var safeDate: Date?
         var highestTotals = TokenUsageTotals.zero
         var byDay: [Date: TokenUsageTotals] = [:]
         var latestUsageDay: Date?
 
-        let didRead = readJSONLines(at: candidate.url) { line in
+        try readJSONLines(at: candidate.url, remainingBytes: &remainingBytes) { line in
             guard let object = try? JSONSerialization.jsonObject(
                 with: Data(line),
                 options: [.fragmentsAllowed]
@@ -200,7 +214,6 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
             byDay[day] = (byDay[day] ?? .zero).adding(delta)
             latestUsageDay = max(latestUsageDay ?? day, day)
         }
-        guard didRead else { return nil }
         return byDay.keys.sorted().map { day in
             TokenUsageDailyPoint(
                 date: day,
@@ -210,13 +223,13 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         }
     }
 
-    /// Streams one file and retains at most `maxLineBytes` bytes for a line.
-    /// The callback receives only successfully bounded JSON data.
+    /// 청크별 취소 확인과 전체 파일 공통 읽기 상한을 적용하는 행 읽기
     private func readJSONLines(
         at url: URL,
+        remainingBytes: inout Int,
         _ callback: ([UInt8]) -> Void
-    ) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+    ) throws {
+        let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
 
         let chunkSize = 64 * 1024
@@ -225,13 +238,13 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         var discardingOversizedLine = false
 
         while true {
-            let chunk: Data?
-            do {
-                chunk = try handle.read(upToCount: chunkSize)
-            } catch {
-                return false
-            }
+            try Task.checkCancellation()
+            // 상한 도달 후 EOF 판별에 한해 추가 1바이트 읽기 허용
+            let readSize = remainingBytes < chunkSize ? remainingBytes + 1 : chunkSize
+            let chunk = try handle.read(upToCount: readSize)
             guard let chunk, !chunk.isEmpty else { break }
+            guard chunk.count <= remainingBytes else { throw RolloutReadError.byteLimitExceeded }
+            remainingBytes -= chunk.count
 
             for byte in chunk {
                 if byte == 0x0A { // LF
@@ -254,7 +267,11 @@ public struct LocalTokenUsageProvider: TokenUsageProvider, Sendable {
         if !discardingOversizedLine, !line.isEmpty {
             callback(trimCarriageReturn(from: line))
         }
-        return true
+    }
+
+    /// 부분 집계를 정상 결과와 구분하는 내부 읽기 실패
+    private enum RolloutReadError: Error {
+        case byteLimitExceeded
     }
 
     private func trimCarriageReturn(from data: Data) -> [UInt8] {

@@ -4,6 +4,7 @@
 // 실행 예시: swift run CodexQuotaMonitor
 @preconcurrency import AppKit
 import Combine
+import Darwin
 import SwiftUI
 
 import CodexQuotaMonitorKit
@@ -25,6 +26,7 @@ struct CodexQuotaMonitorApp: App {
 
 @MainActor
 final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
+    private let instanceLock: AppInstanceLock
     let preferences: PreferencesStore
     let accountStore: AccountStore
     /// 할당량 조회에 동반하여 갱신하는 네 계정 공용 서비스 상태
@@ -72,6 +74,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
 
     /// 설정과 계정 서비스 초기화 및 표시·갱신 콜백 연결
     override init() {
+        self.instanceLock = Self.acquireInstanceLock()
         let preferences = PreferencesStore(configurationFile: AppConfigurationFile(fileURL: AppConfigurationFile.defaultFileURL))
         let serviceStatus = OpenAIServiceStatusStore()
         let accountStore = AccountStore(
@@ -290,6 +293,25 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 states: states, reminderMinutes: preferences.resetReminderMinutes
             )
             self?.render(states: states)
+        }
+    }
+
+    /// 설정·타이머 생성 전 중복 진입 차단 및 기존 앱 활성화
+    private static func acquireInstanceLock() -> AppInstanceLock {
+        let lock = AppInstanceLock(fileURL: AppConfigurationFile.defaultFileURL
+            .deletingLastPathComponent().appendingPathComponent("instance.lock"))
+        do {
+            if try lock.acquire() { return lock }
+            let identifier = Bundle.main.bundleIdentifier ?? "com.example.codexquotamonitor"
+            if let running = NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+                .first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && !$0.isTerminated }) {
+                running.activate(options: [])
+            }
+            exit(EXIT_SUCCESS)
+        } catch {
+            let message = "앱 실행 잠금을 확보하지 못했습니다: \(error.localizedDescription)\n"
+            FileHandle.standardError.write(Data(message.utf8))
+            exit(EXIT_FAILURE)
         }
     }
 
