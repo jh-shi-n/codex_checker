@@ -329,6 +329,13 @@ public struct CLIActivitySection: View {
                     .truncationMode(.tail)
                     .layoutPriority(1)
 
+                Text(Self.shortSessionID(item.session.threadID))
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .help(item.session.threadID)
+
                 Spacer(minLength: 8)
 
                 HStack(spacing: 4) {
@@ -347,6 +354,12 @@ public struct CLIActivitySection: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.appDisclosure)
+        .contextMenu {
+            Button("세션 번호 복사") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(item.session.threadID, forType: .string)
+            }
+        }
         .help(sessionAccessibilityLabel(for: item))
         .accessibilityLabel(sessionAccessibilityLabel(for: item))
         .accessibilityValue(isExpanded ? "펼쳐짐" : "접힘")
@@ -411,7 +424,7 @@ public struct CLIActivitySection: View {
     }
 
     private func sessionAccessibilityLabel(for item: SessionActivityPresentationItem) -> String {
-        var values = [Self.sessionTitle(item.title), Self.mainStatusText(for: item)]
+        var values = [Self.sessionTitle(item.title), Self.shortSessionID(item.session.threadID), Self.mainStatusText(for: item)]
         if let time = Self.activityTimeText(for: item.lastActivityAt) {
             values.append(time)
         }
