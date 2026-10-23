@@ -19,8 +19,8 @@ public enum NotchActivityPresentationEvent: Equatable, Sendable {
 /// geometry and the stable SwiftUI host do not shrink until removal completes.
 @MainActor
 public final class NotchActivityPresentationModel: ObservableObject {
-    public static let entryAnimationDuration: TimeInterval = 0.2
-    public static let exitAnimationDuration: TimeInterval = 0.25
+    public static let entryAnimationDuration = NotchActivityToastPresentation.entryAnimationDuration
+    public static let exitAnimationDuration = NotchActivityToastPresentation.exitAnimationDuration
 
     @Published public private(set) var displayedToast: SessionActivityToast?
     @Published public private(set) var displayedWidth: CGFloat?
@@ -291,19 +291,8 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
 
 /// Pure presentation policy shared by tests and the SwiftUI transition.
 public enum NotchActivityToastPresentation {
-    public static let entryAnimationDuration: TimeInterval = 0.2
-    public static let exitAnimationDuration: TimeInterval = 0.25
-
-    public static func usesSlide(reduceMotion: Bool) -> Bool {
-        !reduceMotion
-    }
-
-    public static func shouldShimmer(
-        status: SessionActivityStatus,
-        reduceMotion: Bool
-    ) -> Bool {
-        status == .working && !reduceMotion
-    }
+    public static let entryAnimationDuration: TimeInterval = 0.32
+    public static let exitAnimationDuration: TimeInterval = 0.28
 
     public static func animationDuration(isPresented: Bool) -> TimeInterval {
         isPresented ? entryAnimationDuration : exitAnimationDuration
@@ -339,7 +328,7 @@ public struct NotchActivityToastView: View {
     public let toast: SessionActivityToast
     public let side: NotchSide
     public let width: CGFloat?
-    public let isExiting: Bool
+    public let isPresented: Bool
 
     @Environment(\.accountDisplayNames) private var accountDisplayNames
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -348,12 +337,12 @@ public struct NotchActivityToastView: View {
         toast: SessionActivityToast,
         side: NotchSide,
         width: CGFloat? = nil,
-        isExiting: Bool = false
+        isPresented: Bool = true
     ) {
         self.toast = toast
         self.side = side
         self.width = width
-        self.isExiting = isExiting
+        self.isPresented = isPresented
     }
 
     public var body: some View {
@@ -361,11 +350,7 @@ public struct NotchActivityToastView: View {
         let status = toast.transition?.status ?? .unknown
         let resolvedWidth = width.map { max(0, $0) }
             ?? NotchActivityToastMetrics.requiredWidth(for: toast, names: accountDisplayNames)
-        let transition: AnyTransition = NotchActivityToastPresentation.usesSlide(
-            reduceMotion: reduceMotion
-        )
-            ? .move(edge: side == .left ? .leading : .trailing).combined(with: .opacity)
-            : .opacity
+        let innerEdge: Alignment = side == .left ? .trailing : .leading
 
         VStack(
             alignment: side == .left ? .leading : .trailing,
@@ -391,21 +376,11 @@ public struct NotchActivityToastView: View {
         .frame(maxHeight: .infinity, alignment: .center)
         .contentShape(Rectangle())
         .allowsHitTesting(false)
-        .opacity(isExiting ? 0 : 1)
-        .offset(
-            x: isExiting && !reduceMotion
-                ? (side == .left ? -8 : 8)
-                : 0
-        )
-        .transition(transition)
-        .animation(
-            .easeOut(
-                duration: NotchActivityToastPresentation.animationDuration(
-                    isPresented: !isExiting
-                )
-            ),
-            value: isExiting
-        )
+        .opacity(isPresented ? 1 : 0)
+        .offset(x: reduceMotion || isPresented ? 0 : (side == .left ? 12 : -12))
+        .frame(width: reduceMotion || isPresented ? resolvedWidth : 0, alignment: innerEdge)
+        .clipped()
+        .transition(.identity)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(copy.lines.joined(separator: ", "))
     }

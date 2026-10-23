@@ -1212,28 +1212,21 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertFalse(overflow.lines.joined(separator: " ").contains("Worker"))
     }
 
-    func testNotchActivityToastAnimationPolicyUsesFixedDurationsAndReduceMotionFade() {
-        XCTAssertEqual(NotchActivityToastView.entryAnimationDuration, 0.2)
-        XCTAssertEqual(NotchActivityToastView.exitAnimationDuration, 0.25)
+    func testNotchActivityToastAnimationUsesSharedDurations() {
+        XCTAssertEqual(NotchActivityToastView.entryAnimationDuration, 0.32)
+        XCTAssertEqual(NotchActivityToastView.exitAnimationDuration, 0.28)
         XCTAssertEqual(
             NotchActivityToastPresentation.animationDuration(isPresented: true),
-            0.2
+            0.32
         )
         XCTAssertEqual(
             NotchActivityToastPresentation.animationDuration(isPresented: false),
-            0.25
+            0.28
         )
-        XCTAssertTrue(NotchActivityToastPresentation.usesSlide(reduceMotion: false))
-        XCTAssertFalse(NotchActivityToastPresentation.usesSlide(reduceMotion: true))
-        XCTAssertTrue(
-            NotchActivityToastPresentation.shouldShimmer(status: .working, reduceMotion: false)
-        )
-        XCTAssertFalse(
-            NotchActivityToastPresentation.shouldShimmer(status: .working, reduceMotion: true)
-        )
-        XCTAssertFalse(
-            NotchActivityToastPresentation.shouldShimmer(status: .completed, reduceMotion: false)
-        )
+        XCTAssertEqual(NotchActivityPresentationModel.entryAnimationDuration,
+                       NotchActivityToastPresentation.entryAnimationDuration)
+        XCTAssertEqual(NotchActivityPresentationModel.exitAnimationDuration,
+                       NotchActivityToastPresentation.exitAnimationDuration)
     }
 
     func testNotchActivityToastWidthIsFiniteAndOverflowRemainsCompact() {
@@ -1298,8 +1291,8 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(
             model.events,
             [
-                .entry(id: first.id, duration: 0.2),
-                .exit(id: first.id, duration: 0.25),
+                .entry(id: first.id, duration: 0.32),
+                .exit(id: first.id, duration: 0.28),
             ]
         )
 
@@ -1315,9 +1308,9 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(
             model.events,
             [
-                .entry(id: first.id, duration: 0.2),
-                .exit(id: first.id, duration: 0.25),
-                .entry(id: second.id, duration: 0.2),
+                .entry(id: first.id, duration: 0.32),
+                .exit(id: first.id, duration: 0.28),
+                .entry(id: second.id, duration: 0.32),
             ]
         )
 
