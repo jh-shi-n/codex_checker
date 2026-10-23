@@ -109,6 +109,8 @@ public enum TokenUsageSnapshotError: String, Codable, Equatable, Sendable {
     case superseded
     case fileLimitExceeded
     case rolloutReadFailed
+    case cancelled
+    case readLimitExceeded
 
     /// 민감한 경로를 제외한 집계 실패 원인 안내
     public var userMessage: String {
@@ -119,6 +121,8 @@ public enum TokenUsageSnapshotError: String, Codable, Equatable, Sendable {
         case .superseded: return "계정 설정이 변경되었습니다. 다시 업데이트해 주세요."
         case .fileLimitExceeded: return "세션 파일 수가 집계 상한을 초과했습니다. 일부 파일만 집계한 결과는 표시하지 않습니다."
         case .rolloutReadFailed: return "일부 세션 파일을 읽지 못했습니다. 파일 접근 권한을 확인한 뒤 다시 업데이트해 주세요."
+        case .cancelled: return "토큰 집계가 취소되었습니다."
+        case .readLimitExceeded: return "세션 기록의 읽기량이 집계 상한을 초과했습니다. 일부 기록만 집계한 결과는 표시하지 않습니다."
         }
     }
 }

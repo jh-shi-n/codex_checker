@@ -435,7 +435,7 @@ public struct SettingsView: View {
 
     /// 설치 앱의 번들 버전 표시 및 소스 미리보기의 현재 릴리스 기본값
     private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.4"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.6"
     }
 
     private var refreshIntervalBinding: Binding<Int> {
@@ -532,8 +532,7 @@ public struct SettingsView: View {
                     ids.removeAll { $0 == accountID }
                 }
                 let normalized = Self.normalizedEnabledAccountIDs(ids)
-                enabledAccountDraft = normalized
-                enabledAccountIDs = normalized
+                enabledAccountDraft = Self.applyDisplayChange(normalized, binding: $enabledAccountIDs)
             }
         )
     }
@@ -565,8 +564,14 @@ public struct SettingsView: View {
     /// 목적: 계정 표시 순서를 정규화해 초안·호출자 바인딩에 반영
     private func updateAccountDisplayOrder(_ ids: [String]) {
         let normalized = Self.normalizedDisplayOrder(ids)
-        accountDisplayOrderDraft = normalized
-        accountDisplayOrder = normalized
+        accountDisplayOrderDraft = Self.applyDisplayChange(normalized, binding: $accountDisplayOrder)
+    }
+
+    /// 저장 실패 시 복원된 실제 설정값을 화면 초안에 반환
+    @MainActor
+    static func applyDisplayChange(_ values: [String], binding: Binding<[String]>) -> [String] {
+        binding.wrappedValue = values
+        return binding.wrappedValue
     }
 
     /// 목적: 활성 계정 ID의 대문자 표준화·중복 제거
