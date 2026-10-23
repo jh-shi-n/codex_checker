@@ -35,6 +35,19 @@ public enum SessionActivityStatus: String, Equatable, Sendable {
         }
     }
 
+    /// 세션 화면과 활동 알림에서 공통 사용하는 한글 상태 문구
+    public var displayText: String {
+        switch self {
+        case .working: return "작업 중"
+        case .waiting: return "대기 중"
+        case .inactive: return "활동 없음"
+        case .completed: return "완료"
+        case .stopped: return "중단"
+        case .error: return "오류"
+        case .unknown: return "확인 불가"
+        }
+    }
+
     public var isOpen: Bool {
         self == .working || self == .waiting
     }

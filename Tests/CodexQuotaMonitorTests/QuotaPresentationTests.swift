@@ -116,18 +116,18 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(CLIActivitySection.unavailableText, "세션 실행 기록을 불러올 수 없습니다.")
         XCTAssertEqual(CLIActivitySection.activityRefreshInterval, 5)
         XCTAssertEqual(CLIActivitySection.cardListMaxHeight, 440)
-        XCTAssertEqual(CLIActivitySection.statusText(.working), "작업 중")
-        XCTAssertEqual(CLIActivitySection.statusText(.waiting), "대기 중")
-        XCTAssertEqual(CLIActivitySection.statusText(.completed), "완료")
-        XCTAssertEqual(CLIActivitySection.statusText(.stopped), "중단")
-        XCTAssertEqual(CLIActivitySection.statusText(.error), "오류")
-        XCTAssertEqual(CLIActivitySection.statusText(.unknown), "확인 불가")
+        XCTAssertEqual(SessionActivityStatus.working.displayText, "작업 중")
+        XCTAssertEqual(SessionActivityStatus.waiting.displayText, "대기 중")
+        XCTAssertEqual(SessionActivityStatus.completed.displayText, "완료")
+        XCTAssertEqual(SessionActivityStatus.stopped.displayText, "중단")
+        XCTAssertEqual(SessionActivityStatus.error.displayText, "오류")
+        XCTAssertEqual(SessionActivityStatus.unknown.displayText, "확인 불가")
 
         guard let inactive = SessionActivityStatus(rawValue: "inactive") else {
             XCTFail("inactive status should be normalized")
             return
         }
-        XCTAssertEqual(CLIActivitySection.statusText(inactive), "활동 없음")
+        XCTAssertEqual(inactive.displayText, "활동 없음")
     }
 
     func testAccountDetailPopoverUsesPracticalFixedContentSizeAndBoundedActivityCards() {
@@ -1173,7 +1173,7 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(NotchActivityToastCopy.make(for: toast, names: ["C4": "업무 계정"]).firstLine,
                        "업무 계정 · 버튼 동작 개선")
         XCTAssertEqual(toast.transition?.accountID, "C4")
-        XCTAssertEqual(copy.secondLine, "Worker · Settings window fix · Working")
+        XCTAssertEqual(copy.secondLine, "Worker · Settings window fix · 작업 중")
         XCTAssertEqual(copy.lines.count, 2)
         XCTAssertFalse(copy.lines.joined(separator: " ").contains(transition.sessionID!))
     }
@@ -1181,7 +1181,7 @@ final class QuotaPresentationTests: XCTestCase {
     /// 비활성·완료·중단 에이전트 알림의 긴 작업 설명 제외 검증
     func testFinishedAgentToastOmitsTaskDescription() {
         let statuses: [(SessionActivityStatus, String)] = [
-            (.inactive, "Inactive"), (.completed, "Completed"), (.stopped, "Stopped"),
+            (.inactive, "활동 없음"), (.completed, "완료"), (.stopped, "중단"),
         ]
         for (status, label) in statuses {
             let toast = SessionActivityToast(content: .transition(SessionActivityTransition(
@@ -1208,13 +1208,36 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertLessThan(NotchActivityToastMetrics.requiredWidth(for: shortToast), 240)
     }
 
+    /// 모든 상태 문구·기본 에이전트명·추가 알림의 한글 표시 검증
+    func testActivityNotificationsUseKoreanSystemCopy() {
+        let statuses: [(SessionActivityStatus, String?)] = [
+            (.working, "에이전트 · 작업 중"), (.waiting, "에이전트 · 대기 중"),
+            (.inactive, "에이전트 · 활동 없음"), (.completed, "에이전트 · 완료"),
+            (.stopped, "에이전트 · 중단"), (.error, "에이전트 · 오류"),
+            (.unknown, "에이전트"),
+        ]
+        for (status, expected) in statuses {
+            let toast = SessionActivityToast(content: .transition(SessionActivityTransition(
+                accountID: "C1", side: .left, sessionID: "session",
+                agentLabel: "Agent", taskName: "Agent", status: status,
+                sessionTitle: "My custom session"
+            )), durationSeconds: 3)
+            let copy = NotchActivityToastCopy.make(for: toast)
+            XCTAssertEqual(copy.firstLine, "C1 · My custom session")
+            XCTAssertEqual(copy.secondLine, expected)
+        }
+        let overflow = SessionActivityToast(content: .overflow(count: 5), durationSeconds: 3)
+        XCTAssertEqual(overflow.displayText, "추가 활동 알림 5건")
+        XCTAssertEqual(NotchActivityToastCopy.make(for: overflow).firstLine, overflow.displayText)
+    }
+
     /// 알 수 없는 제목은 번호로 대체하지 않고 알림 문구에서도 제외하는지 검증
     func testUnknownSessionTitleDoesNotFallBackToSessionID() {
         let transition = SessionActivityTransition(accountID: "C1", side: .left, sessionID: "private-session-id",
             agentLabel: "unknown", taskName: " Unknown ", status: .working, sessionTitle: "Unknown")
         let copy = NotchActivityToastCopy.make(for: SessionActivityToast(content: .transition(transition), durationSeconds: 3))
         XCTAssertEqual(copy.firstLine, "C1")
-        XCTAssertEqual(copy.secondLine, "Working")
+        XCTAssertEqual(copy.secondLine, "작업 중")
         XCTAssertFalse(copy.lines.joined().contains("private-session-id"))
         XCTAssertFalse(copy.lines.joined().lowercased().contains("unknown"))
     }
@@ -1237,7 +1260,7 @@ final class QuotaPresentationTests: XCTestCase {
         let overflow = NotchActivityToastCopy.make(
             for: SessionActivityToast(content: .overflow(count: 3), durationSeconds: 5)
         )
-        XCTAssertEqual(overflow.lines, ["3 more activity updates"])
+        XCTAssertEqual(overflow.lines, ["추가 활동 알림 3건"])
         XCTAssertFalse(overflow.lines.joined(separator: " ").contains("Session"))
         XCTAssertFalse(overflow.lines.joined(separator: " ").contains("Worker"))
     }

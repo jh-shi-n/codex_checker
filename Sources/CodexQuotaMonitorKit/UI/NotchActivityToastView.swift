@@ -241,7 +241,7 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
 
     public static func make(for toast: SessionActivityToast, names: [String: String] = [:]) -> NotchActivityToastCopy {
         if let transition = toast.transition {
-            let account = normalized(AccountDisplayName.resolved(names[transition.accountID], slotID: transition.accountID), fallback: "Account") ?? "Account"
+            let account = normalized(AccountDisplayName.resolved(names[transition.accountID], slotID: transition.accountID), fallback: "계정") ?? "계정"
             let firstLine: String
             if let title = normalized(transition.sessionTitle, fallback: nil), title != "Codex session" {
                 firstLine = "\(account) · \(title)"
@@ -250,35 +250,23 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
             }
 
             let agent = normalized(transition.agentLabel, fallback: nil)
+                .map { $0 == "Agent" ? "에이전트" : $0 }
             // 비활성·종료 에이전트 알림에서 긴 작업 설명 제외
             let task: String?
             if agent != nil, [.inactive, .completed, .stopped].contains(transition.status) {
                 task = nil
             } else {
-                task = normalized(transition.taskName, fallback: nil)
+                let name = normalized(transition.taskName, fallback: nil)
+                task = name == "Agent" ? nil : name
             }
-            let status = statusText(transition.status)
+            let status = transition.status == .unknown ? nil : transition.status.displayText
             let secondLine = [agent, task, status]
                 .compactMap { $0 }
                 .joined(separator: " · ")
             return NotchActivityToastCopy(firstLine: firstLine, secondLine: secondLine.isEmpty ? nil : secondLine)
         }
 
-        let count = max(0, toast.overflowCount ?? 0)
-        return NotchActivityToastCopy(firstLine: "\(count) more activity updates")
-    }
-
-    /// 확인 불가 상태의 문구를 제외한 상태 표시
-    private static func statusText(_ status: SessionActivityStatus) -> String? {
-        switch status {
-        case .working: return "Working"
-        case .waiting: return "Waiting"
-        case .inactive: return "Inactive"
-        case .completed: return "Completed"
-        case .stopped: return "Stopped"
-        case .error: return "Error"
-        case .unknown: return nil
-        }
+        return NotchActivityToastCopy(firstLine: toast.displayText)
     }
 
     private static func normalized(_ value: String?, fallback: String?) -> String? {

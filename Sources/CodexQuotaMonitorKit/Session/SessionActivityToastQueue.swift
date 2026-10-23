@@ -57,9 +57,9 @@ public struct SessionActivityToast: Equatable, Identifiable, Sendable {
         case let .transition(transition):
             return transition.taskName
                 ?? transition.agentLabel
-                ?? "\(transition.accountID) activity"
+                ?? "\(transition.accountID) 활동"
         case let .overflow(count):
-            return "\(count) more activity updates"
+            return "추가 활동 알림 \(max(0, count))건"
         }
     }
 }
