@@ -105,14 +105,18 @@ public struct WeeklyTokenUsageChart: View {
                 Spacer()
                 Button(action: onUpdate) {
                     Label(isLoading ? "업데이트 중…" : "업데이트", systemImage: "arrow.triangle.2.circlepath")
-                }.disabled(isLoading).help("로컬 토큰 기록 다시 읽기")
+                }
+                .buttonStyle(.appAction)
+                .disabled(isLoading).help("로컬 토큰 기록 다시 읽기")
             }
             HStack {
                 Button { moveWeek(-1) } label: { Image(systemName: "chevron.left") }
+                    .buttonStyle(.appIcon)
                     .disabled(!week.canGoBack).accessibilityLabel("이전 주")
                 Text("\(week.start.formatted(date: .abbreviated, time: .omitted)) – \(lastDay.formatted(date: .abbreviated, time: .omitted))")
                     .font(.caption).monospacedDigit()
                 Button { moveWeek(1) } label: { Image(systemName: "chevron.right") }
+                    .buttonStyle(.appIcon)
                     .disabled(!week.canGoForward).accessibilityLabel("다음 주")
                 Spacer()
                 Text(week.days.contains(where: { $0.point != nil })
