@@ -50,7 +50,7 @@ public struct EmptyAccountsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Button("설정 열기", action: onOpenSettings)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.appPrimary)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(20)

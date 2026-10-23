@@ -241,6 +241,8 @@ public struct QuotaDonutView: View {
     public let runUsageWindowProbe: UsageWindowProbeRunner
     public let onClose: () -> Void
 
+    public let tokenUsagePreferences: PreferencesStore?
+
     @State private var isHovered = false
     @State private var isDetailPresented = false
     @Environment(\.accountDisplayNames) private var accountDisplayNames
@@ -262,7 +264,8 @@ public struct QuotaDonutView: View {
         runUsageWindowProbe: @escaping UsageWindowProbeRunner = { account in
             AccountDashboardDefaults.unavailableProbe(accountID: account.id)
         },
-        onClose: @escaping () -> Void = {}
+        onClose: @escaping () -> Void = {},
+        tokenUsagePreferences: PreferencesStore? = nil
     ) {
         self.account = account
         self.menuBarHeight = menuBarHeight
@@ -276,6 +279,7 @@ public struct QuotaDonutView: View {
         self.consumeResetCredit = consumeResetCredit
         self.runUsageWindowProbe = runUsageWindowProbe
         self.onClose = onClose
+        self.tokenUsagePreferences = tokenUsagePreferences
     }
 
     public var body: some View {
@@ -290,7 +294,7 @@ public struct QuotaDonutView: View {
             )
             .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.appGraphic)
         .scaleEffect(isHovered ? QuotaDonutMetrics.hoverScale : 1)
         .animation(.easeOut(duration: 0.12), value: isHovered)
         .onHover { isHovered = $0 }
@@ -311,7 +315,7 @@ public struct QuotaDonutView: View {
                         isDetailPresented = false
                         onClose()
                     },
-                    serviceStatus: serviceStatus
+                    serviceStatus: serviceStatus, tokenUsagePreferences: tokenUsagePreferences
                 )
                 .environment(\.accountDisplayNames, accountDisplayNames)
                 .id(account.configurationGeneration)

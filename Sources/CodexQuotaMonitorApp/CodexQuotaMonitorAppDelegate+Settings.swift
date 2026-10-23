@@ -105,7 +105,11 @@ extension CodexQuotaMonitorAppDelegate {
             },
             onOpenNotificationSettings: { [weak self] in
                 self?.openNotificationSettings()
-            }
+            },
+            tokenUsageOptions: Binding(
+                get: { [weak self] in self?.preferences.tokenUsageOptions ?? TokenUsageOptions() },
+                set: { [weak self] in self?.applyTokenUsageOptions($0) }
+            )
         )
         .safeAreaInset(edge: .top) { StorageStatusView(preferences: preferences) }
     }
@@ -144,6 +148,19 @@ extension CodexQuotaMonitorAppDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.lifecycleCoordinator.reconfigure(paths: self.preferences.accountPaths)
+        }
+    }
+
+    /// 저장된 보관 기간 변경의 비동기 정리 및 오류 안내 연결
+    private func applyTokenUsageOptions(_ options: TokenUsageOptions) {
+        let previous = preferences.tokenUsageOptions
+        preferences.updateTokenUsageOptions(options)
+        let accepted = preferences.tokenUsageOptions
+        guard previous.retentionMonths != accepted.retentionMonths else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.tokenUsageCache.setHistoryRetention(months: accepted.retentionMonths)
+            self.preferences.reportTokenHistoryError(await self.tokenUsageCache.historyError)
         }
     }
 
@@ -258,7 +275,7 @@ private struct StorageStatusView: View {
     @ObservedObject var preferences: PreferencesStore
 
     var body: some View {
-        if preferences.persistenceError != nil || preferences.cacheError != nil {
+        if preferences.persistenceError != nil || preferences.cacheError != nil || preferences.tokenHistoryError != nil {
             VStack(alignment: .leading, spacing: 6) {
                 if let error = preferences.persistenceError {
                     Text(error).foregroundStyle(.red)
@@ -267,10 +284,15 @@ private struct StorageStatusView: View {
                 if let error = preferences.cacheError {
                     Text(error).foregroundStyle(.orange)
                     Button("캐시 정리 재시도") { preferences.cleanupQuotaSnapshots() }
+                        .buttonStyle(.appAction)
+                }
+                if let error = preferences.tokenHistoryError {
+                    Text(error).foregroundStyle(.orange)
                 }
                 Button("설정 저장 위치 열기") {
                     NSWorkspace.shared.open(AppConfigurationFile.defaultFileURL.deletingLastPathComponent())
                 }
+                .buttonStyle(.appAction)
             }
             .font(.caption)
             .padding(12)

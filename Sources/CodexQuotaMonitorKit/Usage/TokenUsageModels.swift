@@ -133,6 +133,8 @@ public struct TokenUsageSnapshot: Equatable, Sendable {
 
     public let generatedAt: Date
     public let dailyPoints: [TokenUsageDailyPoint]
+    /// 실제로 보관된 날짜 목록; nil은 기존 전체 날짜 데이터
+    public let recordedDates: [Date]?
     public let today: TokenUsageTotals
     public let last7Days: TokenUsageTotals
     public let last30Days: TokenUsageTotals
@@ -159,10 +161,12 @@ public struct TokenUsageSnapshot: Equatable, Sendable {
         totalSessions: Int64 = 0,
         averageTokensPerSession: Double = 0,
         availability: TokenUsageAvailability = .available,
-        error: TokenUsageSnapshotError? = nil
+        error: TokenUsageSnapshotError? = nil,
+        recordedDates: [Date]? = nil
     ) {
         self.generatedAt = generatedAt
         self.dailyPoints = dailyPoints
+        self.recordedDates = recordedDates
         self.today = today
         self.last7Days = last7Days
         self.last30Days = last30Days
@@ -183,7 +187,8 @@ public struct TokenUsageSnapshot: Equatable, Sendable {
         totalSessions: Int64 = 0,
         averageTokensPerSession: Double = 0,
         availability: TokenUsageAvailability = .available,
-        error: TokenUsageSnapshotError? = nil
+        error: TokenUsageSnapshotError? = nil,
+        recordedDates: [Date]? = nil
     ) {
         self.init(
             generatedAt: generatedAt,
@@ -194,13 +199,13 @@ public struct TokenUsageSnapshot: Equatable, Sendable {
             totalSessions: totalSessions,
             averageTokensPerSession: averageTokensPerSession,
             availability: availability,
-            error: error
+            error: error, recordedDates: recordedDates
         )
     }
     /// 원본 집계 시각을 유지한 현재 날짜 기준 기간 요약 재계산
     public func rebased(to referenceDate: Date, calendar: Calendar = .autoupdatingCurrent) -> Self {
         guard !calendar.isDate(generatedAt, inSameDayAs: referenceDate) else { return self }
-        let rebased = TokenUsageAggregator(calendar: calendar).aggregate(
+        let rebased = TokenUsageAggregator(calendar: calendar, dayCount: dailyPoints.count).aggregate(
             dailyPoints: dailyPoints,
             generatedAt: referenceDate,
             availability: availability,
@@ -215,8 +220,22 @@ public struct TokenUsageSnapshot: Equatable, Sendable {
             totalSessions: rebased.totalSessions,
             averageTokensPerSession: rebased.averageTokensPerSession,
             availability: availability,
-            error: error
+            error: error, recordedDates: recordedDates
         )
+    }
+
+    /// 날짜가 경과해도 달력 개월 보관 경계와 실제 수집 날짜를 맞추는 표시 집계
+    public func retained(months: Int, at referenceDate: Date, calendar: Calendar = .autoupdatingCurrent) -> Self {
+        let cutoff = TokenUsageOptions(retentionMonths: months).cutoff(at: referenceDate, calendar: calendar)
+        let today = calendar.startOfDay(for: referenceDate)
+        let count = (calendar.dateComponents([.day], from: cutoff, to: today).day ?? 0) + 1
+        let result = TokenUsageAggregator(calendar: calendar, dayCount: count).aggregate(
+            dailyPoints: dailyPoints.filter { $0.date >= cutoff && $0.date <= today }, generatedAt: referenceDate)
+        return Self(generatedAt: generatedAt, dailyPoints: result.dailyPoints,
+            today: result.today, last7Days: result.last7Days, last30Days: result.last30Days,
+            totalSessions: result.totalSessions, averageTokensPerSession: result.averageTokensPerSession,
+            availability: availability, error: error,
+            recordedDates: recordedDates?.filter { $0 >= cutoff && $0 <= today })
     }
 
 }
@@ -225,6 +244,12 @@ public struct TokenUsageSnapshot: Equatable, Sendable {
 /// metadata out of the usage reader.
 public protocol TokenUsageProvider: Sendable {
     func snapshot(home: URL) async -> TokenUsageSnapshot
+}
+
+/// 보관 정책에 맞춘 수집 범위를 지원하는 선택적 제공자 경계
+public protocol TokenUsageRangeProvider: TokenUsageProvider {
+    /// 지정된 최근 날짜 범위의 로컬 집계 반환
+    func snapshot(home: URL, historyDayCount: Int) async -> TokenUsageSnapshot
 }
 
 public typealias LocalTokenUsageProviding = TokenUsageProvider

@@ -46,10 +46,8 @@ public struct UsageWindowProbeSection: View {
                     Image(systemName: "info.circle")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                        .frame(width: 22, height: 22)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.appIcon)
                 .help("초기화 시간 설정 작동 방식")
                 .accessibilityLabel("초기화 시간 설정 안내")
                 .popover(isPresented: $isInformationPresented, arrowEdge: .bottom) {
@@ -73,7 +71,7 @@ public struct UsageWindowProbeSection: View {
                     Button(action: onRun) {
                         Text(buttonTitle)
                     }
-                    .buttonStyle(QuotaResetButtonStyle())
+                    .buttonStyle(.appPrimary)
                     .disabled(!canRun)
                     .help("최소 요청으로 사용 구간을 시작하고 서버의 초기화 시간을 확인합니다. 실제 사용량이 발생하며, 시간 설정 여부는 서버 상태에 따라 달라집니다.")
                     .accessibilityLabel(buttonTitle)
@@ -176,37 +174,4 @@ public struct UsageWindowProbeSection: View {
         ].compactMap { $0 }.joined(separator: " · ")
     }
 
-}
-
-/// 불투명 배경과 선명한 테두리의 할당량 갱신 버튼 스타일
-private struct QuotaResetButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    /// 활성 상태와 누름 상태에 따른 버튼 외형 구성
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(isEnabled ? Color.white : Color(red: 0.68, green: 0.68, blue: 0.72))
-            .lineLimit(1)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(minWidth: 116)
-            .background {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(backgroundColor(isPressed: configuration.isPressed))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(isEnabled ? Color(red: 0.65, green: 0.43, blue: 0.85) : Color(red: 0.38, green: 0.36, blue: 0.42), lineWidth: 1)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 6))
-    }
-
-    /// 비활성 및 눌림 상태의 불투명 배경색 선택
-    private func backgroundColor(isPressed: Bool) -> Color {
-        guard isEnabled else { return Color(red: 0.25, green: 0.23, blue: 0.29) }
-        return isPressed
-            ? Color(red: 0.35, green: 0.18, blue: 0.50)
-            : Color(red: 0.46, green: 0.25, blue: 0.65)
-    }
 }

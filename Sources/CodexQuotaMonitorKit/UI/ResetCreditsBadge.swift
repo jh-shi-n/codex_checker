@@ -25,7 +25,7 @@ struct ResetCreditsBadge: View {
                 .padding(.vertical, 3)
                 .background(Capsule().fill(Color.accentColor.opacity(0.15)))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.appGraphic)
         .help("리셋권 잔여 개수 및 소멸일 확인")
         .accessibilityLabel("리셋권 \(credits.map { "잔여 \($0.availableCount)개" } ?? "조회 불가"), 소멸일 보기")
         .popover(isPresented: $isExpanded, arrowEdge: .bottom) {
@@ -79,14 +79,14 @@ struct ResetCreditsBadge: View {
                                         .frame(maxWidth: .infinity, minHeight: 30)
                                         .contentShape(Rectangle())
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(.appDisclosure)
                                     .accessibilityLabel("리셋권 \(index + 1), \(selectedID == credit.id ? "소멸일 보기" : "사용 버튼 보기")")
                                     if selectedID == credit.id {
                                         Button("사용") {
                                             confirmingCredit = credit
                                             isConfirming = true
                                         }
-                                        .buttonStyle(.borderedProminent)
+                                        .buttonStyle(.appPrimary)
                                         .controlSize(.small)
                                         .disabled(!redemption.canUse(credit, for: account))
                                     }

@@ -23,6 +23,7 @@ extension CodexQuotaMonitorAppDelegate {
         tokenCleanupTask = Task { [tokenUsageCache, preferences] in
             while !Task.isCancelled {
                 await tokenUsageCache.purgeExpired()
+                preferences.reportTokenHistoryError(await tokenUsageCache.historyError)
                 preferences.cleanupQuotaSnapshots()
                 do { try await Task.sleep(for: .seconds(60)) }
                 catch { return }
@@ -40,6 +41,7 @@ extension CodexQuotaMonitorAppDelegate {
         sessionActivityDelivery.stop()
         quotaResetScheduler.stop()
         UsageWindowProbeStore.shared.cancelAll()
+        TokenUsageRefreshStore.shared.cancelAll()
         serviceStatus.cancel()
         emptyAccountsPopover?.performClose(nil)
         emptyAccountsPopover = nil

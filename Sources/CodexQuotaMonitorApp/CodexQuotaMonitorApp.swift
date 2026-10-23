@@ -92,11 +92,13 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             fallback: SQLiteSessionActivityProvider(),
             capability: .installedProtocol
         )
-        let tokenUsageProvider = LocalTokenUsageProvider()
+        let tokenUsageProvider = LocalTokenUsageProvider(maxFileCount: 4096)
         let tokenUsageCache = TokenUsageSnapshotCache(
             provider: tokenUsageProvider,
             databaseURL: TokenUsageSnapshotCache.defaultDatabaseURL,
-            accountHomes: Self.tokenHomes(for: accountStore.configs)
+            accountHomes: Self.tokenHomes(for: accountStore.configs),
+            historyDatabaseURL: TokenUsageSnapshotCache.defaultDatabaseURL.deletingLastPathComponent().appendingPathComponent("token-history.sqlite"),
+            retentionMonths: preferences.tokenUsageOptions.retentionMonths
         )
         let usageWindowProbeService = UsageWindowProbeService()
         let sessionActivityToastQueue = SessionActivityToastQueue(
@@ -136,7 +138,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 ))
             }
         )
-        let notchLayoutManager = NotchLayoutManager(serviceStatus: serviceStatus)
+        let notchLayoutManager = NotchLayoutManager(serviceStatus: serviceStatus, tokenUsagePreferences: preferences)
 
         self.preferences = preferences
         self.accountStore = accountStore

@@ -5,9 +5,12 @@ public struct TokenUsageAggregator: Sendable {
     public static let historyDayCount = TokenUsageSnapshot.historyDayCount
 
     public let calendar: Calendar
+    public let dayCount: Int
 
-    public init(calendar: Calendar = .autoupdatingCurrent) {
+    /// 기존 168일 API 호환과 최대 1년의 수집 범위를 지정하는 초기화
+    public init(calendar: Calendar = .autoupdatingCurrent, dayCount: Int = Self.historyDayCount) {
         self.calendar = calendar
+        self.dayCount = min(max(1, dayCount), TokenUsageOptions.maximumHistoryDays)
     }
 
     public func aggregate(
@@ -19,7 +22,7 @@ public struct TokenUsageAggregator: Sendable {
         let today = calendar.startOfDay(for: generatedAt)
         let firstDay = calendar.date(
             byAdding: .day,
-            value: -(Self.historyDayCount - 1),
+            value: -(dayCount - 1),
             to: today
         ) ?? today
 
@@ -71,7 +74,7 @@ public struct TokenUsageAggregator: Sendable {
         let today = calendar.startOfDay(for: generatedAt)
         let firstDay = calendar.date(
             byAdding: .day,
-            value: -(Self.historyDayCount - 1),
+            value: -(dayCount - 1),
             to: today
         ) ?? today
 
@@ -132,8 +135,8 @@ public struct TokenUsageAggregator: Sendable {
         availability: TokenUsageAvailability,
         error: TokenUsageSnapshotError?
     ) -> TokenUsageSnapshot {
-        let points = (0..<Self.historyDayCount).compactMap { reverseOffset -> TokenUsageDailyPoint? in
-            guard let date = calendar.date(byAdding: .day, value: reverseOffset - (Self.historyDayCount - 1), to: today) else {
+        let points = (0..<dayCount).compactMap { reverseOffset -> TokenUsageDailyPoint? in
+            guard let date = calendar.date(byAdding: .day, value: reverseOffset - (dayCount - 1), to: today) else {
                 return nil
             }
             let value = values[date] ?? DayAccumulator()
@@ -147,7 +150,7 @@ public struct TokenUsageAggregator: Sendable {
         // Calendar arithmetic above is expected to produce every point. Keep
         // the public invariant even if a custom Calendar ever refuses a date.
         let fixedPoints: [TokenUsageDailyPoint]
-        if points.count == Self.historyDayCount {
+        if points.count == dayCount {
             fixedPoints = points
         } else {
             fixedPoints = zeroFilledFallback(today: today, existing: points)
@@ -192,10 +195,10 @@ public struct TokenUsageAggregator: Sendable {
         existing: [TokenUsageDailyPoint]
     ) -> [TokenUsageDailyPoint] {
         var byDate = Dictionary(uniqueKeysWithValues: existing.map { ($0.date, $0) })
-        return (0..<Self.historyDayCount).map { reverseOffset in
+        return (0..<dayCount).map { reverseOffset in
             let date = calendar.date(
                 byAdding: .day,
-                value: reverseOffset - (Self.historyDayCount - 1),
+                value: reverseOffset - (dayCount - 1),
                 to: today
             ) ?? today
             return byDate.removeValue(forKey: date)
