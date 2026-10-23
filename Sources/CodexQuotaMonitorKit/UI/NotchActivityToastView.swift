@@ -19,8 +19,8 @@ public enum NotchActivityPresentationEvent: Equatable, Sendable {
 /// geometry and the stable SwiftUI host do not shrink until removal completes.
 @MainActor
 public final class NotchActivityPresentationModel: ObservableObject {
-    public static let entryAnimationDuration: TimeInterval = 0.2
-    public static let exitAnimationDuration: TimeInterval = 0.25
+    public static let entryAnimationDuration = NotchActivityToastPresentation.entryAnimationDuration
+    public static let exitAnimationDuration = NotchActivityToastPresentation.exitAnimationDuration
 
     @Published public private(set) var displayedToast: SessionActivityToast?
     @Published public private(set) var displayedWidth: CGFloat?
@@ -241,7 +241,7 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
 
     public static func make(for toast: SessionActivityToast, names: [String: String] = [:]) -> NotchActivityToastCopy {
         if let transition = toast.transition {
-            let account = normalized(AccountDisplayName.resolved(names[transition.accountID], slotID: transition.accountID), fallback: "Account") ?? "Account"
+            let account = normalized(AccountDisplayName.resolved(names[transition.accountID], slotID: transition.accountID), fallback: "계정") ?? "계정"
             let firstLine: String
             if let title = normalized(transition.sessionTitle, fallback: nil), title != "Codex session" {
                 firstLine = "\(account) · \(title)"
@@ -250,29 +250,25 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
             }
 
             let agent = normalized(transition.agentLabel, fallback: nil)
-            let task = normalized(transition.taskName, fallback: nil)
-            let status = statusText(transition.status)
+                .map { $0 == "Agent" ? "에이전트" : $0 }
+            // 비활성·종료 에이전트 알림에서 긴 작업 설명 제외
+            let task: String?
+            if agent != nil, [.inactive, .completed, .stopped].contains(transition.status) {
+                task = nil
+            } else {
+                let name = normalized(transition.taskName, fallback: nil)
+                task = name == "Agent" ? nil : name
+            }
+            let status = transition.status == .unknown ? nil
+                : (agent == nil && transition.turnID != nil && transition.status == .completed
+                   ? "답변 완료" : transition.status.displayText)
             let secondLine = [agent, task, status]
                 .compactMap { $0 }
                 .joined(separator: " · ")
             return NotchActivityToastCopy(firstLine: firstLine, secondLine: secondLine.isEmpty ? nil : secondLine)
         }
 
-        let count = max(0, toast.overflowCount ?? 0)
-        return NotchActivityToastCopy(firstLine: "\(count) more activity updates")
-    }
-
-    /// 확인 불가 상태의 문구를 제외한 상태 표시
-    private static func statusText(_ status: SessionActivityStatus) -> String? {
-        switch status {
-        case .working: return "Working"
-        case .waiting: return "Waiting"
-        case .inactive: return "Inactive"
-        case .completed: return "Completed"
-        case .stopped: return "Stopped"
-        case .error: return "Error"
-        case .unknown: return nil
-        }
+        return NotchActivityToastCopy(firstLine: toast.displayText)
     }
 
     private static func normalized(_ value: String?, fallback: String?) -> String? {
@@ -291,19 +287,8 @@ public struct NotchActivityToastCopy: Equatable, Sendable {
 
 /// Pure presentation policy shared by tests and the SwiftUI transition.
 public enum NotchActivityToastPresentation {
-    public static let entryAnimationDuration: TimeInterval = 0.2
-    public static let exitAnimationDuration: TimeInterval = 0.25
-
-    public static func usesSlide(reduceMotion: Bool) -> Bool {
-        !reduceMotion
-    }
-
-    public static func shouldShimmer(
-        status: SessionActivityStatus,
-        reduceMotion: Bool
-    ) -> Bool {
-        status == .working && !reduceMotion
-    }
+    public static let entryAnimationDuration: TimeInterval = 0.32
+    public static let exitAnimationDuration: TimeInterval = 0.28
 
     public static func animationDuration(isPresented: Bool) -> TimeInterval {
         isPresented ? entryAnimationDuration : exitAnimationDuration
@@ -318,6 +303,8 @@ public enum NotchActivityToastMetrics {
     public static let horizontalPadding: CGFloat = 16
     public static let characterAdvance: CGFloat = 6.2
     public static let minimumWidth: CGFloat = 72
+    /// 긴 세션 제목·작업명에 의한 과도한 알림 확장 제한
+    public static let maximumWidth: CGFloat = 240
 
     public static func requiredWidth(for toast: SessionActivityToast?, names: [String: String] = [:]) -> CGFloat {
         guard let toast else { return 0 }
@@ -325,7 +312,7 @@ public enum NotchActivityToastMetrics {
         let longestLine = copy.lines.map(\.count).max() ?? 0
         let estimated = CGFloat(longestLine) * characterAdvance + horizontalPadding
         guard estimated.isFinite else { return minimumWidth }
-        return max(minimumWidth, estimated)
+        return min(maximumWidth, max(minimumWidth, estimated))
     }
 }
 
@@ -339,7 +326,7 @@ public struct NotchActivityToastView: View {
     public let toast: SessionActivityToast
     public let side: NotchSide
     public let width: CGFloat?
-    public let isExiting: Bool
+    public let isPresented: Bool
 
     @Environment(\.accountDisplayNames) private var accountDisplayNames
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -348,12 +335,12 @@ public struct NotchActivityToastView: View {
         toast: SessionActivityToast,
         side: NotchSide,
         width: CGFloat? = nil,
-        isExiting: Bool = false
+        isPresented: Bool = true
     ) {
         self.toast = toast
         self.side = side
         self.width = width
-        self.isExiting = isExiting
+        self.isPresented = isPresented
     }
 
     public var body: some View {
@@ -361,11 +348,7 @@ public struct NotchActivityToastView: View {
         let status = toast.transition?.status ?? .unknown
         let resolvedWidth = width.map { max(0, $0) }
             ?? NotchActivityToastMetrics.requiredWidth(for: toast, names: accountDisplayNames)
-        let transition: AnyTransition = NotchActivityToastPresentation.usesSlide(
-            reduceMotion: reduceMotion
-        )
-            ? .move(edge: side == .left ? .leading : .trailing).combined(with: .opacity)
-            : .opacity
+        let innerEdge: Alignment = side == .left ? .trailing : .leading
 
         VStack(
             alignment: side == .left ? .leading : .trailing,
@@ -374,14 +357,12 @@ public struct NotchActivityToastView: View {
             Text(copy.firstLine)
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .lineLimit(1)
-                .minimumScaleFactor(0.65)
                 .truncationMode(.tail)
 
             if let secondLine = copy.secondLine {
                 ShimmerText(secondLine, status: status)
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.6)
                     .truncationMode(.tail)
             }
         }
@@ -391,21 +372,11 @@ public struct NotchActivityToastView: View {
         .frame(maxHeight: .infinity, alignment: .center)
         .contentShape(Rectangle())
         .allowsHitTesting(false)
-        .opacity(isExiting ? 0 : 1)
-        .offset(
-            x: isExiting && !reduceMotion
-                ? (side == .left ? -8 : 8)
-                : 0
-        )
-        .transition(transition)
-        .animation(
-            .easeOut(
-                duration: NotchActivityToastPresentation.animationDuration(
-                    isPresented: !isExiting
-                )
-            ),
-            value: isExiting
-        )
+        .opacity(isPresented ? 1 : 0)
+        .offset(x: reduceMotion || isPresented ? 0 : (side == .left ? 12 : -12))
+        .frame(width: reduceMotion || isPresented ? resolvedWidth : 0, alignment: innerEdge)
+        .clipped()
+        .transition(.identity)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(copy.lines.joined(separator: ", "))
     }

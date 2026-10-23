@@ -116,18 +116,18 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(CLIActivitySection.unavailableText, "세션 실행 기록을 불러올 수 없습니다.")
         XCTAssertEqual(CLIActivitySection.activityRefreshInterval, 5)
         XCTAssertEqual(CLIActivitySection.cardListMaxHeight, 440)
-        XCTAssertEqual(CLIActivitySection.statusText(.working), "작업 중")
-        XCTAssertEqual(CLIActivitySection.statusText(.waiting), "대기 중")
-        XCTAssertEqual(CLIActivitySection.statusText(.completed), "완료")
-        XCTAssertEqual(CLIActivitySection.statusText(.stopped), "중단")
-        XCTAssertEqual(CLIActivitySection.statusText(.error), "오류")
-        XCTAssertEqual(CLIActivitySection.statusText(.unknown), "확인 불가")
+        XCTAssertEqual(SessionActivityStatus.working.displayText, "작업 중")
+        XCTAssertEqual(SessionActivityStatus.waiting.displayText, "대기 중")
+        XCTAssertEqual(SessionActivityStatus.completed.displayText, "완료")
+        XCTAssertEqual(SessionActivityStatus.stopped.displayText, "중단")
+        XCTAssertEqual(SessionActivityStatus.error.displayText, "오류")
+        XCTAssertEqual(SessionActivityStatus.unknown.displayText, "확인 불가")
 
         guard let inactive = SessionActivityStatus(rawValue: "inactive") else {
             XCTFail("inactive status should be normalized")
             return
         }
-        XCTAssertEqual(CLIActivitySection.statusText(inactive), "활동 없음")
+        XCTAssertEqual(inactive.displayText, "활동 없음")
     }
 
     func testAccountDetailPopoverUsesPracticalFixedContentSizeAndBoundedActivityCards() {
@@ -1173,9 +1173,62 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(NotchActivityToastCopy.make(for: toast, names: ["C4": "업무 계정"]).firstLine,
                        "업무 계정 · 버튼 동작 개선")
         XCTAssertEqual(toast.transition?.accountID, "C4")
-        XCTAssertEqual(copy.secondLine, "Worker · Settings window fix · Working")
+        XCTAssertEqual(copy.secondLine, "Worker · Settings window fix · 작업 중")
         XCTAssertEqual(copy.lines.count, 2)
         XCTAssertFalse(copy.lines.joined(separator: " ").contains(transition.sessionID!))
+    }
+
+    /// 비활성·완료·중단 에이전트 알림의 긴 작업 설명 제외 검증
+    func testFinishedAgentToastOmitsTaskDescription() {
+        let statuses: [(SessionActivityStatus, String)] = [
+            (.inactive, "활동 없음"), (.completed, "완료"), (.stopped, "중단"),
+        ]
+        for (status, label) in statuses {
+            let toast = SessionActivityToast(content: .transition(SessionActivityTransition(
+                accountID: "C1", side: .left, sessionID: "parent-session",
+                agentLabel: "Worker", taskName: String(repeating: "긴 작업 설명 ", count: 30),
+                status: status, sessionTitle: "부모 세션"
+            )), durationSeconds: 3)
+            let copy = NotchActivityToastCopy.make(for: toast)
+            XCTAssertEqual(copy.firstLine, "C1 · 부모 세션")
+            XCTAssertEqual(copy.secondLine, "Worker · \(label)")
+        }
+    }
+
+    /// 긴 제목·에이전트명에서도 알림 최대 폭 제한 및 짧은 알림 폭 보존 검증
+    func testToastWidthCapsLongCopyAndPreservesShortCopy() {
+        let longToast = SessionActivityToast(content: .transition(SessionActivityTransition(
+            accountID: "C1", side: .right, sessionID: "parent-session",
+            agentLabel: String(repeating: "Worker", count: 20), taskName: "Task",
+            status: .inactive, sessionTitle: String(repeating: "긴 세션 제목 ", count: 30)
+        )), durationSeconds: 3)
+        XCTAssertEqual(NotchActivityToastMetrics.requiredWidth(for: longToast), 240)
+        XCTAssertEqual(NotchActivityToastMetrics.requiredWidth(for: nil), 0)
+        let shortToast = SessionActivityToast(content: .overflow(count: 1), durationSeconds: 3)
+        XCTAssertLessThan(NotchActivityToastMetrics.requiredWidth(for: shortToast), 240)
+    }
+
+    /// 모든 상태 문구·기본 에이전트명·추가 알림의 한글 표시 검증
+    func testActivityNotificationsUseKoreanSystemCopy() {
+        let statuses: [(SessionActivityStatus, String?)] = [
+            (.working, "에이전트 · 작업 중"), (.waiting, "에이전트 · 대기 중"),
+            (.inactive, "에이전트 · 활동 없음"), (.completed, "에이전트 · 완료"),
+            (.stopped, "에이전트 · 중단"), (.error, "에이전트 · 오류"),
+            (.unknown, "에이전트"),
+        ]
+        for (status, expected) in statuses {
+            let toast = SessionActivityToast(content: .transition(SessionActivityTransition(
+                accountID: "C1", side: .left, sessionID: "session",
+                agentLabel: "Agent", taskName: "Agent", status: status,
+                sessionTitle: "My custom session"
+            )), durationSeconds: 3)
+            let copy = NotchActivityToastCopy.make(for: toast)
+            XCTAssertEqual(copy.firstLine, "C1 · My custom session")
+            XCTAssertEqual(copy.secondLine, expected)
+        }
+        let overflow = SessionActivityToast(content: .overflow(count: 5), durationSeconds: 3)
+        XCTAssertEqual(overflow.displayText, "추가 활동 알림 5건")
+        XCTAssertEqual(NotchActivityToastCopy.make(for: overflow).firstLine, overflow.displayText)
     }
 
     /// 알 수 없는 제목은 번호로 대체하지 않고 알림 문구에서도 제외하는지 검증
@@ -1184,7 +1237,7 @@ final class QuotaPresentationTests: XCTestCase {
             agentLabel: "unknown", taskName: " Unknown ", status: .working, sessionTitle: "Unknown")
         let copy = NotchActivityToastCopy.make(for: SessionActivityToast(content: .transition(transition), durationSeconds: 3))
         XCTAssertEqual(copy.firstLine, "C1")
-        XCTAssertEqual(copy.secondLine, "Working")
+        XCTAssertEqual(copy.secondLine, "작업 중")
         XCTAssertFalse(copy.lines.joined().contains("private-session-id"))
         XCTAssertFalse(copy.lines.joined().lowercased().contains("unknown"))
     }
@@ -1207,33 +1260,26 @@ final class QuotaPresentationTests: XCTestCase {
         let overflow = NotchActivityToastCopy.make(
             for: SessionActivityToast(content: .overflow(count: 3), durationSeconds: 5)
         )
-        XCTAssertEqual(overflow.lines, ["3 more activity updates"])
+        XCTAssertEqual(overflow.lines, ["추가 활동 알림 3건"])
         XCTAssertFalse(overflow.lines.joined(separator: " ").contains("Session"))
         XCTAssertFalse(overflow.lines.joined(separator: " ").contains("Worker"))
     }
 
-    func testNotchActivityToastAnimationPolicyUsesFixedDurationsAndReduceMotionFade() {
-        XCTAssertEqual(NotchActivityToastView.entryAnimationDuration, 0.2)
-        XCTAssertEqual(NotchActivityToastView.exitAnimationDuration, 0.25)
+    func testNotchActivityToastAnimationUsesSharedDurations() {
+        XCTAssertEqual(NotchActivityToastView.entryAnimationDuration, 0.32)
+        XCTAssertEqual(NotchActivityToastView.exitAnimationDuration, 0.28)
         XCTAssertEqual(
             NotchActivityToastPresentation.animationDuration(isPresented: true),
-            0.2
+            0.32
         )
         XCTAssertEqual(
             NotchActivityToastPresentation.animationDuration(isPresented: false),
-            0.25
+            0.28
         )
-        XCTAssertTrue(NotchActivityToastPresentation.usesSlide(reduceMotion: false))
-        XCTAssertFalse(NotchActivityToastPresentation.usesSlide(reduceMotion: true))
-        XCTAssertTrue(
-            NotchActivityToastPresentation.shouldShimmer(status: .working, reduceMotion: false)
-        )
-        XCTAssertFalse(
-            NotchActivityToastPresentation.shouldShimmer(status: .working, reduceMotion: true)
-        )
-        XCTAssertFalse(
-            NotchActivityToastPresentation.shouldShimmer(status: .completed, reduceMotion: false)
-        )
+        XCTAssertEqual(NotchActivityPresentationModel.entryAnimationDuration,
+                       NotchActivityToastPresentation.entryAnimationDuration)
+        XCTAssertEqual(NotchActivityPresentationModel.exitAnimationDuration,
+                       NotchActivityToastPresentation.exitAnimationDuration)
     }
 
     func testNotchActivityToastWidthIsFiniteAndOverflowRemainsCompact() {
@@ -1298,8 +1344,8 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(
             model.events,
             [
-                .entry(id: first.id, duration: 0.2),
-                .exit(id: first.id, duration: 0.25),
+                .entry(id: first.id, duration: 0.32),
+                .exit(id: first.id, duration: 0.28),
             ]
         )
 
@@ -1315,9 +1361,9 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertEqual(
             model.events,
             [
-                .entry(id: first.id, duration: 0.2),
-                .exit(id: first.id, duration: 0.25),
-                .entry(id: second.id, duration: 0.2),
+                .entry(id: first.id, duration: 0.32),
+                .exit(id: first.id, duration: 0.28),
+                .entry(id: second.id, duration: 0.32),
             ]
         )
 

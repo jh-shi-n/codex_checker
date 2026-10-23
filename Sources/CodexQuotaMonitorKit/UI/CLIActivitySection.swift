@@ -89,25 +89,6 @@ public struct CLIActivitySection: View {
         snapshot.sessionID
     }
 
-    public static func statusText(_ status: SessionActivityStatus) -> String {
-        switch status {
-        case .working:
-            return "작업 중"
-        case .waiting:
-            return "대기 중"
-        case .inactive:
-            return "활동 없음"
-        case .completed:
-            return "완료"
-        case .stopped:
-            return "중단"
-        case .error:
-            return "오류"
-        case .unknown:
-            return "확인 불가"
-        }
-    }
-
     /// A recent root is considered active by the bounded provider even when
     /// no descendant edge supplies a status. Keep that contract visible as
     /// Working without claiming an external live-process heartbeat.
@@ -121,7 +102,7 @@ public struct CLIActivitySection: View {
     }
 
     public static func mainStatusText(for item: SessionActivityPresentationItem) -> String {
-        statusText(mainStatus(for: item))
+        mainStatus(for: item).displayText
     }
 
     /// Formats only an observed activity timestamp. Missing metadata remains
@@ -394,7 +375,7 @@ public struct CLIActivitySection: View {
 
             Spacer(minLength: 4)
 
-            Text(Self.statusText(agent.status))
+            Text(agent.status.displayText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -408,7 +389,7 @@ public struct CLIActivitySection: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(displayName), \(taskName)")
-        .accessibilityValue(Self.statusText(agent.status))
+        .accessibilityValue(agent.status.displayText)
     }
 
     private func isSessionExpanded(_ item: SessionActivityPresentationItem) -> Bool {

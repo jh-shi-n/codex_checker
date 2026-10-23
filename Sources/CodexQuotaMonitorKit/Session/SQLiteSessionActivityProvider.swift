@@ -21,7 +21,7 @@ struct SQLiteSessionActivityProjectionCounts: Equatable, Sendable {
 }
 
 /// Reads only the local, last-known session metadata projection. This is not
-/// a live app-server status and never opens auth/config/history files.
+/// a live app-server status; optional rollout metadata supplies main turn events.
 public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unchecked Sendable {
     public static let allowedThreadColumns = [
         "id", "updated_at", "archived", "name", "title", "agent_role", "agent_nickname", "agent_path", "thread_source",
@@ -103,6 +103,7 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
     LIMIT ?
     """
 
+    private let mainTurnReader = MainSessionTurnReader()
     private let recentActivityWindow: TimeInterval
     private let now: @Sendable () -> Date
     private let connectionProbe: (@Sendable (SQLiteSessionActivityConnectionState) async -> Void)?
@@ -168,12 +169,50 @@ public final class SQLiteSessionActivityProvider: SessionActivityProvider, @unch
             edgeRows: projection.edges.count
         ))
 
-        return buildSnapshot(
+        let snapshot = buildSnapshot(
             accountID: accountID,
             threads: projection.threads,
             edges: projection.edges,
             referenceDate: referenceDate
         )
+        let paths = mainTurnPaths(database, sessionIDs: Array(snapshot.sessions.prefix(16).map(\.threadID)))
+        var sessions: [SessionActivityMainSession] = []
+        for session in snapshot.sessions {
+            guard let path = paths[session.threadID],
+                  let turn = await mainTurnReader.state(home: home, path: path) else {
+                sessions.append(session)
+                continue
+            }
+            sessions.append(SessionActivityMainSession(
+                threadID: session.threadID, source: session.source, taskName: session.taskName,
+                // 시작 이벤트가 오래 남아도 기존 메타데이터의 활동 만료 기준 유지
+                status: turn.status == .working ? session.status : turn.status,
+                agents: session.agents, isActive: session.isActive,
+                lastActivityAt: session.lastActivityAt, turnID: turn.turnID
+            ))
+        }
+        return SessionActivitySnapshot(accountID: accountID, state: snapshot.state,
+            sessions: SessionActivityMainSession.ordered(sessions), source: snapshot.source)
+    }
+
+    /// 선택된 메인 세션 최대 16개의 로그 경로만 추가 조회, 구형 DB는 기존 상태 유지
+    private func mainTurnPaths(_ database: OpaquePointer, sessionIDs: [String]) -> [String: String] {
+        guard !sessionIDs.isEmpty else { return [:] }
+        let placeholders = Array(repeating: "?", count: sessionIDs.count).joined(separator: ",")
+        let sql = "SELECT id, rollout_path FROM threads WHERE id IN (\(placeholders)) LIMIT 16"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else { return [:] }
+        defer { sqlite3_finalize(statement) }
+        for (index, id) in sessionIDs.enumerated() {
+            let result = id.withCString { sqlite3_bind_text(statement, Int32(index + 1), $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }
+            guard result == SQLITE_OK else { return [:] }
+        }
+        var paths: [String: String] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let id = text(statement, index: 0), let path = text(statement, index: 1) else { continue }
+            paths[id] = path
+        }
+        return paths
     }
 
     private func connectionState(_ database: OpaquePointer) -> SQLiteSessionActivityConnectionState? {

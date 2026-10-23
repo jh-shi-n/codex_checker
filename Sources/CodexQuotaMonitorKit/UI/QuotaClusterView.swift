@@ -166,6 +166,9 @@ public struct QuotaClusterView: View {
     /// lifetime and target selection remain outside this view.
     @ObservedObject public var activityPresentation: NotchActivityPresentationModel
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var revealedToastID: String?
+
     public var activityToast: SessionActivityToast? {
         activityPresentation.displayedToast
     }
@@ -224,14 +227,20 @@ public struct QuotaClusterView: View {
 
     public var body: some View {
         let activityToast = activityPresentation.displayedToast
-        let isExiting = activityPresentation.phase == .exiting
+        let isExpanded = activityToast != nil
+            && revealedToastID == activityToast?.id
+            && activityPresentation.phase != .exiting
+        let duration = NotchActivityToastPresentation.animationDuration(isPresented: isExpanded)
+        let animation: Animation = reduceMotion
+            ? .easeOut(duration: duration)
+            : .timingCurve(0.22, 1, 0.36, 1, duration: duration)
         HStack(spacing: 0) {
             if side == .left, let activityToast {
                 NotchActivityToastView(
                     toast: activityToast,
                     side: side,
                     width: effectiveActivityToastWidth,
-                    isExiting: isExiting
+                    isPresented: isExpanded
                 )
                 .id(activityToast.id)
             }
@@ -271,23 +280,26 @@ public struct QuotaClusterView: View {
                     toast: activityToast,
                     side: side,
                     width: effectiveActivityToastWidth,
-                    isExiting: isExiting
+                    isPresented: isExpanded
                 )
                 .id(activityToast.id)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .environment(\.accountDisplayNames, accountDisplayNames)
+        .frame(maxHeight: .infinity)
         .background(NotchClusterBackgroundShape(side: side).fill(Color.black))
         .clipped()
-        .animation(
-            .easeOut(
-                duration: NotchActivityToastPresentation.animationDuration(
-                    isPresented: activityToast != nil && !isExiting
-                )
-            ),
-            value: activityToast?.id
-        )
+        .animation(animation, value: isExpanded)
+        .task(id: activityToast?.id) {
+            // 접힌 배경 배치 이후 새 알림을 펼쳐 삽입 시 폭 변화 보존
+            revealedToastID = nil
+            guard let id = activityToast?.id else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            revealedToastID = id
+        }
+        // 노치 쪽 끝 고정으로 알림 확장 중 계정 도넛의 위치 유지
+        .frame(maxWidth: .infinity, alignment: side == .left ? .trailing : .leading)
+        .environment(\.accountDisplayNames, accountDisplayNames)
     }
 
     private var contentWidth: CGFloat {
@@ -301,7 +313,7 @@ public struct QuotaClusterView: View {
 
     private var effectiveActivityToastWidth: CGFloat {
         guard let activityToast else { return 0 }
-        let requested = NotchActivityToastMetrics.requiredWidth(for: activityToast)
+        let requested = NotchActivityToastMetrics.requiredWidth(for: activityToast, names: accountDisplayNames)
         guard let activityToastWidth else { return requested }
         guard activityToastWidth.isFinite else { return 0 }
         return min(requested, max(0, activityToastWidth))

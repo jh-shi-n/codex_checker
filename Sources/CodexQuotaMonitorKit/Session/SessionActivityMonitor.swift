@@ -8,19 +8,22 @@ public struct SessionActivityTransition: Equatable, Sendable, Identifiable {
     public let side: AccountPosition
     public let sessionID: String?
     public let sessionTitle: String?
+    public let turnID: String?
     public let agentLabel: String?
     public let taskName: String?
     public let status: SessionActivityStatus
 
     public var id: String {
-        [
+        var fields = [
             accountID,
             side.rawValue,
             sessionID ?? "",
             agentLabel ?? "",
             taskName ?? "",
             status.rawValue,
-        ].joined(separator: "|")
+        ]
+        if let turnID { fields.append(turnID) }
+        return fields.joined(separator: "|")
     }
 
     public init(
@@ -30,11 +33,13 @@ public struct SessionActivityTransition: Equatable, Sendable, Identifiable {
         agentLabel: String?,
         taskName: String?,
         status: SessionActivityStatus,
-        sessionTitle: String? = nil
+        sessionTitle: String? = nil,
+        turnID: String? = nil
     ) {
         self.accountID = accountID
         self.side = side
         self.sessionID = sessionID
+        self.turnID = turnID
         self.sessionTitle = SessionActivityMetadataSanitizer.text(sessionTitle)
         self.agentLabel = agentLabel
         self.taskName = taskName
@@ -331,19 +336,21 @@ public actor SessionActivityMonitor {
                         account: account,
                         sessionID: session.threadID,
                         sessionTitle: session.title,
-                        status: session.status
+                        status: session.status,
+                        turnID: session.turnID
                     )
                 )
                 continue
             }
 
-            if old.status != session.status || old.isActive != session.isActive {
+            if old.status != session.status || old.isActive != session.isActive || old.turnID != session.turnID {
                 transitions.append(
                     sessionTransition(
                         account: account,
                         sessionID: session.threadID,
                         sessionTitle: session.title,
-                        status: session.status
+                        status: session.status,
+                        turnID: session.turnID
                     )
                 )
             }
@@ -376,7 +383,8 @@ public actor SessionActivityMonitor {
         account: AccountConfig,
         sessionID: String?,
         sessionTitle: String?,
-        status: SessionActivityStatus
+        status: SessionActivityStatus,
+        turnID: String? = nil
     ) -> SessionActivityTransition {
         SessionActivityTransition(
             accountID: account.id,
@@ -385,7 +393,8 @@ public actor SessionActivityMonitor {
             agentLabel: nil,
             taskName: nil,
             status: status,
-            sessionTitle: sessionTitle
+            sessionTitle: sessionTitle,
+            turnID: turnID
         )
     }
 
