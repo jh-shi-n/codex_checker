@@ -85,7 +85,7 @@ public struct TokenUsageSummaryView: View {
             }
             tokenRow(label: "입력", value: totals.inputTokens)
             tokenRow(label: "출력", value: totals.outputTokens)
-            tokenRow(label: "평균", value: Int64(max(0, average.rounded())))
+            tokenRow(label: "평균", value: AccountDashboardFormatting.roundedTokenAverage(average))
         }
         .padding(9)
         .frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)

@@ -222,6 +222,24 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertGreaterThan(image.height, 100)
     }
 
+    /// 최대 토큰 평균의 정수 변환과 실제 요약 화면 렌더링 검증
+    func testTokenSummaryRendersMaximumAverageWithoutOverflow() throws {
+        let now = Date()
+        let snapshot = TokenUsageAggregator().aggregate(sessions: [
+            TokenUsageSessionUsage(date: now, inputTokens: Int64.max, outputTokens: Int64.max),
+        ], generatedAt: now)
+        XCTAssertEqual(AccountDashboardFormatting.roundedTokenAverage(snapshot.averageTokensPerSession), Int64.max)
+        XCTAssertEqual(AccountDashboardFormatting.roundedTokenAverage(Double.greatestFiniteMagnitude), Int64.max)
+        XCTAssertEqual(AccountDashboardFormatting.roundedTokenAverage(Double(Int64.max).nextDown), Int64.max - 1023)
+        XCTAssertEqual(AccountDashboardFormatting.roundedTokenAverage(1.4), 1)
+        XCTAssertEqual(AccountDashboardFormatting.roundedTokenAverage(1.5), 2)
+        XCTAssertEqual(AccountDashboardFormatting.roundedTokenAverage(-1), 0)
+        XCTAssertEqual(AccountDashboardFormatting.roundedTokenAverage(.nan), 0)
+        XCTAssertEqual(AccountDashboardFormatting.roundedTokenAverage(.infinity), 0)
+        let renderer = ImageRenderer(content: TokenUsageSummaryView(snapshot: snapshot).frame(width: 608))
+        XCTAssertNotNil(renderer.cgImage)
+    }
+
     func testDashboardNumberAndResetDeltaFormattingStayBounded() {
         XCTAssertEqual(AccountDashboardFormatting.numberText(128_020), "128,020")
         XCTAssertEqual(AccountDashboardFormatting.abbreviatedNumber(1_200), "1.2K")

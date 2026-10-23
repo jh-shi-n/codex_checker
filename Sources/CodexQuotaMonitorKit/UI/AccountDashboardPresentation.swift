@@ -80,6 +80,13 @@ enum AccountDashboardPresentation {
 /// Pure formatting and semantic helpers shared by the dashboard and focused
 /// presentation tests.  They never access account files or invoke a service.
 public enum AccountDashboardFormatting {
+    /// 평균의 반올림과 Int64 상한 적용; 비정상·음수 입력은 0으로 정규화
+    static func roundedTokenAverage(_ average: Double) -> Int64 {
+        guard average.isFinite, average > 0 else { return 0 }
+        let rounded = average.rounded()
+        return rounded >= Double(Int64.max) ? Int64.max : Int64(rounded)
+    }
+
     /// 현재 할당량 제목 옆의 5시간 한도 안내; 이동·실패·만료·7일 한도 제외
     public static func fiveHourResetNotice(for account: AccountState, now: Date = Date()) -> String? {
         guard [.normal, .loading].contains(account.status),
