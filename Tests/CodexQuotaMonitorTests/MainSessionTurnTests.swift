@@ -16,7 +16,7 @@ final class MainSessionTurnTests: XCTestCase {
         var events: [SessionActivityTransition] = []
         let provider = SQLiteSessionActivityProvider(now: { Date(timeIntervalSince1970: 2_000_000) })
         let monitor = SessionActivityMonitor(accounts: [AccountConfig(id: "C1", home: home, position: .left)],
-            provider: provider, onTransition: { events.append($0) })
+            provider: provider, now: { Date(timeIntervalSince1970: 1_999_999) }, onTransition: { events.append($0) })
         await monitor.pollNow()
         XCTAssertTrue(events.isEmpty)
         try append(event("task_complete", turn: "turn-1"), to: log)
@@ -45,7 +45,7 @@ final class MainSessionTurnTests: XCTestCase {
         var events: [SessionActivityTransition] = []
         let provider = SQLiteSessionActivityProvider(now: { Date(timeIntervalSince1970: 2_000_000) })
         let monitor = SessionActivityMonitor(accounts: [AccountConfig(id: "C1", home: home, position: .left)],
-            provider: provider, onTransition: { events.append($0) })
+            provider: provider, now: { Date(timeIntervalSince1970: 1_999_999) }, onTransition: { events.append($0) })
         await monitor.pollNow()
         await monitor.pollNow()
         XCTAssertTrue(events.isEmpty)
@@ -69,6 +69,47 @@ final class MainSessionTurnTests: XCTestCase {
         XCTAssertEqual(snapshot.sessions.first?.turnID, "old-turn")
     }
 
+    /// 15분 이상 지난 완료 이벤트가 비활성 메인 상태를 덮어쓰지 않는지 검증
+    func testOldCompletionNeverOverridesInactiveMainSession() async throws {
+        let (home, _) = try fixture(contents: event("task_complete", turn: "old-turn", at: 1_998_000))
+        defer { try? FileManager.default.removeItem(at: home) }
+        let provider = SQLiteSessionActivityProvider(now: { Date(timeIntervalSince1970: 2_000_200) })
+        let snapshot = await provider.snapshot(accountID: "C2", home: home)
+        XCTAssertEqual(snapshot.status, .inactive)
+        XCTAssertNil(snapshot.sessions.first?.turnID)
+    }
+
+    /// 수집 시작 이후 뒤늦게 나타난 과거 완료 제외 및 실제 신규 완료 전달 검증
+    func testLateDiscoveredHistoricalCompletionDoesNotNotify() async throws {
+        let (home, log) = try fixture(contents: event("task_complete", turn: "old", at: 1_999_990))
+        defer { try? FileManager.default.removeItem(at: home) }
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(home.appendingPathComponent("state_5.sqlite").path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(sqlite3_exec(database, "UPDATE threads SET archived=1", nil, nil, nil), SQLITE_OK)
+        var events: [SessionActivityTransition] = []
+        let provider = SQLiteSessionActivityProvider(now: { Date(timeIntervalSince1970: 2_000_005) })
+        let monitor = SessionActivityMonitor(accounts: [AccountConfig(id: "C2", home: home, position: .left)],
+            provider: provider, now: { Date(timeIntervalSince1970: 2_000_000) }, onTransition: { events.append($0) })
+        await monitor.pollNow()
+        XCTAssertEqual(sqlite3_exec(database, "UPDATE threads SET archived=0", nil, nil, nil), SQLITE_OK)
+        await monitor.pollNow()
+        XCTAssertTrue(events.isEmpty)
+        try append(event("task_complete", turn: "fresh", at: 2_000_001), to: log)
+        await monitor.pollNow()
+        XCTAssertEqual(events.map(\.status), [.completed])
+        XCTAssertEqual(events.map(\.turnID), ["fresh"])
+    }
+
+    /// 시각이 없거나 해석할 수 없는 완료 기록의 신규 완료 오인 방지 검증
+    func testCompletionWithoutValidTimestampIsIgnored() async throws {
+        let (home, log) = try fixture(contents: "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"old\"}}\n")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let reader = MainSessionTurnReader()
+        let result = await reader.state(home: home, path: log.path)
+        XCTAssertNil(result)
+    }
+
     /// 최종 답변 본문·도구 완료를 메인 완료로 오인하지 않고 미완성 행을 보류하는지 검증
     func testOnlyCompleteLifecycleLinesAffectStatus() async throws {
         let (home, log) = try fixture(contents: "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"phase\":\"final_answer\"}}\n")
@@ -81,7 +122,7 @@ final class MainSessionTurnTests: XCTestCase {
         XCTAssertNil(partial)
         try append("\n", to: log)
         let complete = await reader.state(home: home, path: log.path)
-        XCTAssertEqual(complete, MainSessionTurnState(status: .completed, turnID: "turn-1"))
+        XCTAssertEqual(complete, MainSessionTurnState(status: .completed, turnID: "turn-1", occurredAt: Date(timeIntervalSince1970: 2_000_000)))
     }
 
     /// 큰 로그의 끝부분 수집 및 큰 갱신·절단 후 오래된 완료 상태 배제 검증
@@ -96,7 +137,7 @@ final class MainSessionTurnTests: XCTestCase {
         XCTAssertNil(gap)
         try Data(event("task_started", turn: "new").utf8).write(to: log)
         let restarted = await reader.state(home: home, path: log.path)
-        XCTAssertEqual(restarted, MainSessionTurnState(status: .working, turnID: "new"))
+        XCTAssertEqual(restarted, MainSessionTurnState(status: .working, turnID: "new", occurredAt: Date(timeIntervalSince1970: 2_000_000)))
     }
 
     /// 서로 다른 계정의 같은 파일명 격리 및 다른 홈·심볼릭 링크 접근 차단 검증
@@ -121,8 +162,9 @@ final class MainSessionTurnTests: XCTestCase {
     }
 
     /// 로컬 기록의 턴 메타데이터만 포함하는 합성 이벤트 생성
-    private func event(_ type: String, turn: String) -> String {
-        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"\(type)\",\"turn_id\":\"\(turn)\"}}\n"
+    private func event(_ type: String, turn: String, at time: TimeInterval = 2_000_000) -> String {
+        let timestamp = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: time))
+        return "{\"timestamp\":\"\(timestamp)\",\"type\":\"event_msg\",\"payload\":{\"type\":\"\(type)\",\"turn_id\":\"\(turn)\"}}\n"
     }
 
     /// 파일 교체 없이 실행 중 로그의 추가 기록 재현

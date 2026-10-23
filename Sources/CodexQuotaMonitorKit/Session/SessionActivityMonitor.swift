@@ -62,6 +62,7 @@ public actor SessionActivityMonitor {
     private let provider: any SessionActivityProvider
     private let pollInterval: TimeInterval
     private let sleep: @Sendable (TimeInterval) async -> Void
+    private let now: @Sendable () -> Date
     private let onTransition: SessionActivityTransitionHandler
 
     private var configurationRevision = 0
@@ -77,7 +78,12 @@ public actor SessionActivityMonitor {
     /// `currentSnapshots` is the latest provider state for presentation. The
     /// comparison snapshot is kept separately so an unavailable read cannot
     /// be interpreted as a confirmed session end.
-    private var comparisonSnapshots: [String: SessionActivitySnapshot] = [:]
+    /// 계정별 이전 정상 결과와 수집 시작 시각을 함께 보관하는 알림 기준
+    private struct Comparison {
+        let snapshot: SessionActivitySnapshot
+        let polledAt: Date
+    }
+    private var comparisonSnapshots: [String: Comparison] = [:]
     private var needsRecoveryBaseline: Set<String> = []
 
     public init(
@@ -88,6 +94,7 @@ public actor SessionActivityMonitor {
             let nanoseconds = UInt64(max(0, seconds) * 1_000_000_000)
             try? await Task.sleep(nanoseconds: nanoseconds)
         },
+        now: @escaping @Sendable () -> Date = { Date() },
         onTransition: @escaping SessionActivityTransitionHandler = { _ in }
     ) {
         self.accounts = Self.normalizedAccounts(accounts)
@@ -95,6 +102,7 @@ public actor SessionActivityMonitor {
         self.pollInterval = max(0, pollInterval)
         self.sleep = sleep
         self.onTransition = onTransition
+        self.now = now
     }
 
     /// Starts the single shared loop. Repeated starts are idempotent.
@@ -134,7 +142,7 @@ public actor SessionActivityMonitor {
         let newByID = Dictionary(normalized.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
         var preservedSnapshots: [String: SessionActivitySnapshot] = [:]
-        var preservedComparisons: [String: SessionActivitySnapshot] = [:]
+        var preservedComparisons: [String: Comparison] = [:]
         for (id, snapshot) in currentSnapshots {
             guard let oldConfig = oldByID[id],
                   let newConfig = newByID[id],
@@ -236,6 +244,7 @@ public actor SessionActivityMonitor {
         generation: Int
     ) async {
         let provider = self.provider
+        let polledAt = now()
         var results: [PollResult] = []
         await withTaskGroup(of: PollResult.self) { group in
             for account in accounts {
@@ -270,7 +279,8 @@ public actor SessionActivityMonitor {
                 result.snapshot,
                 account: current,
                 generation: generation,
-                revision: revision
+                revision: revision,
+                polledAt: polledAt
             )
         }
     }
@@ -279,7 +289,8 @@ public actor SessionActivityMonitor {
         _ snapshot: SessionActivitySnapshot,
         account: AccountConfig,
         generation: Int,
-        revision: Int
+        revision: Int,
+        polledAt: Date
     ) async {
         guard isGenerationCurrent(generation, revision: revision) else { return }
         currentSnapshots[account.id] = snapshot
@@ -291,13 +302,14 @@ public actor SessionActivityMonitor {
 
         let previous = comparisonSnapshots[account.id]
         let isRecovery = needsRecoveryBaseline.remove(account.id) != nil
-        comparisonSnapshots[account.id] = snapshot
+        comparisonSnapshots[account.id] = Comparison(snapshot: snapshot, polledAt: polledAt)
         guard let previous, !isRecovery else { return }
 
         for transition in Self.transitions(
-            from: previous,
+            from: previous.snapshot,
             to: snapshot,
-            account: account
+            account: account,
+            since: previous.polledAt
         ) {
             guard isGenerationCurrent(generation, revision: revision),
                   !Task.isCancelled else { return }
@@ -314,7 +326,8 @@ public actor SessionActivityMonitor {
     private static func transitions(
         from previous: SessionActivitySnapshot,
         to current: SessionActivitySnapshot,
-        account: AccountConfig
+        account: AccountConfig,
+        since previousPollAt: Date
     ) -> [SessionActivityTransition] {
         var transitions: [SessionActivityTransition] = []
 
@@ -330,7 +343,12 @@ public actor SessionActivityMonitor {
         )
 
         for session in currentSessions {
+            // 늦게 발견한 과거 완료·중단 기록을 신규 응답 알림으로 재생하지 않도록 제한
+            let isTerminal = [.completed, .stopped, .error].contains(session.status)
+            let isNewTerminalEvent = !isTerminal || session.turnID == nil
+                || (session.turnEventAt.map { $0 > previousPollAt } ?? false)
             guard let old = previousByID[session.threadID] else {
+                guard isNewTerminalEvent else { continue }
                 transitions.append(
                     sessionTransition(
                         account: account,
@@ -343,7 +361,7 @@ public actor SessionActivityMonitor {
                 continue
             }
 
-            if old.status != session.status || old.isActive != session.isActive || old.turnID != session.turnID {
+            if isNewTerminalEvent && (old.status != session.status || old.isActive != session.isActive || old.turnID != session.turnID) {
                 transitions.append(
                     sessionTransition(
                         account: account,
