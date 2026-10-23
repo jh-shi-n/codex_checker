@@ -24,6 +24,9 @@ public actor TokenUsageSnapshotCache {
     public var hasCleanupFailure: Bool { persistence?.hasCleanupFailure ?? false }
 
     private let provider: any TokenUsageProvider
+    private let todayProvider: (any TokenUsageTodayProvider)?
+    private var automaticRefreshes: Set<String> = []
+    private var manualRefreshes: [String: Int] = [:]
     private let invalidationState: InvalidationState
     private let persistence: SQLiteTokenUsageSnapshotStore?
     private let history: SQLiteTokenUsageHistoryStore?
@@ -52,9 +55,11 @@ public actor TokenUsageSnapshotCache {
         now: @escaping @Sendable () -> Date = { Date() },
         calendar: Calendar = .autoupdatingCurrent,
         historyDatabaseURL: URL? = nil,
-        retentionMonths: Int = 12
+        retentionMonths: Int = 12,
+        todayProvider: (any TokenUsageTodayProvider)? = nil
     ) {
         self.provider = provider
+        self.todayProvider = todayProvider
         self.invalidationState = InvalidationState()
         self.persistence = databaseURL.map { SQLiteTokenUsageSnapshotStore(databaseURL: $0) }
         self.history = historyDatabaseURL.map { SQLiteTokenUsageHistoryStore(databaseURL: $0) }
@@ -143,6 +148,8 @@ public actor TokenUsageSnapshotCache {
 
     /// 명시적 조회 결과의 성공 교체와 영속 저장
     public func refresh(accountID: String, home: URL) async -> TokenUsageSnapshot {
+        manualRefreshes[accountID, default: 0] += 1
+        defer { manualRefreshes[accountID, default: 1] -= 1 }
         let homeIdentity = Self.homeIdentity(home)
 
         if let configuredHome = accountHomes[accountID],
@@ -190,6 +197,13 @@ public actor TokenUsageSnapshotCache {
             return snapshot
         }
 
+        return commitSnapshot(snapshot, accountID: accountID, homeIdentity: homeIdentity, token: token)
+    }
+
+    /// 검증된 전체·당일 집계의 공통 저장 경계
+    private func commitSnapshot(_ initial: TokenUsageSnapshot, accountID: String, homeIdentity: String,
+                                token: InvalidationState.Token) -> TokenUsageSnapshot {
+        var snapshot = initial
         if let history {
             do {
                 guard let archived = try invalidationState.valueIfCurrent(token, accountID: accountID, {
@@ -239,6 +253,47 @@ public actor TokenUsageSnapshotCache {
             homeIdentity: homeIdentity
         )
         return snapshot
+    }
+
+    /// 당일 추가 기록만 반영하며 전체 집계·계정 변경·수집 실패 시 기존 캐시 유지
+    public func refreshToday(accountID: String, home: URL) async -> TokenUsageSnapshot? {
+        guard let todayProvider, !Task.isCancelled,
+              manualRefreshes[accountID, default: 0] == 0,
+              !automaticRefreshes.contains(accountID),
+              accountHomes[accountID].map(Self.homeIdentity) == Self.homeIdentity(home)
+        else { return cachedSnapshot(for: accountID) }
+        automaticRefreshes.insert(accountID)
+        defer { automaticRefreshes.remove(accountID) }
+        let token = invalidationState.current(for: accountID)
+        let policy = historyPolicyRevision
+        guard let collected = await todayProvider.todaySnapshot(home: home),
+              collected.availability == .available, !Task.isCancelled,
+              token == invalidationState.current(for: accountID), policy == historyPolicyRevision,
+              calendar.isDate(collected.generatedAt, inSameDayAs: now())
+        else { return cachedSnapshot(for: accountID) }
+        let previous = cachedSnapshot(for: accountID)
+        let today = calendar.startOfDay(for: now())
+        guard let incoming = collected.dailyPoints.first(where: { calendar.isDate($0.date, inSameDayAs: today) })
+        else { return previous }
+        let old = previous?.dailyPoints.first(where: { calendar.isDate($0.date, inSameDayAs: today) })
+        let cached = [old?.cachedInputTokens, incoming.cachedInputTokens].compactMap { $0 }.max()
+        let point = TokenUsageDailyPoint(date: today,
+            inputTokens: max(old?.inputTokens ?? 0, incoming.inputTokens),
+            outputTokens: max(old?.outputTokens ?? 0, incoming.outputTokens),
+            cachedInputTokens: cached, sessionCount: max(old?.sessionCount ?? 0, incoming.sessionCount))
+        if old == point, previous?.recordedDates?.contains(today) == true { return previous }
+        let points = history == nil
+            ? (previous?.dailyPoints.filter { !calendar.isDate($0.date, inSameDayAs: today) } ?? []) + [point]
+            : [point]
+        let count = history == nil ? max(previous?.dailyPoints.count ?? 0, TokenUsageSnapshot.historyDayCount) : 1
+        let combined = TokenUsageAggregator(calendar: calendar, dayCount: count).aggregate(dailyPoints: points, generatedAt: collected.generatedAt)
+        let coverage = history == nil ? Set((previous?.recordedDates ?? previous?.dailyPoints.map(\.date) ?? []) + [today]).sorted() : [today]
+        let source = TokenUsageSnapshot(generatedAt: collected.generatedAt, dailyPoints: combined.dailyPoints,
+            today: combined.today, last7Days: combined.last7Days, last30Days: combined.last30Days,
+            totalSessions: combined.totalSessions, averageTokensPerSession: combined.averageTokensPerSession,
+            recordedDates: coverage)
+        let saved = commitSnapshot(source, accountID: accountID, homeIdentity: Self.homeIdentity(home), token: token)
+        return saved.availability == .available ? saved : previous
     }
 
     /// 명시적 업데이트 호출 이름

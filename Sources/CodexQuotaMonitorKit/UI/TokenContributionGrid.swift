@@ -53,7 +53,7 @@ public struct TokenContributionGrid: View {
                     .disabled(isLoading)
                     .help("로컬 토큰 사용량 다시 읽기")
                     .accessibilityLabel(isLoading ? "토큰 사용량 업데이트 중" : "토큰 사용량 업데이트")
-                    .accessibilityHint("버튼을 누를 때만 로컬 세션 사용량을 읽습니다")
+                    .accessibilityHint("과거 기록을 포함한 로컬 세션 사용량을 다시 집계합니다")
                 }
             }
 

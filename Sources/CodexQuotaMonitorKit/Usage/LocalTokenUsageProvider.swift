@@ -187,48 +187,43 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
         remainingBytes: inout Int
     ) throws -> [TokenUsageDailyPoint] {
         guard fileManager.isReadableFile(atPath: candidate.url.path) else { throw CocoaError(.fileReadNoPermission) }
-        var safeDate: Date?
-        var highestTotals = TokenUsageTotals.zero
-        var byDay: [Date: TokenUsageTotals] = [:]
-        var latestUsageDay: Date?
-
+        var state = TokenRolloutAccumulator()
         try readJSONLines(at: candidate.url, remainingBytes: &remainingBytes) { line in
-            guard let object = try? JSONSerialization.jsonObject(
-                with: Data(line),
-                options: [.fragmentsAllowed]
-            ), let root = object as? [String: Any] else {
-                return
-            }
-            let eventDate = timestamp(in: root)
-            if safeDate == nil { safeDate = eventDate }
-            guard isTokenCountEvent(root),
-                  let totals = tokenTotals(in: root),
-                  let date = eventDate ?? safeDate ?? candidate.directoryDate else {
-                return
-            }
+            accumulate(line, state: &state, directoryDate: candidate.directoryDate)
+        }
+        return state.points
+    }
 
-            let day = calendar.startOfDay(for: date)
-            let delta = TokenUsageTotals(
-                inputTokens: max(0, totals.inputTokens - highestTotals.inputTokens),
-                outputTokens: max(0, totals.outputTokens - highestTotals.outputTokens),
-                cachedInputTokens: totals.cachedInputTokens.map { max(0, $0 - (highestTotals.cachedInputTokens ?? 0)) }
-            )
-            highestTotals = TokenUsageTotals(
-                inputTokens: max(highestTotals.inputTokens, totals.inputTokens),
-                outputTokens: max(highestTotals.outputTokens, totals.outputTokens),
-                cachedInputTokens: totals.cachedInputTokens.map { max(highestTotals.cachedInputTokens ?? 0, $0) }
-                    ?? highestTotals.cachedInputTokens
-            )
-            byDay[day] = (byDay[day] ?? .zero).adding(delta)
-            latestUsageDay = max(latestUsageDay ?? day, day)
+    /// 전체 집계와 증분 집계가 공유하는 누적 카운터 증가분 계산
+    func accumulate(_ line: [UInt8], state: inout TokenRolloutAccumulator, directoryDate: Date?) {
+        guard let object = try? JSONSerialization.jsonObject(
+            with: Data(line),
+            options: [.fragmentsAllowed]
+        ), let root = object as? [String: Any] else {
+            return
         }
-        return byDay.keys.sorted().map { day in
-            TokenUsageDailyPoint(
-                date: day,
-                totals: byDay[day] ?? .zero,
-                sessionCount: day == latestUsageDay ? 1 : 0
-            )
+        let eventDate = timestamp(in: root)
+        if state.safeDate == nil { state.safeDate = eventDate }
+        guard isTokenCountEvent(root),
+              let totals = tokenTotals(in: root),
+              let date = eventDate ?? state.safeDate ?? directoryDate else {
+            return
         }
+
+        let day = calendar.startOfDay(for: date)
+        let delta = TokenUsageTotals(
+            inputTokens: max(0, totals.inputTokens - state.highestTotals.inputTokens),
+            outputTokens: max(0, totals.outputTokens - state.highestTotals.outputTokens),
+            cachedInputTokens: totals.cachedInputTokens.map { max(0, $0 - (state.highestTotals.cachedInputTokens ?? 0)) }
+        )
+        state.highestTotals = TokenUsageTotals(
+            inputTokens: max(state.highestTotals.inputTokens, totals.inputTokens),
+            outputTokens: max(state.highestTotals.outputTokens, totals.outputTokens),
+            cachedInputTokens: totals.cachedInputTokens.map { max(state.highestTotals.cachedInputTokens ?? 0, $0) }
+                ?? state.highestTotals.cachedInputTokens
+        )
+        state.byDay[day] = (state.byDay[day] ?? .zero).adding(delta)
+        state.latestUsageDay = max(state.latestUsageDay ?? day, day)
     }
 
     /// 청크별 취소 확인과 전체 파일 공통 읽기 상한을 적용하는 행 읽기
@@ -408,7 +403,8 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
         CFGetTypeID(number) == CFBooleanGetTypeID()
     }
 
-    private func dateFromSessionsDirectory(for url: URL, sessionsURL: URL) -> Date? {
+    /// 세션 폴더 아래의 검증된 날짜 구성요소를 파일의 보조 시각으로 변환
+    func dateFromSessionsDirectory(for url: URL, sessionsURL: URL) -> Date? {
         let base = sessionsURL.standardizedFileURL.pathComponents
         let directory = url.deletingLastPathComponent().standardizedFileURL.pathComponents
         guard directory.count >= base.count,
@@ -472,5 +468,21 @@ public struct LocalTokenUsageProvider: TokenUsageRangeProvider, Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
             .replacingOccurrences(of: "-", with: "_")
+    }
+}
+
+/// 원문을 보관하지 않는 파일별 누적 토큰·날짜 상태
+struct TokenRolloutAccumulator: Sendable {
+    var safeDate: Date?
+    var highestTotals = TokenUsageTotals.zero
+    var byDay: [Date: TokenUsageTotals] = [:]
+    var latestUsageDay: Date?
+
+    /// 마지막 사용 날짜에만 세션 수를 배정한 일별 숫자 반환
+    var points: [TokenUsageDailyPoint] {
+        byDay.keys.sorted().map { day in
+            TokenUsageDailyPoint(date: day, totals: byDay[day] ?? .zero,
+                sessionCount: day == latestUsageDay ? 1 : 0)
+        }
     }
 }

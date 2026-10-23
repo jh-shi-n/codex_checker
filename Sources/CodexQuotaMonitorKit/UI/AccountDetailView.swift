@@ -118,7 +118,7 @@ public struct AccountDetailView: View {
         .task(id: account.id) {
             await loadCachedTokenUsageSnapshot()
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                try? await Task.sleep(for: .seconds(TodayTokenUsageProvider.refreshInterval))
                 guard !Task.isCancelled else { return }
                 await loadCachedTokenUsageSnapshot()
             }
@@ -299,7 +299,7 @@ public struct AccountDetailView: View {
         )
     }
 
-    /// 캐시 스냅샷을 60초 주기로 읽는 표시 갱신
+    /// 상세 화면 표시 중 15초 주기의 당일 증분·캐시 표시 갱신
     private func loadCachedTokenUsageSnapshot() async {
         guard !Task.isCancelled else { return }
         let snapshot = await loadCachedTokenUsage(account.id)
