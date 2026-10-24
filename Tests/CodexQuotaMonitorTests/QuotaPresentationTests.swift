@@ -240,7 +240,15 @@ final class QuotaPresentationTests: XCTestCase {
         XCTAssertNotNil(renderer.cgImage)
     }
 
+    /// 백만 경계의 한글 축약과 기존 숫자·초기화 차이 표시 검증
     func testDashboardNumberAndResetDeltaFormattingStayBounded() {
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(0), "0")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(999_999), "999,999")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(1_000_000), "1백만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(2_000_000), "2백만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(2_450_000), "2.4백만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(2_560_000), "2.6백만")
+        XCTAssertEqual(AccountDashboardFormatting.tokenCountText(1_000_000_000), "1,000백만")
         XCTAssertEqual(AccountDashboardFormatting.numberText(128_020), "128,020")
         XCTAssertEqual(AccountDashboardFormatting.abbreviatedNumber(1_200), "1.2K")
         XCTAssertEqual(AccountDashboardFormatting.abbreviatedNumber(10_000), "10K")

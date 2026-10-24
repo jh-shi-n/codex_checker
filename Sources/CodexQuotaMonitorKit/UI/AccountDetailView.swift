@@ -20,6 +20,7 @@ public struct AccountDetailView: View {
 
     @Environment(\.accountDisplayNames) private var accountDisplayNames
     @ObservedObject private var probeStore = UsageWindowProbeStore.shared
+    @ObservedObject private var accountTokenUsageStore = AccountTokenUsageStore.shared
 
     public init(
         account: AccountState,
@@ -166,11 +167,16 @@ public struct AccountDetailView: View {
                 .accessibilityElement(children: .combine)
 
                 Button(action: onRefresh) {
-                    Label("새로고침", systemImage: "arrow.clockwise")
+                    if account.status == .loading || accountTokenUsageStore.isLoading(for: account) {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("새로고침", systemImage: "arrow.clockwise")
+                    }
                 }
                 .buttonStyle(.appAction)
+                .disabled(account.status == .notConfigured || account.status == .loading || accountTokenUsageStore.isLoading(for: account))
                 .keyboardShortcut("r", modifiers: [.command])
-                .help("이 계정만 새로고침")
+                .help("이 계정의 할당량과 토큰 사용량 새로고침")
                 .accessibilityLabel("계정 새로고침")
             }
 

@@ -278,6 +278,12 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statesCancellable = accountStore.$states.sink { [weak self] states in
+            if let self {
+                AccountTokenUsageStore.shared.restore(
+                    accounts: states,
+                    homes: Self.configuredHomes(for: self.accountStore.configs)
+                )
+            }
             self?.quotaResetScheduler.reconcile(
                 states: states, reminderMinutes: preferences.resetReminderMinutes
             )
@@ -323,9 +329,13 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    /// 공용 새로고침에서 할당량 조회 후 최신 계정 식별자로 토큰 사용량 갱신
     private func refreshAccount(_ id: String) {
         Task { @MainActor [weak self] in
-            await self?.accountStore.refresh(accountID: id)
+            guard let self else { return }
+            await self.accountStore.refresh(accountID: id)
+            guard let account = self.accountStore.state(for: id) else { return }
+            await AccountTokenUsageStore.shared.refresh(for: account, force: true)?.value
         }
     }
 

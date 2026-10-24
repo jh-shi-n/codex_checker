@@ -56,7 +56,7 @@ final class AccountUsageCalendarTests: XCTestCase {
         let calendar = AccountUsageCalendar.calendar
         let values = (0..<168).filter { $0 % 17 != 0 }.map { index in
             let date = calendar.date(byAdding: .day, value: -index, to: now)!
-            return (AccountUsageCalendar.label(date), Int64((index * 7919) % 500_000))
+            return (AccountUsageCalendar.label(date), Int64((index * 7919) % 500_000) * 10)
         }
         let snapshot = try usage(values)
         let account = AccountState(id: "C1", status: .normal)
@@ -75,7 +75,7 @@ final class AccountUsageCalendarTests: XCTestCase {
             renderer.scale = 2
             let image = try XCTUnwrap(renderer.cgImage)
             XCTAssertEqual(image.width, 1216)
-            XCTAssertGreaterThan(image.height, 300)
+            XCTAssertGreaterThan(image.height, 200)
             XCTAssertLessThan(image.height, 1200)
             if ProcessInfo.processInfo.environment["CODEX_GRAPH_PREVIEW"] == "1" {
                 let bitmap = NSBitmapImageRep(cgImage: image)

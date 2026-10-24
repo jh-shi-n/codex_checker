@@ -31,15 +31,6 @@ struct AccountTokenUsageView: View {
                 Text("계정 토큰 사용량").font(.headline.weight(.semibold))
                 if !options.weeklyChartEnabled { Text("(최근 24주)").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
-                Button { store.refresh(for: account, force: true) } label: {
-                    HStack(spacing: 6) {
-                        if store.isLoading(for: account) { ProgressView().controlSize(.small) }
-                        Label("업데이트", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                }
-                .buttonStyle(.appAction)
-                .disabled(store.isLoading(for: account) || account.status == .notConfigured)
-                .help("계정 서버 토큰 사용량 다시 조회")
             }
             if let snapshot {
                 if options.weeklyChartEnabled { weeklyChart } else { heatmap }
@@ -55,7 +46,7 @@ struct AccountTokenUsageView: View {
                     Text("서버가 반환한 일별 내역이 없습니다.").font(.caption).foregroundStyle(.secondary)
                 }
             } else {
-                Text(store.isLoading(for: account) ? "계정 토큰 사용량을 불러오는 중…" : "업데이트를 눌러 계정 토큰 사용량을 확인하세요.")
+                Text(store.isLoading(for: account) ? "계정 토큰 사용량을 불러오는 중…" : "우상단 새로고침을 눌러 계정 토큰 사용량을 확인하세요.")
                     .font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 90, alignment: .leading)
             }
@@ -63,15 +54,17 @@ struct AccountTokenUsageView: View {
                 Text(snapshot == nil ? "서버 사용량 조회 실패 · CLI 버전·로그인 방식에 따라 제공되지 않을 수 있습니다." : "갱신 실패 · 마지막 정상 결과 표시 중")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if let error = store.persistenceError {
+                Text(error).font(.caption).foregroundStyle(.secondary)
+            }
             Text("계정 서버 집계 · 날짜는 서버 제공 기준 · 미제공 날짜는 0과 구분됩니다.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .environment(\.calendar, AccountUsageCalendar.calendar)
         .environment(\.timeZone, AccountUsageCalendar.calendar.timeZone)
-        .task(id: "\(account.id)-\(account.configurationGeneration)-\(account.email ?? "")") {
+        .onChange(of: "\(account.id)-\(account.configurationGeneration)-\(account.email ?? "")") { _, _ in
             selectedDate = nil
             weekOffset = 0
-            store.refresh(for: account)
         }
         .onChange(of: options) { _, _ in selectedDate = nil; weekOffset = 0 }
     }
@@ -156,7 +149,7 @@ struct AccountTokenUsageView: View {
                     .buttonStyle(.appIcon).disabled(weekOffset >= 0).accessibilityLabel("다음 주")
                 Spacer()
                 let known = week.compactMap(\.tokens)
-                Text(known.isEmpty ? "주간 내역 미제공" : "제공된 \(known.count)일 합계 \(AccountDashboardFormatting.numberText(known.reduce(0, TokenUsageArithmetic.saturatingAdd)))")
+                Text(known.isEmpty ? "주간 내역 미제공" : "제공된 \(known.count)일 합계 \(AccountDashboardFormatting.tokenCountText(known.reduce(0, TokenUsageArithmetic.saturatingAdd)))")
                     .font(.caption.weight(.semibold))
             }
             Chart {
@@ -165,11 +158,23 @@ struct AccountTokenUsageView: View {
                         if options.chartStyle == .bar {
                             BarMark(x: .value("날짜", day.date, unit: .day), y: .value("토큰", tokens))
                                 .foregroundStyle(Color.accentColor)
+                                .annotation(position: .top, spacing: 6,
+                                            overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                                    if let selectedDate, model.day(at: selectedDate).date == day.date {
+                                        tooltip(day)
+                                    }
+                                }
                         } else {
                             LineMark(x: .value("날짜", day.date, unit: .day), y: .value("토큰", tokens), series: .value("연속 구간", day.segment))
                                 .interpolationMethod(.linear).foregroundStyle(Color.accentColor)
                             PointMark(x: .value("날짜", day.date, unit: .day), y: .value("토큰", tokens))
                                 .foregroundStyle(Color.accentColor)
+                                .annotation(position: .top, spacing: 6,
+                                            overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                                    if let selectedDate, model.day(at: selectedDate).date == day.date {
+                                        tooltip(day)
+                                    }
+                                }
                         }
                     }
                 }
@@ -178,6 +183,15 @@ struct AccountTokenUsageView: View {
             .chartYScale(domain: 0...max(5, Double(week.compactMap(\.tokens).max() ?? 0)))
             .chartXAxis { AxisMarks(values: week.map(\.date)) { item in
                 AxisValueLabel { if let date = item.as(Date.self) { Text("\(AccountUsageCalendar.calendar.component(.day, from: date))일") } }
+            } }
+            .chartYAxis { AxisMarks { item in
+                AxisGridLine()
+                AxisTick()
+                AxisValueLabel {
+                    if let tokens = item.as(Int64.self) {
+                        Text(AccountDashboardFormatting.tokenCountText(tokens))
+                    }
+                }
             } }
             .chartXSelection(value: $selectedDate)
             .chartOverlay { proxy in
@@ -195,8 +209,19 @@ struct AccountTokenUsageView: View {
                 }
             }
             .frame(height: 145)
-            detail(model.day(at: selectedDate ?? (weekOffset == 0 ? model.today : week[0].date)))
         }
+    }
+
+    /// 선택한 막대·점에 인접한 날짜와 토큰량 표시
+    private func tooltip(_ day: AccountUsageCalendar.Day) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(AccountUsageCalendar.label(day.date)).foregroundStyle(.secondary)
+            Text(value(day)).fontWeight(.semibold)
+        }
+        .font(.caption).monospacedDigit().fixedSize()
+        .padding(8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .allowsHitTesting(false)
     }
 
     /// 날짜 선택의 계정 합계만 표시; 입력·출력·캐시·세션 추정 제외
@@ -215,14 +240,15 @@ struct AccountTokenUsageView: View {
 
     /// 미제공·미래 날짜와 실제 0 토큰의 표시 구분
     private func value(_ day: AccountUsageCalendar.Day) -> String {
-        day.tokens.map { "\(AccountDashboardFormatting.numberText($0)) 토큰" } ?? (day.isFuture ? "예정 날짜" : "미제공")
+        day.tokens.map { "\(AccountDashboardFormatting.tokenCountText($0)) 토큰" } ?? (day.isFuture ? "예정 날짜" : "미제공")
     }
 
     /// 서버 요약의 선택적 토큰 수치 표시
     private func metric(_ title: String, _ value: Int64?) -> some View {
         HStack {
             Text(title).foregroundStyle(.secondary)
-            Text(value.map(AccountDashboardFormatting.numberText) ?? "미제공").monospacedDigit()
+            Text(value.map(AccountDashboardFormatting.tokenCountText) ?? "미제공").monospacedDigit()
+                .help(value.map { "\(AccountDashboardFormatting.numberText($0)) 토큰" } ?? "미제공")
         }.font(.caption)
     }
 

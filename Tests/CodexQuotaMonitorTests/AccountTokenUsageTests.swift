@@ -2,6 +2,7 @@
 // 이용처: 서버 통계의 로컬 집계 오염 방지 회귀 테스트
 // 사용방법: swift test --filter AccountTokenUsageTests
 import Foundation
+import SQLite3
 import XCTest
 @testable import CodexQuotaMonitorKit
 
@@ -89,6 +90,135 @@ final class AccountTokenUsageTests: XCTestCase {
         await first.value
         XCTAssertEqual(store.snapshot(for: account), current)
         XCTAssertFalse(store.isLoading(for: account))
+    }
+
+    /// 재시작·종료 후 마지막 정상값과 원래 조회 시각 복원 및 조회 실패 시 디스크 값 보존
+    func testPersistentSnapshotSurvivesRestartAndFailedRefreshWithoutAutomaticQuery() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("usage.sqlite")
+        let homes = ["C1": directory.appendingPathComponent("account")]
+        let account = AccountState(id: "C1", email: "one@example.test", status: .normal)
+        let fetchedAt = Date().addingTimeInterval(-60)
+        let snapshot = try AccountTokenUsage(result: payload(date: "2026-10-23"), fetchedAt: fetchedAt, accountEmail: account.email)
+        let first = AccountTokenUsageStore(databaseURL: database)
+        first.restore(accounts: [account], homes: homes)
+        first.loader = { _ in .success(snapshot) }
+        await first.refresh(for: account)?.value
+        XCTAssertNil(first.persistenceError)
+        first.invalidateAll()
+
+        let second = AccountTokenUsageStore(databaseURL: database)
+        var calls = 0
+        second.loader = { _ in calls += 1; return .failure(.timeout) }
+        var initial = account
+        initial.email = nil
+        initial.status = .loading
+        second.restore(accounts: [initial], homes: homes)
+        XCTAssertEqual(second.snapshot(for: initial), snapshot)
+        second.restore(accounts: [account], homes: homes)
+        XCTAssertEqual(second.snapshot(for: account)?.fetchedAt, fetchedAt)
+        XCTAssertEqual(calls, 0)
+        await second.refresh(for: account, force: true)?.value
+        XCTAssertTrue(second.hasFailed(for: account))
+        let third = AccountTokenUsageStore(databaseURL: database)
+        third.restore(accounts: [account], homes: homes)
+        XCTAssertEqual(third.snapshot(for: account), snapshot)
+    }
+
+    /// 슬롯·경로·로그인 계정 변경 시 다른 계정의 정상 캐시와 표시 범위 격리
+    func testPersistentSnapshotSeparatesHomesAndLoginIdentity() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("usage.sqlite")
+        let homes = ["C1": directory.appendingPathComponent("one"), "C2": directory.appendingPathComponent("two")]
+        let one = AccountState(id: "C1", email: "one@example.test", status: .normal)
+        let two = AccountState(id: "C2", email: "two@example.test", status: .normal)
+        let first = AccountTokenUsageStore(databaseURL: database)
+        first.restore(accounts: [one, two], homes: homes)
+        let snapshots = try Dictionary(uniqueKeysWithValues: [one, two].map { account in
+            (account.id, try AccountTokenUsage(result: payload(date: "2026-10-23"), accountEmail: account.email))
+        })
+        first.loader = { account in .success(snapshots[account.id]!) }
+        await first.refresh(for: one)?.value
+        await first.refresh(for: two)?.value
+        let restarted = AccountTokenUsageStore(databaseURL: database)
+        var changedLogin = one
+        changedLogin.email = "another@example.test"
+        restarted.restore(accounts: [changedLogin, two], homes: homes)
+        XCTAssertNil(restarted.snapshot(for: changedLogin))
+        XCTAssertNotNil(restarted.snapshot(for: two))
+        var changedHomes = homes
+        changedHomes["C1"] = directory.appendingPathComponent("new")
+        restarted.restore(accounts: [one, two], homes: changedHomes)
+        XCTAssertNil(restarted.snapshot(for: one))
+        let third = AccountTokenUsageStore(databaseURL: database)
+        third.restore(accounts: [one, two], homes: homes)
+        XCTAssertNil(third.snapshot(for: one))
+        XCTAssertNotNil(third.snapshot(for: two))
+    }
+
+    /// 할당량과 동일한 14일 만료 경계 및 미제공·실제 0의 저장 복원 검증
+    func testPersistentSnapshotExpirationAndOptionalValues() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let persistence = SQLiteAccountTokenUsageStore(databaseURL: directory.appendingPathComponent("usage.sqlite"))
+        let now = Date()
+        for (index, result) in [
+            CodexJSONValue.object(["summary": .object([:])]),
+            .object(["summary": .object(["lifetimeTokens": .number(0)]), "dailyUsageBuckets": .array([])]),
+            payload(date: "2026-10-23"),
+        ].enumerated() {
+            let snapshot = try AccountTokenUsage(result: result, fetchedAt: now)
+            let home = "home-\(index)"
+            try persistence.save(snapshot, home: home)
+            XCTAssertEqual(try persistence.load(home: home, now: now), snapshot)
+            XCTAssertNotNil(try persistence.load(home: home, now: now.addingTimeInterval(SQLiteAccountTokenUsageStore.lifetime - 1)))
+            XCTAssertNil(try persistence.load(home: home, now: now.addingTimeInterval(SQLiteAccountTokenUsageStore.lifetime)))
+        }
+        try persistence.cleanup(homes: ["home-0"], now: now)
+        XCTAssertNotNil(try persistence.load(home: "home-0", now: now))
+        XCTAssertNil(try persistence.load(home: "home-1", now: now))
+    }
+
+    /// 디스크 쓰기 실패가 서버 정상값을 숨기거나 조회 실패로 바뀌지 않는지 검증
+    func testStorageFailurePreservesSuccessfulServerSnapshot() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AccountTokenUsageStore(databaseURL: directory)
+        let account = AccountState(id: "C1", status: .normal)
+        store.restore(accounts: [account], homes: ["C1": directory.appendingPathComponent("account")])
+        let snapshot = try AccountTokenUsage(result: payload(date: "2026-10-23"))
+        store.loader = { _ in .success(snapshot) }
+        await store.refresh(for: account)?.value
+        XCTAssertEqual(store.snapshot(for: account), snapshot)
+        XCTAssertFalse(store.hasFailed(for: account))
+        XCTAssertNotNil(store.persistenceError)
+    }
+
+    /// 한 계정의 손상된 캐시가 다른 계정의 정상값 복원을 중단하지 않는지 검증
+    func testCorruptCacheDoesNotBlockOtherAccounts() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("usage.sqlite")
+        let homes = ["C1": directory.appendingPathComponent("one"), "C2": directory.appendingPathComponent("two")]
+        let persistence = SQLiteAccountTokenUsageStore(databaseURL: database)
+        let snapshot = try AccountTokenUsage(result: payload(date: "2026-10-23"))
+        try persistence.save(snapshot, home: homes["C1"]!.path)
+        try persistence.save(snapshot, home: homes["C2"]!.path)
+        var pointer: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(database.path, &pointer), SQLITE_OK)
+        let db = try XCTUnwrap(pointer)
+        defer { sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_exec(db, "UPDATE account_token_usage_snapshots SET snapshot = X'7B' WHERE home_identity LIKE '%/one'", nil, nil, nil), SQLITE_OK)
+        let store = AccountTokenUsageStore(databaseURL: database)
+        let one = AccountState(id: "C1", status: .normal)
+        let two = AccountState(id: "C2", status: .normal)
+        store.restore(accounts: [one, two], homes: homes)
+        XCTAssertNil(store.snapshot(for: one))
+        XCTAssertEqual(store.snapshot(for: two), snapshot)
+        XCTAssertNotNil(store.persistenceError)
     }
 
     /// 날짜가 있는 최소 서버 응답 구성

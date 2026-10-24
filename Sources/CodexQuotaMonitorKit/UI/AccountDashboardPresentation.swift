@@ -134,6 +134,16 @@ public enum AccountDashboardFormatting {
         return formatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 
+    /// 백만 미만의 원래 숫자와 백만 이상 소수 첫째 자리 축약 표시
+    public static func tokenCountText(_ value: Int64) -> String {
+        guard value.magnitude >= 1_000_000 else { return numberText(value) }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 1
+        return (formatter.string(from: NSDecimalNumber(decimal: Decimal(value) / 1_000_000)) ?? String(value)) + "백만"
+    }
+
     public static func abbreviatedNumber(_ value: Int64) -> String {
         let sign = value < 0 ? "-" : ""
         let magnitude = Double(value.magnitude)

@@ -4,10 +4,10 @@
 import Combine
 import Foundation
 
-/// 슬롯·설정 세대·로그인 표시 계정별 단일 진행 요청과 메모리 캐시
+/// 슬롯·설정 세대·로그인 표시 계정별 단일 요청과 마지막 정상값 영속 캐시
 @MainActor
 public final class AccountTokenUsageStore: ObservableObject {
-    public static let shared = AccountTokenUsageStore()
+    public static let shared = AccountTokenUsageStore(databaseURL: TokenUsageSnapshotCache.defaultDatabaseURL)
     public typealias Loader = @MainActor (AccountState) async -> Result<AccountTokenUsage, CodexQuotaServiceError>
     public var loader: Loader = { _ in .failure(.notConfigured) }
 
@@ -28,6 +28,50 @@ public final class AccountTokenUsageStore: ObservableObject {
     @Published private var failures: Set<Key> = []
     @Published private var operations: [Key: Operation] = [:]
     private var attemptedAt: [Key: Date] = [:]
+    private let persistence: SQLiteAccountTokenUsageStore?
+    private var homes: [String: String] = [:]
+    private var loadedHomes: Set<String> = []
+    private var persistedSnapshots: [String: AccountTokenUsage] = [:]
+    @Published public private(set) var persistenceError: String?
+
+    /// 운영용 SQLite 또는 영속 저장 없는 테스트용 저장소 초기화
+    public init(databaseURL: URL? = nil) {
+        persistence = databaseURL.map(SQLiteAccountTokenUsageStore.init)
+    }
+
+    /// 등록 경로의 마지막 정상값 복원; 서버 조회 없이 현재 계정 세대에 연결
+    public func restore(accounts: [AccountState], homes configuredHomes: [String: URL], now: Date = Date()) {
+        let nextHomes = configuredHomes.mapValues { $0.resolvingSymlinksInPath().standardizedFileURL.path }
+        for id in homes.keys where homes[id] != nextHomes[id] { invalidate(accountID: id) }
+        let changed = homes != nextHomes
+        homes = nextHomes
+        do {
+            var accessedDisk = changed
+            var readFailed = false
+            if changed { try persistence?.cleanup(homes: Set(homes.values), now: now) }
+            for account in accounts where account.status != .notConfigured {
+                guard let home = homes[account.id] else { continue }
+                if !loadedHomes.contains(home) {
+                    accessedDisk = true
+                    do {
+                        persistedSnapshots[home] = try persistence?.load(home: home, now: now)
+                        loadedHomes.insert(home)
+                    } catch {
+                        readFailed = true
+                        persistenceError = "마지막 토큰 사용량을 복원하지 못했습니다."
+                        continue
+                    }
+                }
+                guard snapshots[Key(account)] == nil, let snapshot = persistedSnapshots[home],
+                      snapshot.fetchedAt.addingTimeInterval(SQLiteAccountTokenUsageStore.lifetime) > now,
+                      account.email == nil || account.email == snapshot.accountEmail else { continue }
+                snapshots[Key(account)] = snapshot
+            }
+            if accessedDisk && !readFailed { persistenceError = nil }
+        } catch {
+            persistenceError = "마지막 토큰 사용량을 복원하지 못했습니다."
+        }
+    }
 
     /// 현재 계정의 마지막 정상 서버 응답 조회
     public func snapshot(for account: AccountState) -> AccountTokenUsage? { snapshots[Key(account)] }
@@ -48,7 +92,16 @@ public final class AccountTokenUsageStore: ObservableObject {
             let result = await loader(account)
             guard !Task.isCancelled, operations[key]?.id == id else { return }
             switch result {
-            case let .success(snapshot): snapshots[key] = snapshot; failures.remove(key)
+            case let .success(snapshot):
+                snapshots[key] = snapshot
+                failures.remove(key)
+                if let home = homes[account.id] {
+                    persistedSnapshots[home] = snapshot
+                    do {
+                        try persistence?.save(snapshot, home: home)
+                        persistenceError = nil
+                    } catch { persistenceError = "토큰 사용량을 저장하지 못했습니다. 재실행 시 마지막 조회 결과가 표시되지 않을 수 있습니다." }
+                }
             case .failure: failures.insert(key)
             }
             operations[key] = nil
@@ -66,11 +119,18 @@ public final class AccountTokenUsageStore: ObservableObject {
         snapshots = snapshots.filter { $0.key.id != accountID }
         failures = failures.filter { $0.id != accountID }
         attemptedAt = attemptedAt.filter { $0.key.id != accountID }
+        if let home = homes[accountID] {
+            persistedSnapshots[home] = nil
+            loadedHomes.remove(home)
+            do { try persistence?.remove(home: home) }
+            catch { persistenceError = "변경된 계정의 토큰 사용량 캐시를 정리하지 못했습니다." }
+        }
     }
 
-    /// 설정 변경·종료 시 이전 요청 취소와 늦은 응답 배제
+    /// 종료 시 이전 요청·메모리만 정리하고 디스크의 정상 조회 결과 보존
     public func invalidateAll() {
         for operation in operations.values { operation.task.cancel() }
         operations.removeAll(); snapshots.removeAll(); failures.removeAll(); attemptedAt.removeAll()
+        persistedSnapshots.removeAll(); loadedHomes.removeAll()
     }
 }
