@@ -3,6 +3,34 @@ import XCTest
 @testable import CodexQuotaMonitorKit
 
 final class CodexQuotaServiceTests: XCTestCase {
+    /// 서버 토큰 조회의 초기화·무인자 요청 및 기존 할당량 요청과의 분리 검증
+    func testAccountTokenUsageRequestAndUnsupportedRPC() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("auth.json"))
+        for response in [
+            CodexMessage(id: 4, result: .object(["summary": .object(["lifetimeTokens": .number(123)]),
+                "dailyUsageBuckets": .array([.object(["startDate": .string("2026-10-23"), "tokens": .number(0)])])])),
+            CodexMessage(id: 4, error: CodexProtocolError(code: -32601, message: "Method not found")),
+        ] {
+            let transport = RecordingTransport(responses: [0: CodexMessage(id: 0, result: .object([:])),
+                1: CodexMessage(id: 1, result: .object(["account": .object(["email": .string("test@example.test")])])), 4: response])
+            let service = CodexQuotaService(locator: FixedCodexLocator(url: directory.appendingPathComponent("codex")),
+                                            processFactory: { transport })
+            let result = service.fetchTokenUsageSync(for: AccountConfig(id: "C1", home: directory, position: .left))
+            if response.error == nil {
+                XCTAssertEqual(try result.get().lifetimeTokens, 123)
+                XCTAssertEqual(try result.get().accountEmail, "test@example.test")
+                XCTAssertEqual(try result.get().days?.first?.tokens, 0)
+            } else {
+                XCTAssertEqual(result, .failure(.protocolError("Method not found")))
+            }
+            XCTAssertEqual(transport.sentRequests.map(\.method), ["initialize", "initialized", "account/read", "account/usage/read"])
+            XCTAssertNil(transport.sentRequests.last?.params)
+            XCTAssertEqual(transport.readIDs, [[0], [1, 4]])
+        }
+    }
+
     /// 선택 리셋권·재시도 키 전송 및 서버 결과 4종 구분 검증
     func testResetCreditConsumptionUsesSelectedIDAndIdempotencyKey() throws {
         let directory = try makeTemporaryDirectory()
@@ -238,6 +266,23 @@ final class CodexQuotaServiceTests: XCTestCase {
         let config = AccountConfig(id: "C1", home: directory, position: .left)
 
         XCTAssertEqual(service.fetchSync(for: config), .failure(.timeout))
+    }
+
+    /// 서버 토큰 조회 중 취소 시 transport 대기 해제와 프로세스 종료 검증
+    func testTokenUsageCancellationStopsTransport() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("auth.json"))
+        let transport = BlockingCancellationTransport()
+        let service = CodexQuotaService(locator: FixedCodexLocator(url: directory.appendingPathComponent("codex")),
+                                        processFactory: { transport })
+        let task = Task { await service.fetchTokenUsage(for: AccountConfig(id: "C1", home: directory, position: .left)) }
+        XCTAssertEqual(transport.readStarted.wait(timeout: .now() + 1), .success)
+        task.cancel()
+        let result = await task.value
+        XCTAssertEqual(result, .failure(.cancelled))
+        XCTAssertEqual(transport.cancelCount, 1)
+        XCTAssertEqual(transport.terminationCount, 1)
     }
 
     func testFetchCancellationWakesTransportReadAndReturnsCancelled() async throws {

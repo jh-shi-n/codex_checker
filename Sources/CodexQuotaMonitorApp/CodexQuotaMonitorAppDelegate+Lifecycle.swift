@@ -1,4 +1,4 @@
-// 목적: 앱 시작·종료·절전 복귀 및 토큰 집계 만료 정리
+// 목적: 앱 시작·종료·절전 복귀 및 할당량 스냅샷 만료 정리
 // 이용처: 앱 위임자의 macOS 수명주기 콜백
 // 사용방법: NSApplicationDelegate 이벤트를 통한 자동 호출
 @preconcurrency import AppKit
@@ -20,10 +20,8 @@ extension CodexQuotaMonitorAppDelegate {
         if preferences.persistenceError != nil { openSettings() }
         else { openAccountSetupIfNeeded() }
         Task { await sessionActivityMonitor.start() }
-        tokenCleanupTask = Task { [tokenUsageCache, preferences] in
+        quotaSnapshotCleanupTask = Task { [preferences] in
             while !Task.isCancelled {
-                await tokenUsageCache.purgeExpired()
-                preferences.reportTokenHistoryError(await tokenUsageCache.historyError)
                 preferences.cleanupQuotaSnapshots()
                 do { try await Task.sleep(for: .seconds(60)) }
                 catch { return }
@@ -41,12 +39,12 @@ extension CodexQuotaMonitorAppDelegate {
         sessionActivityDelivery.stop()
         quotaResetScheduler.stop()
         UsageWindowProbeStore.shared.cancelAll()
-        TokenUsageRefreshStore.shared.cancelAll()
+        AccountTokenUsageStore.shared.invalidateAll()
         serviceStatus.cancel()
         emptyAccountsPopover?.performClose(nil)
         emptyAccountsPopover = nil
-        tokenCleanupTask?.cancel()
-        tokenCleanupTask = nil
+        quotaSnapshotCleanupTask?.cancel()
+        quotaSnapshotCleanupTask = nil
         if let hiddenAccountsStatusItem {
             NSStatusBar.system.removeStatusItem(hiddenAccountsStatusItem)
             self.hiddenAccountsStatusItem = nil
@@ -83,7 +81,6 @@ extension CodexQuotaMonitorAppDelegate {
             Task { @MainActor [weak self] in
                 DiagnosticLogContext.record(.appWoke)
                 DiagnosticLogger.shared.maintain()
-                await self?.tokenUsageCache.purgeExpired()
                 self?.preferences.cleanupQuotaSnapshots()
                 await self?.lifecycleCoordinator.wake()
                 await self?.quotaResetScheduler.tick()

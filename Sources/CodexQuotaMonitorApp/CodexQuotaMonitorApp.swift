@@ -49,10 +49,6 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     let refreshService: RefreshService
     let launchAtLoginService: LaunchAtLoginService
     let sessionActivityProvider: SQLiteSessionActivityProvider
-    /// One local-only token reader is shared by all dashboard instances.
-    let tokenUsageProvider: LocalTokenUsageProvider
-    /// 명시적 업데이트 집계의 메모리·SQLite 보관 및 14일 만료 관리
-    let tokenUsageCache: TokenUsageSnapshotCache
     /// The probe service owns process lifetime and the per-account running gate.
     let usageWindowProbeService: UsageWindowProbeService
     let sessionActivityToastQueue: SessionActivityToastQueue
@@ -70,7 +66,7 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
     var wakeObserver: NSObjectProtocol?
     var hiddenAccountsStatusItem: NSStatusItem?
     var emptyAccountsPopover: NSPopover?
-    var tokenCleanupTask: Task<Void, Never>?
+    var quotaSnapshotCleanupTask: Task<Void, Never>?
 
     /// 설정과 계정 서비스 초기화 및 표시·갱신 콜백 연결
     override init() {
@@ -89,15 +85,6 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
         let launchAtLoginService = LaunchAtLoginService()
         let sessionActivityProvider = SQLiteSessionActivityProvider()
-        let tokenUsageProvider = LocalTokenUsageProvider(maxFileCount: 4096)
-        let tokenUsageCache = TokenUsageSnapshotCache(
-            provider: tokenUsageProvider,
-            databaseURL: TokenUsageSnapshotCache.defaultDatabaseURL,
-            accountHomes: Self.tokenHomes(for: accountStore.configs),
-            historyDatabaseURL: TokenUsageSnapshotCache.defaultDatabaseURL.deletingLastPathComponent().appendingPathComponent("token-history.sqlite"),
-            retentionMonths: preferences.tokenUsageOptions.retentionMonths,
-            todayProvider: TodayTokenUsageProvider()
-        )
         let usageWindowProbeService = UsageWindowProbeService()
         let sessionActivityToastQueue = SessionActivityToastQueue(
             durationSeconds: preferences.activityNotificationDurationSeconds
@@ -147,8 +134,6 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         self.refreshService = refreshService
         self.launchAtLoginService = launchAtLoginService
         self.sessionActivityProvider = sessionActivityProvider
-        self.tokenUsageProvider = tokenUsageProvider
-        self.tokenUsageCache = tokenUsageCache
         self.usageWindowProbeService = usageWindowProbeService
         self.sessionActivityToastQueue = sessionActivityToastQueue
         self.sessionActivityMonitor = sessionActivityMonitor
@@ -199,16 +184,15 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 reconfigurePaths: { paths in
                     let generation = sessionActivityDelivery.pause()
                     // 경로가 달라진 슬롯만 동기 무효화하여 다른 계정의 기록 보존
-                    let previousHomes = Self.tokenHomes(for: accountStore.configs)
-                    let nextHomes = Self.tokenHomes(for: AccountConfig.accounts(for: paths))
+                    let previousHomes = Self.configuredHomes(for: accountStore.configs)
+                    let nextHomes = Self.configuredHomes(for: AccountConfig.accounts(for: paths))
                     for accountID in Set(previousHomes.keys).union(nextHomes.keys) {
                         if previousHomes[accountID] != nextHomes[accountID] {
-                            tokenUsageCache.invalidate(accountID: accountID)
+                            AccountTokenUsageStore.shared.invalidate(accountID: accountID)
                         }
                     }
                     accountStore.reconfigure(pathStrings: paths)
                     Task { @MainActor in
-                        await tokenUsageCache.configureAccountHomes(Self.tokenHomes(for: accountStore.configs))
                         await sessionActivityMonitor.reconfigure(
                             accounts: accountStore.configs
                         )
@@ -237,6 +221,21 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
                 self?.notchLayoutManager.updateActivityToasts(left: left, right: right)
             }
 
+        AccountTokenUsageStore.shared.loader = { [weak self] account in
+            guard let self,
+                  let config = self.accountStore.configs.first(where: { $0.id == account.id }),
+                  self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration
+            else { return .failure(.notConfigured) }
+            let result = await CodexQuotaService().fetchTokenUsage(for: config)
+            guard self.accountStore.configs.first(where: { $0.id == account.id }) == config,
+                  self.accountStore.state(for: account.id)?.configurationGeneration == account.configurationGeneration,
+                  self.accountStore.state(for: account.id)?.email == account.email else { return .failure(.cancelled) }
+            if case let .success(snapshot) = result, let email = account.email, snapshot.accountEmail != email {
+                return .failure(.protocolError("Account identity changed"))
+            }
+            return result
+        }
+
         let loadSessionActivity: SessionActivityLoader = { [weak self] account in
             guard let self else {
                 return .unavailable(accountID: account.id)
@@ -246,18 +245,6 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         notchLayoutManager.leftPanel.setSessionActivityLoader(loadSessionActivity)
         notchLayoutManager.rightPanel.setSessionActivityLoader(loadSessionActivity)
 
-        let loadCachedTokenUsage: TokenUsageSnapshotLookup = { [weak self] accountID in
-            guard let self else {
-                return nil
-            }
-            return await self.cachedTokenUsage(accountID: accountID)
-        }
-        let refreshTokenUsage: TokenUsageSnapshotRefresh = { [weak self] account in
-            guard let self else {
-                return AccountDashboardDefaults.unavailableTokenUsageSnapshot()
-            }
-            return await self.refreshTokenUsage(account)
-        }
         let runUsageWindowProbe: UsageWindowProbeRunner = { [weak self] account in
             guard let self else {
                 return AccountDashboardDefaults.unavailableProbe(
@@ -268,8 +255,8 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             return await self.runUsageWindowProbe(account)
         }
         notchLayoutManager.setDashboardCallbacks(
-            loadCachedTokenUsage: loadCachedTokenUsage,
-            refreshTokenUsage: refreshTokenUsage,
+            loadCachedTokenUsage: AccountDashboardDefaults.emptyTokenUsageLookup,
+            refreshTokenUsage: AccountDashboardDefaults.unavailableTokenUsageRefresh,
             consumeResetCredit: { [weak self] account, creditID, attempt in
                 guard let self else { return .failure(.cancelled) }
                 return await self.consumeResetCredit(account, creditID: creditID, attempt: attempt)
@@ -291,6 +278,12 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statesCancellable = accountStore.$states.sink { [weak self] states in
+            if let self {
+                AccountTokenUsageStore.shared.restore(
+                    accounts: states,
+                    homes: Self.configuredHomes(for: self.accountStore.configs)
+                )
+            }
             self?.quotaResetScheduler.reconcile(
                 states: states, reminderMinutes: preferences.resetReminderMinutes
             )
@@ -336,9 +329,13 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    /// 공용 새로고침에서 할당량 조회 후 최신 계정 식별자로 토큰 사용량 갱신
     private func refreshAccount(_ id: String) {
         Task { @MainActor [weak self] in
-            await self?.accountStore.refresh(accountID: id)
+            guard let self else { return }
+            await self.accountStore.refresh(accountID: id)
+            guard let account = self.accountStore.state(for: id) else { return }
+            await AccountTokenUsageStore.shared.refresh(for: account, force: true)?.value
         }
     }
 
@@ -347,26 +344,6 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
             return .unavailable(accountID: account.id)
         }
         return await sessionActivityProvider.snapshot(accountID: account.id, home: home)
-    }
-
-    /// 설정된 계정 홈에서 당일 증분을 반영하고 마지막 성공 그래프 반환
-    private func cachedTokenUsage(accountID: String) async -> TokenUsageSnapshot? {
-        guard let home = accountStore.configs.first(where: { $0.id == accountID })?.configuredHome else { return nil }
-        return await tokenUsageCache.refreshToday(accountID: accountID, home: home)
-    }
-
-    /// 현재 계정의 명시적 토큰 집계 및 설정 변경 중 이전 결과 배제
-    private func refreshTokenUsage(_ account: AccountState) async -> TokenUsageSnapshot {
-        guard let home = accountStore.configs.first(where: { $0.id == account.id })?.configuredHome
-        else {
-            return AccountDashboardDefaults.unavailableTokenUsageSnapshot()
-        }
-        let revision = accountStore.configurationRevision
-        let snapshot = await tokenUsageCache.refresh(accountID: account.id, home: home)
-        guard revision == accountStore.configurationRevision else {
-            return AccountDashboardDefaults.unavailableTokenUsageSnapshot()
-        }
-        return snapshot
     }
 
     /// 확인한 계정 설정으로 리셋권 사용 후 서버 한도·잔여 개수 재조회
@@ -439,8 +416,8 @@ final class CodexQuotaMonitorAppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    /// 설정된 계정의 토큰 집계 복원 범위 구성
-    private static func tokenHomes(for configs: [AccountConfig]) -> [String: URL] {
+    /// 서버 캐시 무효화를 위한 슬롯별 계정 경로 구성
+    private static func configuredHomes(for configs: [AccountConfig]) -> [String: URL] {
         Dictionary(uniqueKeysWithValues: configs.compactMap { config in
             config.configuredHome.map { (config.id, $0) }
         })

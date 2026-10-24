@@ -151,17 +151,9 @@ extension CodexQuotaMonitorAppDelegate {
         }
     }
 
-    /// 저장된 보관 기간 변경의 비동기 정리 및 오류 안내 연결
+    /// 계정 토큰 그래프의 형태·표시 범위 저장
     private func applyTokenUsageOptions(_ options: TokenUsageOptions) {
-        let previous = preferences.tokenUsageOptions
         preferences.updateTokenUsageOptions(options)
-        let accepted = preferences.tokenUsageOptions
-        guard previous.retentionMonths != accepted.retentionMonths else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            await self.tokenUsageCache.setHistoryRetention(months: accepted.retentionMonths)
-            self.preferences.reportTokenHistoryError(await self.tokenUsageCache.historyError)
-        }
     }
 
     private func applyLaunchAtLogin(_ enabled: Bool) {

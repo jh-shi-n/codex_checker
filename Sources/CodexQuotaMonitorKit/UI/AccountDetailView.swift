@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 할당량 상세와 계정별 로컬 사용량 표시
+/// 할당량 상세와 서버 계정 토큰 사용량 표시
 public struct AccountDetailView: View {
     public static let minimumWidth: CGFloat = TransientPopoverSizingPolicy.contentWidth
     public static let minimumHeight: CGFloat = TransientPopoverSizingPolicy.contentHeight
@@ -19,10 +19,8 @@ public struct AccountDetailView: View {
     public let tokenUsagePreferences: PreferencesStore?
 
     @Environment(\.accountDisplayNames) private var accountDisplayNames
-    @State private var tokenUsageSnapshot: TokenUsageSnapshot?
-    @State private var isTokenUsageExpanded = false
     @ObservedObject private var probeStore = UsageWindowProbeStore.shared
-    @ObservedObject private var tokenUsageRefreshStore: TokenUsageRefreshStore
+    @ObservedObject private var accountTokenUsageStore = AccountTokenUsageStore.shared
 
     public init(
         account: AccountState,
@@ -37,8 +35,7 @@ public struct AccountDetailView: View {
         runUsageWindowProbe: @escaping UsageWindowProbeRunner = AccountDetailView.defaultProbeRunner,
         onClose: @escaping () -> Void = {},
         serviceStatus: OpenAIServiceStatusStore? = nil,
-        tokenUsagePreferences: PreferencesStore? = nil,
-        tokenUsageRefreshStore: TokenUsageRefreshStore = .shared
+        tokenUsagePreferences: PreferencesStore? = nil
     ) {
         self.account = account
         self.onRefresh = onRefresh
@@ -51,7 +48,6 @@ public struct AccountDetailView: View {
         self.onClose = onClose
         self.serviceStatus = serviceStatus
         self.tokenUsagePreferences = tokenUsagePreferences
-        self._tokenUsageRefreshStore = ObservedObject(wrappedValue: tokenUsageRefreshStore)
     }
 
     public var tokenUsageCacheLookup: TokenUsageSnapshotLookup { loadCachedTokenUsage }
@@ -66,21 +62,10 @@ public struct AccountDetailView: View {
                 AccountQuotaSection(account: displayedAccount)
 
                 if let tokenUsagePreferences {
-                    TokenUsageDisplaySection(preferences: tokenUsagePreferences,
-                        snapshot: tokenUsageSnapshot, isLoading: isTokenUsageLoading,
-                        onUpdate: updateTokenUsage, onReload: loadCachedTokenUsageSnapshot)
+                    AccountTokenUsagePreferencesView(account: account, preferences: tokenUsagePreferences)
                 } else {
-                    TokenContributionGrid(snapshot: tokenUsageSnapshot,
-                        isLoading: isTokenUsageLoading, onUpdate: updateTokenUsage)
+                    AccountTokenUsageView(account: account, store: .shared)
                 }
-
-                if tokenUsageRefreshFailed {
-                    Text(tokenUsageRefreshError?.userMessage ?? "토큰 사용량 업데이트 실패")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                tokenUsageDisclosure
 
                 accountActivity
 
@@ -115,17 +100,7 @@ public struct AccountDetailView: View {
         )
         .background(Color(red: 0.075, green: 0.085, blue: 0.10))
         .preferredColorScheme(.dark)
-        .task(id: account.id) {
-            await loadCachedTokenUsageSnapshot()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(TodayTokenUsageProvider.refreshInterval))
-                guard !Task.isCancelled else { return }
-                await loadCachedTokenUsageSnapshot()
-            }
-        }
-        .onChange(of: tokenUsageRefreshStore.result(for: account)) { _, snapshot in
-            if let snapshot { applyCachedTokenUsageSnapshot(snapshot) }
-        }
+
     }
 
     /// 계정 정보와 버튼에 인접한 조회 시각·상태의 2행 표시
@@ -192,11 +167,16 @@ public struct AccountDetailView: View {
                 .accessibilityElement(children: .combine)
 
                 Button(action: onRefresh) {
-                    Label("새로고침", systemImage: "arrow.clockwise")
+                    if account.status == .loading || accountTokenUsageStore.isLoading(for: account) {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("새로고침", systemImage: "arrow.clockwise")
+                    }
                 }
                 .buttonStyle(.appAction)
+                .disabled(account.status == .notConfigured || account.status == .loading || accountTokenUsageStore.isLoading(for: account))
                 .keyboardShortcut("r", modifiers: [.command])
-                .help("이 계정만 새로고침")
+                .help("이 계정의 할당량과 토큰 사용량 새로고침")
                 .accessibilityLabel("계정 새로고침")
             }
 
@@ -208,35 +188,6 @@ public struct AccountDetailView: View {
             .accessibilityLabel("계정 상세 닫기")
         }
         .accessibilityElement(children: .contain)
-    }
-
-    @ViewBuilder
-    private var tokenUsageDisclosure: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                isTokenUsageExpanded.toggle()
-            } label: {
-                HStack(spacing: 5) {
-                    Text(isTokenUsageExpanded ? "접기" : "더보기")
-                        .font(.subheadline.weight(.medium))
-                    Image(systemName: isTokenUsageExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption.weight(.semibold))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.appDisclosure)
-            .accessibilityLabel(isTokenUsageExpanded ? "토큰 사용량 접기" : "토큰 사용량 더보기")
-            .accessibilityValue(isTokenUsageExpanded ? "펼쳐짐" : "접힘")
-
-            if isTokenUsageExpanded {
-                TokenUsageSummaryView(
-                    snapshot: tokenUsageSnapshot,
-                    isLoading: isTokenUsageLoading
-                )
-
-            }
-        }
-        .animation(.easeOut(duration: 0.15), value: isTokenUsageExpanded)
     }
 
     @ViewBuilder
@@ -297,43 +248,6 @@ public struct AccountDetailView: View {
             current: account,
             probe: currentProbePresentation
         )
-    }
-
-    /// 상세 화면 표시 중 15초 주기의 당일 증분·캐시 표시 갱신
-    private func loadCachedTokenUsageSnapshot() async {
-        guard !Task.isCancelled else { return }
-        let snapshot = await loadCachedTokenUsage(account.id)
-        guard !Task.isCancelled, !isTokenUsageLoading else { return }
-        if let snapshot {
-            applyCachedTokenUsageSnapshot(snapshot)
-        } else {
-            tokenUsageSnapshot = tokenUsageRefreshStore.result(for: account)
-        }
-    }
-
-    /// 사용 가능한 캐시 결과만 마지막 정상 스냅샷에 덮어쓰기
-    private func applyCachedTokenUsageSnapshot(_ snapshot: TokenUsageSnapshot) {
-        if snapshot.availability == .available || tokenUsageSnapshot?.availability != .available {
-            tokenUsageSnapshot = snapshot
-        }
-    }
-
-    /// 화면 수명 밖에서 계정별 로컬 집계·저장 실행
-    private func updateTokenUsage() {
-        tokenUsageRefreshStore.start(for: account, runner: refreshTokenUsage)
-    }
-
-    /// 팝오버 재진입 시에도 유지되는 현재 계정의 실행 상태
-    private var isTokenUsageLoading: Bool { tokenUsageRefreshStore.isRunning(for: account) }
-
-    /// 성공 캐시와 별도로 유지하는 마지막 명시적 갱신 실패 여부
-    private var tokenUsageRefreshFailed: Bool {
-        tokenUsageRefreshStore.result(for: account)?.availability == .unavailable
-    }
-
-    /// 다른 계정·다른 경로의 실패와 분리한 현재 요청 오류
-    private var tokenUsageRefreshError: TokenUsageSnapshotError? {
-        tokenUsageRefreshStore.result(for: account)?.error
     }
 
     /// 계정별 공용 저장소의 실행 상태 조회
